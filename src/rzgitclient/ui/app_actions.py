@@ -14,7 +14,8 @@ from rzgitclient.core.repo_session import RepoSession
 
 class AppActions(QObject):
     """Holds the actions and their enabled state. Window-level handlers (the
-    Open dialog, closing the window) are connected by MainWindow."""
+    Open dialog, closing the window, resetting the layout) are connected by
+    MainWindow."""
 
     def __init__(self, session: RepoSession, parent: QObject | None = None):
         super().__init__(parent)
@@ -27,15 +28,19 @@ class AppActions(QObject):
         self.quit = self._action(
             "application-exit", "&Quit", QKeySequence.StandardKey.Quit
         )
+        self.reset_layout = self._action("view-restore", "&Reset Layout")
 
         # triggered(bool) would land in refresh's `parts` argument.
         self.refresh.triggered.connect(lambda: session.refresh())
         session.repo_changed.connect(self._on_repo_changed)
         self._on_repo_changed(session.repo)
 
-    def _action(self, icon: str, text: str, shortcut: QKeySequence.StandardKey) -> QAction:
+    def _action(
+        self, icon: str, text: str, shortcut: QKeySequence.StandardKey | None = None
+    ) -> QAction:
         action = QAction(QIcon.fromTheme(icon), text, self)
-        action.setShortcuts(shortcut)  # every platform binding, e.g. F5 and the Refresh key
+        if shortcut is not None:
+            action.setShortcuts(shortcut)  # every platform binding, e.g. F5 and the Refresh key
         return action
 
     def _on_repo_changed(self, repo: object) -> None:

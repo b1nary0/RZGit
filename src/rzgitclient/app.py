@@ -5,6 +5,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from rzgitclient import __version__
+from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import Selection
 from rzgitclient.ui.app_actions import AppActions
@@ -31,12 +32,13 @@ def main(argv: list[str] | None = None) -> int:
         actions=AppActions(session),
     )
 
-    window = MainWindow(ctx)
+    settings = AppSettings()
+    window = MainWindow(ctx, settings)
     window.show()
 
     # Open a repo from the command line, else the last one used.
     args = [a for a in argv[1:] if not a.startswith("-")]
-    target = args[0] if args else window.settings.value("last_repo", "", str)
+    target = args[0] if args else settings.last_repo
     if target:
         session.open(target)
 

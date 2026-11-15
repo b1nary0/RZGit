@@ -43,6 +43,16 @@ class TabsNode:
 LayoutNode = PanelNode | SplitNode | TabsNode
 
 
+def panel_ids(node: LayoutNode | None) -> list[str]:
+    """Every panel id in the tree, depth first."""
+    match node:
+        case PanelNode():
+            return [node.panel_id]
+        case SplitNode() | TabsNode():
+            return [pid for child in node.children for pid in panel_ids(child)]
+    return []
+
+
 # ---- normalize --------------------------------------------------------------
 
 

@@ -343,9 +343,21 @@ History on the right:
 
 ### 6.3 Persistence
 
-On close, the window saves `current_layout()` through `AppSettings`
-(`core/app_settings.py`). On start it loads and `normalize`s that layout, and falls back to
-`DEFAULT_LAYOUT` if that fails. A **View → Reset Layout** action restores the default.
+`AppSettings` (`core/app_settings.py`) is the only code that touches `QSettings`. It has
+typed accessors (`last_repo`, `layout`, `window_geometry`) and takes a file path for tests.
+`app.py` creates it and passes it to `MainWindow`; panels don't get it.
+
+On close, the window saves `current_layout()` (as JSON, so the format is ours) and its
+geometry: size and maximized state, plus position where the platform allows it (not on
+Wayland). On start, `restore_layout(saved)` in `layout_presets.py` (plain Python, no Qt)
+returns the layout to apply:
+- nothing saved, malformed data, or `normalize` leaves nothing → `DEFAULT_LAYOUT`, with a
+  logged warning for malformed data (no dialog);
+- the saved layout's panels differ from the default's → `DEFAULT_LAYOUT`. Users can't remove
+  panels yet, so a difference means a newer version added one. The sizes reset once in that
+  release. This rule changes when panels can be removed (layout editing).
+
+A **View → Reset Layout** action applies `DEFAULT_LAYOUT` at once.
 
 ### 6.4 Customisation levels
 

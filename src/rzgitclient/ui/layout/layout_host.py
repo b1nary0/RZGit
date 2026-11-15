@@ -16,6 +16,7 @@ from rzgitclient.ui.layout.layout_model import (
     SplitNode,
     TabsNode,
     normalize,
+    panel_ids,
 )
 from rzgitclient.ui.layout.panel_frame import PanelFrame
 from rzgitclient.ui.panels.panel import Panel, PanelContext
@@ -51,7 +52,7 @@ class LayoutHost(QWidget):
 
     def apply(self, node: LayoutNode) -> None:
         tree = normalize(node, _KNOWN_IDS)
-        wanted = set(_panel_ids(tree))
+        wanted = set(panel_ids(tree))
 
         # Take every panel out of the old containers before they are deleted.
         for panel_id, panel in list(self._panels.items()):
@@ -137,11 +138,3 @@ class _PanelTabs(QTabWidget):
         if index >= 0:  # the panel may have moved to another container
             self.setTabText(index, text)
 
-
-def _panel_ids(node: LayoutNode | None) -> list[str]:
-    match node:
-        case PanelNode():
-            return [node.panel_id]
-        case SplitNode() | TabsNode():
-            return [pid for child in node.children for pid in _panel_ids(child)]
-    return []

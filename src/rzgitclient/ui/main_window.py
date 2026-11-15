@@ -1,23 +1,28 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QSettings, QSize
+from PySide6.QtCore import QSize
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMessageBox
 
+from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.git.repo import Repo
 from rzgitclient.ui.layout.layout_host import LayoutHost
-from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
+from rzgitclient.ui.layout.layout_model import to_dict
+from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT, restore_layout
 from rzgitclient.ui.panels.panel import PanelContext
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, ctx: PanelContext):
+    def __init__(self, ctx: PanelContext, settings: AppSettings):
         super().__init__()
         self.ctx = ctx
         self.session = session = ctx.session
-        self.settings = QSettings()
+        self.settings = settings
 
         self.setWindowTitle("RZGitClient")
         self.resize(1100, 700)
+        if (geometry := settings.window_geometry) is not None:
+            self.restoreGeometry(geometry)
         self._build_actions()
         self._build_ui()
 
@@ -44,13 +49,26 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(actions.quit)
 
+        actions.reset_layout.triggered.connect(self.reset_layout)
+        view_menu = self.menuBar().addMenu("&View")
+        view_menu.addAction(actions.reset_layout)
+
     def _build_ui(self) -> None:
         self.layout_host = LayoutHost(self.ctx)
-        self.layout_host.apply(DEFAULT_LAYOUT)
+        self.layout_host.apply(restore_layout(self.settings.layout))
         self.setCentralWidget(self.layout_host)
         self.statusBar().showMessage("No repository open")
 
     # ---- behaviour ----------------------------------------------------
+
+    def reset_layout(self) -> None:
+        self.layout_host.apply(DEFAULT_LAYOUT)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        layout = self.layout_host.current_layout()
+        self.settings.layout = to_dict(layout) if layout is not None else None
+        self.settings.window_geometry = self.saveGeometry()
+        super().closeEvent(event)
 
     def choose_repo(self) -> None:
         repo = self.session.repo
@@ -64,7 +82,7 @@ class MainWindow(QMainWindow):
             self.setWindowTitle("RZGitClient")
         else:
             self.setWindowTitle(f"{repo.name} — RZGitClient")
-            self.settings.setValue("last_repo", str(repo.root))
+            self.settings.last_repo = str(repo.root)
         self._update_status_bar()
 
     def _show_error(self, message: str) -> None:
