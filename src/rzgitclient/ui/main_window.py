@@ -18,7 +18,8 @@ from PySide6.QtWidgets import (
 )
 
 from rzgitclient.git.repo import GitError, Repo
-from rzgitclient.ui.theme import COLORS, STATUS_COLORS, monospace_font
+from rzgitclient.ui.theme.style_roles import Role, Surface, set_role, set_surface
+from rzgitclient.ui.theme.theme_manager import ThemeManager
 
 STATUS_LABELS = {
     "M": "Modified",
@@ -32,25 +33,24 @@ STATUS_LABELS = {
 }
 
 
-def _titled(title: str, widget: QWidget, role: str) -> QWidget:
-    """Wrap a widget with a section header. ``role`` is "sidebar" or
-    "content" and selects the pane styling in the theme."""
+def _titled(title: str, widget: QWidget, surface: Surface) -> QWidget:
+    """Wrap a widget with a section header on the given surface."""
     box = QWidget()
-    box.setObjectName(role)
-    box.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    set_surface(box, surface)
     layout = QVBoxLayout(box)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(0)
     label = QLabel(title.upper())
-    label.setObjectName("sectionHeader")
+    set_role(label, Role.SECTION_HEADER)
     layout.addWidget(label)
     layout.addWidget(widget)
     return box
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, theme: ThemeManager):
         super().__init__()
+        self.theme = theme
         self.repo: Repo | None = None
         self.settings = QSettings()
 
@@ -112,12 +112,12 @@ class MainWindow(QMainWindow):
         self.changes_tree.header().setStretchLastSection(False)
 
         right = QSplitter(Qt.Orientation.Vertical)
-        right.addWidget(_titled("History", self.commit_tree, "content"))
-        right.addWidget(_titled("Working Tree Changes", self.changes_tree, "content"))
+        right.addWidget(_titled("History", self.commit_tree, Surface.CONTENT))
+        right.addWidget(_titled("Working Tree Changes", self.changes_tree, Surface.CONTENT))
         right.setSizes([450, 250])
 
         main = QSplitter(Qt.Orientation.Horizontal)
-        main.addWidget(_titled("Branches", self.branch_list, "sidebar"))
+        main.addWidget(_titled("Branches", self.branch_list, Surface.SIDEBAR))
         main.addWidget(right)
         main.setSizes([220, 880])
 
@@ -169,8 +169,9 @@ class MainWindow(QMainWindow):
             self.branch_list.addItem(QListWidgetItem(f"{current} (no commits)"))
 
         self.commit_tree.clear()
-        mono = monospace_font()
-        muted = QColor(COLORS["text_muted"])
+        theme = self.theme.current
+        mono = theme.mono_font()
+        muted = QColor(theme.colors.text_muted)
         for c in commits:
             item = QTreeWidgetItem(
                 [c.subject, c.author, c.date.strftime("%Y-%m-%d %H:%M"), c.short_sha]
@@ -194,10 +195,10 @@ class MainWindow(QMainWindow):
             )
             item = QTreeWidgetItem([path, staged, unstaged])
             if staged:
-                item.setForeground(1, QColor(STATUS_COLORS.get(f.index, COLORS["text"])))
+                item.setForeground(1, QColor(theme.status_color(f.index)))
             if unstaged:
                 code = "?" if f.is_untracked else f.worktree
-                item.setForeground(2, QColor(STATUS_COLORS.get(code, COLORS["text"])))
+                item.setForeground(2, QColor(theme.status_color(code)))
             self.changes_tree.addTopLevelItem(item)
         for col in (1, 2):
             self.changes_tree.resizeColumnToContents(col)

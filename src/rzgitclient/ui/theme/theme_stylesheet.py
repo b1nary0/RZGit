@@ -1,66 +1,20 @@
-"""Application look: a flat, light, low-chrome theme.
+"""Builds the app-wide Qt stylesheet from an AppTheme (spec §7.1).
 
-All colours live in ``COLORS`` so widgets (and the future diff view) can
-reference the same tokens the stylesheet uses.
+Each ``$name`` is a field of the theme's colours, fonts or metrics. Surfaces and
+roles (style_roles.py) are matched as dynamic properties, e.g.
+``QWidget[surface="sidebar"]``.
 """
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from string import Template
+from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont, QPalette
-from PySide6.QtWidgets import QApplication
+if TYPE_CHECKING:
+    from rzgitclient.ui.theme.app_theme import AppTheme
 
-COLORS = {
-    # chrome
-    "menubar_bg": "#33363a",
-    "menubar_text": "#e6e6e6",
-    "menubar_hover": "#4a4e54",
-    "toolbar_bg": "#d9d9d9",
-    "tab_bg": "#dedede",
-    "sidebar_bg": "#e9e9e9",
-    "content_bg": "#ffffff",
-    "border": "#c6c6c6",
-    "border_light": "#e4e4e4",
-    # text
-    "text": "#2b2b2b",
-    "text_muted": "#8a8a8a",
-    "placeholder": "#a8a8a8",
-    # interaction
-    "hover": "#dcdcdc",
-    "selection": "#cbcbcb",
-    "content_selection": "#bcd3ec",
-    "text_selection": "#b5d0f0",
-    "accent": "#4a7fc1",
-    "button_bg": "#d2d2d2",
-    "button_hover": "#c6c6c6",
-    "button_pressed": "#b9b9b9",
-    "scroll_handle": "#c4c4c4",
-    "scroll_handle_hover": "#a9a9a9",
-    "tooltip_bg": "#fbfbfb",
-    # diff (for the upcoming diff view)
-    "diff_added_bg": "#c8efc0",
-    "diff_added_word": "#9fe08f",
-    "diff_removed_bg": "#f2c4c4",
-    "diff_removed_word": "#e79a9a",
-    "diff_filler_bg": "#f0f0f0",
-    "diff_gutter_text": "#9a9a9a",
-}
-
-# Colours for git status codes (porcelain X/Y letters).
-STATUS_COLORS = {
-    "M": "#4a7fc1",  # modified
-    "A": "#3d9a3d",  # added
-    "D": "#c44b4b",  # deleted
-    "R": "#8a5cc2",  # renamed
-    "C": "#8a5cc2",  # copied
-    "T": "#4a7fc1",  # type change
-    "U": "#d9822b",  # conflict
-    "?": "#3a9a9a",  # untracked
-}
-
-_STYLESHEET = Template(
+_TEMPLATE = Template(
     """
 QWidget {
     color: $text;
@@ -143,7 +97,7 @@ QPushButton:disabled {
 }
 QPushButton:default {
     background: $accent;
-    color: #ffffff;
+    color: $accent_text;
 }
 
 /* ---- text inputs ---------------------------------------------------- */
@@ -178,20 +132,20 @@ QSplitter::handle {
     background: $border;
 }
 QSplitter::handle:horizontal {
-    width: 1px;
+    width: ${splitter_width}px;
 }
 QSplitter::handle:vertical {
-    height: 1px;
+    height: ${splitter_width}px;
 }
-QWidget#sidebar {
+QWidget[surface="sidebar"] {
     background: $sidebar_bg;
 }
-QWidget#content {
+QWidget[surface="content"] {
     background: $content_bg;
 }
-QLabel#sectionHeader {
+QLabel[role="section-header"] {
     font-weight: bold;
-    font-size: 8pt;
+    font-size: ${header_point_size}pt;
     padding: 7px 8px 4px 8px;
 }
 
@@ -202,12 +156,12 @@ QListView, QTreeView {
     background: $content_bg;
     show-decoration-selected: 1;
 }
-QWidget#sidebar QListView, QWidget#sidebar QTreeView {
+QWidget[surface="sidebar"] QListView, QWidget[surface="sidebar"] QTreeView {
     background: $sidebar_bg;
 }
 QListView::item, QTreeView::item {
-    padding: 2px 4px;
-    min-height: 18px;
+    padding: ${row_padding}px 4px;
+    min-height: ${row_min_height}px;
     border: none;
 }
 QListView::item:hover:!selected, QTreeView::item:hover:!selected {
@@ -217,10 +171,10 @@ QListView::item:selected, QTreeView::item:selected {
     background: $selection;
     color: $text;
 }
-QWidget#content QTreeView::item:hover:!selected {
-    background: #f1f5fa;
+QWidget[surface="content"] QTreeView::item:hover:!selected {
+    background: $content_hover;
 }
-QWidget#content QTreeView::item:selected {
+QWidget[surface="content"] QTreeView::item:selected {
     background: $content_selection;
 }
 QHeaderView {
@@ -262,12 +216,12 @@ QTabBar::tab:selected {
 /* ---- scrollbars ----------------------------------------------------- */
 QScrollBar:vertical {
     background: transparent;
-    width: 10px;
+    width: ${scrollbar_width}px;
     margin: 0;
 }
 QScrollBar:horizontal {
     background: transparent;
-    height: 10px;
+    height: ${scrollbar_width}px;
     margin: 0;
 }
 QScrollBar::handle:vertical {
@@ -307,49 +261,20 @@ QToolTip {
     padding: 4px;
 }
 """
-).substitute(COLORS)
+)
 
 
-def _palette() -> QPalette:
-    c = {k: QColor(v) for k, v in COLORS.items()}
-    p = QPalette()
-    p.setColor(QPalette.ColorRole.Window, c["toolbar_bg"])
-    p.setColor(QPalette.ColorRole.WindowText, c["text"])
-    p.setColor(QPalette.ColorRole.Base, c["content_bg"])
-    p.setColor(QPalette.ColorRole.AlternateBase, c["sidebar_bg"])
-    p.setColor(QPalette.ColorRole.Text, c["text"])
-    p.setColor(QPalette.ColorRole.PlaceholderText, c["placeholder"])
-    p.setColor(QPalette.ColorRole.Button, c["button_bg"])
-    p.setColor(QPalette.ColorRole.ButtonText, c["text"])
-    p.setColor(QPalette.ColorRole.Highlight, c["text_selection"])
-    p.setColor(QPalette.ColorRole.HighlightedText, c["text"])
-    p.setColor(QPalette.ColorRole.ToolTipBase, c["tooltip_bg"])
-    p.setColor(QPalette.ColorRole.ToolTipText, c["text"])
-    p.setColor(QPalette.ColorRole.Link, c["accent"])
-    for role in (QPalette.ColorRole.Text, QPalette.ColorRole.WindowText,
-                 QPalette.ColorRole.ButtonText):
-        p.setColor(QPalette.ColorGroup.Disabled, role, c["text_muted"])
-    return p
+def template_values(theme: AppTheme) -> dict[str, str]:
+    """The ``$name`` values: the colour, font and metric fields combined.
+
+    Field names must be unique across the three groups (checked by a test).
+    """
+    values: dict[str, str] = {}
+    for group in (theme.colors, theme.fonts, theme.metrics):
+        for name, value in asdict(group).items():
+            values[name] = format(value, "g") if isinstance(value, float) else str(value)
+    return values
 
 
-def monospace_font() -> QFont:
-    font = QFont("monospace")
-    font.setStyleHint(QFont.StyleHint.Monospace)
-    font.setPointSizeF(QApplication.font().pointSizeF())
-    return font
-
-
-def apply_theme(app: QApplication) -> None:
-    # Fusion is a neutral base that honours stylesheets fully; without it the
-    # desktop style (e.g. Breeze) would fight with the custom look.
-    app.setStyle("Fusion")
-    hints = app.styleHints()
-    if hasattr(hints, "setColorScheme"):  # Qt >= 6.8
-        hints.setColorScheme(Qt.ColorScheme.Light)
-    app.setPalette(_palette())
-
-    font = app.font()
-    font.setPointSizeF(9)
-    app.setFont(font)
-
-    app.setStyleSheet(_STYLESHEET)
+def build_stylesheet(theme: AppTheme) -> str:
+    return _TEMPLATE.substitute(template_values(theme))

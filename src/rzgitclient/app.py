@@ -6,7 +6,8 @@ from PySide6.QtWidgets import QApplication
 
 from rzgitclient import __version__
 from rzgitclient.ui.main_window import MainWindow
-from rzgitclient.ui.theme import apply_theme
+from rzgitclient.ui.theme.app_theme import LIGHT_THEME
+from rzgitclient.ui.theme.theme_manager import ThemeManager
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -16,9 +17,9 @@ def main(argv: list[str] | None = None) -> int:
     app.setOrganizationName("RZGitClient")
     app.setApplicationVersion(__version__)
     app.setDesktopFileName("rzgitclient")
-    apply_theme(app)
+    theme = ThemeManager(app, LIGHT_THEME)
 
-    window = MainWindow()
+    window = MainWindow(theme)
     window.show()
 
     # Open a repo from the command line, else the last one used.

@@ -108,9 +108,9 @@ code depends on, or (b) code that would otherwise be duplicated. Not for its own
 class RepoSession(QObject):
     repo_changed     = Signal(object)  # Repo | None
     head_changed     = Signal(object)  # str | None  (branch name, None = detached)
-    branches_changed = Signal(list)    # list[Branch]
-    history_changed  = Signal(list)    # list[Commit]
-    status_changed   = Signal(list)    # list[FileStatus]
+    branches_changed = Signal(object)  # tuple[Branch, ...]
+    history_changed  = Signal(object)  # tuple[Commit, ...]
+    status_changed   = Signal(object)  # tuple[FileStatus, ...]
     error_occurred   = Signal(str)
 
     def open(self, path) -> bool
@@ -131,8 +131,17 @@ class RepoSession(QObject):
 - **Granular signals.** One signal per kind of data, emitted only when the value actually
   changed (the models are frozen dataclasses, so `==` is cheap). **Why:** after staging a
   file only `status_changed` fires, and History doesn't rebuild 500 rows.
+- **Data is immutable.** Values are tuples of frozen dataclasses. Every panel shares the
+  session's copy, so none of them can change it behind the others' backs.
+- **Opening and closing.** A failed `open()` leaves the current repo open and returns False.
+  A successful one forgets the stored values first, so every signal fires for the new repo
+  even when its data equals the old repo's. Signals go out in a fixed order: `repo_changed`
+  (panels reset), then `head`, `branches`, `history`, `status`. `close()` sends
+  `repo_changed(None)` and then empty data.
 - **Errors go through `error_occurred`.** MainWindow shows them. Panels never pop up dialogs
-  for git failures, so errors look the same wherever they come from.
+  for git failures, so errors look the same wherever they come from. `refresh()` stops at the
+  first part that fails and sends one error. Parts already loaded keep their new values;
+  the rest keep their old ones.
 - **Growth:** when the session gains many commands (stage, commit, checkout, fetch…), they
   can move to a separate `core/git_commands.py` that the session delegates to. Not before.
 
@@ -142,13 +151,28 @@ class RepoSession(QObject):
 knowing each other:
 
 ```python
+class FileSource(StrEnum):
+    WORKTREE = "worktree"
+    INDEX = "index"
+    COMMIT = "commit"
+
+@dataclass(frozen=True)
+class FileSelection:
+    path: str
+    source: FileSource
+    commit: str | None = None        # set only when source is COMMIT
+
 class Selection(QObject):
     commit_changed = Signal(object)  # Commit | None
-    file_changed   = Signal(object)  # FileSelection | None  (path, source: worktree | index | <sha>)
+    file_changed   = Signal(object)  # FileSelection | None
 ```
 
-History sets `selection.commit`, and a future Diff panel listens to it. Selection is cleared
-when the repo changes. This is the mediator pattern: panels share state, not references.
+History sets `selection.commit`, and a future Diff panel listens to it. Setters emit only
+when the value changes. This is the mediator pattern: panels share state, not references.
+
+Selection is cleared when the repo changes. What happens when a selected commit or file
+disappears (after an amend, or staging) is decided with the Diff and Files panels that
+care about it.
 
 ## 5. Panels
 
@@ -284,12 +308,12 @@ class ThemeColors:   menubar_bg: str; toolbar_bg: str; sidebar_bg: str; content_
                      text: str; text_muted: str; hover: str; selection: str; content_selection: str;
                      accent: str; button_*: str; scroll_*: str; diff_*: str; …
 @dataclass(frozen=True)
-class StatusColors:  modified, added, deleted, renamed, conflict, untracked: str
-                     def for_code(self, code: str) -> str      # porcelain letter → colour
+class StatusColors:  modified, added, deleted, renamed, copied, type_changed, conflict, untracked: str
+                     def for_code(self, code: str) -> str | None   # porcelain letter → colour; None if unknown
 @dataclass(frozen=True)
 class ThemeFonts:    ui_point_size: float = 9; mono_family: str = "monospace"; header_point_size: float = 8
 @dataclass(frozen=True)
-class ThemeMetrics:  splitter_width: int = 1; scrollbar_width: int = 10; row_padding: int = 2; …
+class ThemeMetrics:  splitter_width: int = 1; scrollbar_width: int = 10; row_padding: int = 2; row_min_height: int = 18
 
 @dataclass(frozen=True)
 class AppTheme:
@@ -297,25 +321,43 @@ class AppTheme:
     def stylesheet(self) -> str     # generated from the tokens by theme_stylesheet.py
     def palette(self) -> QPalette
     def mono_font(self) -> QFont
+    def status_color(self, code: str) -> str   # status.for_code(code), falling back to colors.text
 
 LIGHT_THEME = AppTheme(...)
 ```
 
 - **Typed fields instead of a dict.** A typo becomes an error at import time, and editors
   can autocomplete. Frozen, so a theme can't be half-changed.
+- **Each git status has its own colour field**, even where `LIGHT_THEME` gives two the same
+  colour (copied = renamed, type changed = modified), so a theme can tell them apart.
+- **Which values are tokens:** a colour is always a token. A size or spacing becomes a
+  `ThemeMetrics` field only when it's used in more than one place, or a different theme
+  would plausibly change it. One-off paddings stay as plain numbers in the stylesheet.
+- **Generating the stylesheet:** `theme_stylesheet.py` fills a `string.Template` from the
+  colour, font and metric fields combined, so each `$name` is a field name. A test checks
+  that no field name appears in two groups.
 
 ### 7.2 Semantic roles
 
-`style_roles.py` defines `Surface` (SIDEBAR, CONTENT, CHROME) and `Role` (SECTION_HEADER,
-MUTED, MONO, …). Widgets get them as Qt dynamic properties, and the stylesheet targets
-those (`QWidget[surface="sidebar"]`). The theme decides what "sidebar" looks like; panels
-only say what they are.
+`style_roles.py` defines `Surface` (SIDEBAR, CONTENT) and `Role` (SECTION_HEADER).
+Widgets get them as Qt dynamic properties through `set_surface()` / `set_role()`, and the
+stylesheet targets those (`QWidget[surface="sidebar"]`). The theme decides what "sidebar"
+looks like; panels only say what they are.
+
+A surface or role is added when a widget first needs it (e.g. `Surface.CHROME` with the
+Controls panel), not ahead of time. A test checks that every value is used by the
+stylesheet, so a role can't be defined and forgotten.
+
+Roles style **widgets**. Things inside a list (a muted author column, a monospace hash) are
+per-row data, which Qt's stylesheet can't target, so panels set them from the theme's tokens
+(`theme.colors.text_muted`, `theme.mono_font()`).
 
 ### 7.3 ThemeManager
 
 `ThemeManager(QObject)` (`theme_manager.py`) holds `current` and is the **only** caller of
-`QApplication.setStyle`, `setPalette` and `setStyleSheet`. `set_theme(t)` applies the theme
-and emits `theme_changed(t)`. The stylesheet repaints itself; panels refresh any colours
+`QApplication.setStyle`, `setPalette` and `setStyleSheet`. It applies its first theme when
+it's created. `set_theme(t)` applies a new theme and emits `theme_changed(t)`, but does
+nothing if `t` equals the current theme. The stylesheet repaints itself; panels refresh any colours
 they set in code in `apply_theme`.
 
 **Performance rule:** one stylesheet for the whole app, never per-widget `setStyleSheet`.
