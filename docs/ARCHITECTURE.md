@@ -293,8 +293,20 @@ LayoutNode = PanelNode | SplitNode | TabsNode
 - Immutable: an edit returns a new tree. That makes it simple and safe, and undo and
   presets come almost for free.
 
-The default preset (`layout_presets.py`) reproduces the original window:
-`Split(H, [branches, Split(V, [history, files], sizes=(450, 250))], sizes=(220, 880))`.
+- `from_dict` raises `LayoutError(ValueError)` on structural errors: wrong version, unknown
+  node type, missing or mistyped fields. `sizes` that don't fit (wrong length, negative)
+  are dropped instead, so the splitter shares space evenly and the rest of the layout is
+  kept. `normalize` returns `None` when nothing is left; callers then use the default.
+- A split with one child collapses into it. A tab group with one tab stays: its tab label
+  still means something. When tabs are dropped, `current` stays on the same panel; it's
+  clamped only if that panel itself is gone.
+- JSON nodes: `{"type": "panel", "panel_id": …}`, `{"type": "split", "orientation":
+  "horizontal" | "vertical", "sizes": [...], "children": [...]}` (`sizes` optional) and
+  `{"type": "tabs", "current": n, "children": [...]}`.
+
+The default preset (`layout_presets.py`) puts Branches above Files in a left sidebar, with
+History on the right:
+`Split(H, [Split(V, [branches, files], sizes=(300, 400)), history], sizes=(220, 880))`.
 
 ### 6.2 LayoutHost
 
