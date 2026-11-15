@@ -334,7 +334,12 @@ History on the right:
 - `current_layout() -> LayoutNode` reads splitter sizes and the current tab back into a tree.
 - In a split, each panel is wrapped in a `PanelFrame` (`layout/panel_frame.py`): a section
   header plus the panel, with the panel's `surface` set as a style property. In tabs, the
-  tab label is the title instead.
+  tab label is the panel's `header` instead, and follows `header_changed`.
+- The host owns the panels (a read-only `panels` mapping by id); frames and containers are
+  rebuilt on every `apply`. Panes can't be collapsed to nothing by dragging a divider
+  (`setChildrenCollapsible(False)`): with 1px dividers a collapsed pane is hard to find.
+- An empty tree (everything dropped by `normalize`) shows an empty area. Falling back to
+  `DEFAULT_LAYOUT` is the loader's job (§6.3).
 
 ### 6.3 Persistence
 

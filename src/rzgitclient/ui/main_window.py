@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QSettings, QSize, Qt
-from PySide6.QtWidgets import QFileDialog, QMainWindow, QMessageBox, QSplitter
+from PySide6.QtCore import QSettings, QSize
+from PySide6.QtWidgets import QFileDialog, QMainWindow, QMessageBox
 
 from rzgitclient.git.repo import Repo
-from rzgitclient.ui.layout.panel_frame import PanelFrame
-from rzgitclient.ui.panels.branches_panel import BranchesPanel
-from rzgitclient.ui.panels.files_panel import FilesPanel
-from rzgitclient.ui.panels.history_panel import HistoryPanel
+from rzgitclient.ui.layout.layout_host import LayoutHost
+from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
 from rzgitclient.ui.panels.panel import PanelContext
 
 
@@ -47,22 +45,9 @@ class MainWindow(QMainWindow):
         file_menu.addAction(actions.quit)
 
     def _build_ui(self) -> None:
-        self.branches_panel = BranchesPanel(self.ctx)
-        self.files_panel = FilesPanel(self.ctx)
-        self.history_panel = HistoryPanel(self.ctx)
-
-        # Matches DEFAULT_LAYOUT (spec §6.1) until LayoutHost builds it (RZG-10).
-        sidebar = QSplitter(Qt.Orientation.Vertical)
-        sidebar.addWidget(PanelFrame(self.branches_panel))
-        sidebar.addWidget(PanelFrame(self.files_panel))
-        sidebar.setSizes([300, 400])
-
-        main = QSplitter(Qt.Orientation.Horizontal)
-        main.addWidget(sidebar)
-        main.addWidget(PanelFrame(self.history_panel))
-        main.setSizes([220, 880])
-
-        self.setCentralWidget(main)
+        self.layout_host = LayoutHost(self.ctx)
+        self.layout_host.apply(DEFAULT_LAYOUT)
+        self.setCentralWidget(self.layout_host)
         self.statusBar().showMessage("No repository open")
 
     # ---- behaviour ----------------------------------------------------

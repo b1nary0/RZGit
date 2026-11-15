@@ -29,3 +29,7 @@ class PanelFrame(QWidget):
         layout.setSpacing(0)
         layout.addWidget(self.header)
         layout.addWidget(panel)
+        # A panel that was a background tab was hidden explicitly, and layouts
+        # never show explicitly hidden widgets. Now parented, so this doesn't
+        # open it as a window.
+        panel.show()
