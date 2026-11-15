@@ -5,10 +5,13 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 
+from rzgitclient.ui.panels.branches_panel import BranchesPanel
+from rzgitclient.ui.panels.files_panel import FilesPanel
+from rzgitclient.ui.panels.history_panel import HistoryPanel
 from rzgitclient.ui.panels.panel import Panel
 
 # Explicit on purpose: one place to see every panel, no import-time magic.
-PANEL_TYPES: tuple[type[Panel], ...] = ()
+PANEL_TYPES: tuple[type[Panel], ...] = (BranchesPanel, HistoryPanel, FilesPanel)
 
 
 def index_panel_types(types: Iterable[type[Panel]]) -> Mapping[str, type[Panel]]:

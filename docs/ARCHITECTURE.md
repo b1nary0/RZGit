@@ -267,7 +267,16 @@ The first three are extracted from the original `main_window.py` with the same b
 | HistoryPanel | `history` | content | commit table | `selection.commit` |
 | FilesPanel | `files` | sidebar | working tree changes, staged/unstaged, status colours | `selection.file` |
 
-FilesPanel is the original "Working Tree Changes" list. Planned feature panels (commit
+FilesPanel is the original "Working Tree Changes" list; its header shows the count,
+e.g. "Files (24)".
+
+**Selection survives a refresh.** A list panel rebuilds with its signals blocked, then
+re-selects the same item (a commit by sha, a file by path and source). It writes
+`Selection` only when the selected item no longer exists. So a refresh never clears what
+another panel (a future Diff) is showing. `apply_theme` recolours existing rows rather
+than rebuilding them.
+
+Planned feature panels (commit
 message, diff, controls) plug in the same way, with no architecture changes.
 
 ## 6. Layout

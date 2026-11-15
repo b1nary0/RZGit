@@ -191,6 +191,9 @@ QHeaderView::section {
 QHeaderView::section:hover {
     color: $text;
 }
+QWidget[surface="sidebar"] QHeaderView, QWidget[surface="sidebar"] QHeaderView::section {
+    background: $sidebar_bg;
+}
 
 /* ---- tabs ----------------------------------------------------------- */
 QTabWidget::pane {
