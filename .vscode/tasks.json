@@ -1,0 +1,26 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run tests",
+			"type": "shell",
+			"command": "${workspaceFolder}/.venv/bin/python -m unittest discover -v -s tests -t .",
+			"group": { "kind": "test", "isDefault": true },
+			"problemMatcher": []
+		},
+		{
+			"label": "Run app",
+			"type": "shell",
+			"command": "${workspaceFolder}/.venv/bin/rzgit ${workspaceFolder}",
+			"group": { "kind": "build", "isDefault": true },
+			"problemMatcher": []
+		},
+		{
+			"label": "Set up virtualenv",
+			"detail": "Create .venv (sharing system PySide6) and install the project in editable mode",
+			"type": "shell",
+			"command": "python3 -m venv --system-site-packages .venv && .venv/bin/pip install -e . --config-settings editable_mode=compat",
+			"problemMatcher": []
+		}
+	]
+}

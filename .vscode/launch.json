@@ -1,0 +1,40 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "RZGitClient (this repo)",
+			"type": "debugpy",
+			"request": "launch",
+			"module": "rzgitclient",
+			"args": ["${workspaceFolder}"],
+			"console": "integratedTerminal",
+			"justMyCode": true
+		},
+		{
+			"name": "RZGitClient (choose repo…)",
+			"type": "debugpy",
+			"request": "launch",
+			"module": "rzgitclient",
+			"args": ["${input:repoPath}"],
+			"console": "integratedTerminal",
+			"justMyCode": true
+		},
+		{
+			"name": "Current test file",
+			"type": "debugpy",
+			"request": "launch",
+			"module": "unittest",
+			"args": ["-v", "${relativeFile}"],
+			"console": "integratedTerminal",
+			"justMyCode": false
+		}
+	],
+	"inputs": [
+		{
+			"id": "repoPath",
+			"type": "promptString",
+			"description": "Path to a git repository",
+			"default": "${userHome}"
+		}
+	]
+}
