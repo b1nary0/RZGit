@@ -5,7 +5,6 @@ from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QFileDialog,
     QHeaderView,
-    QLabel,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -20,8 +19,9 @@ from PySide6.QtWidgets import (
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.git.git_models import Commit, FileStatus
 from rzgitclient.git.repo import Repo
-from rzgitclient.ui.theme.style_roles import Role, Surface, set_role, set_surface
+from rzgitclient.ui.theme.style_roles import Surface, set_surface
 from rzgitclient.ui.theme.theme_manager import ThemeManager
+from rzgitclient.ui.widgets.section_header import SectionHeader
 
 STATUS_LABELS = {
     "M": "Modified",
@@ -42,9 +42,7 @@ def _titled(title: str, widget: QWidget, surface: Surface) -> QWidget:
     layout = QVBoxLayout(box)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(0)
-    label = QLabel(title.upper())
-    set_role(label, Role.SECTION_HEADER)
-    layout.addWidget(label)
+    layout.addWidget(SectionHeader(title))
     layout.addWidget(widget)
     return box
 

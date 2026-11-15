@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from PySide6.QtCore import QObject
     from PySide6.QtWidgets import QApplication
 
+    from rzgitclient.ui.panels.panel import PanelContext
+
 
 def qt_app() -> QApplication:
     """The one QApplication shared by every test in the run.
@@ -81,3 +83,22 @@ class SignalRecorder:
 
     def clear(self) -> None:
         self.events.clear()
+
+
+# ---- panels ----------------------------------------------------------------
+
+
+def make_panel_context() -> PanelContext:
+    """A PanelContext with a fresh session (no repo open) and the light theme."""
+    from rzgitclient.core.repo_session import RepoSession
+    from rzgitclient.core.selection import Selection
+    from rzgitclient.ui.panels.panel import PanelContext
+    from rzgitclient.ui.theme.app_theme import LIGHT_THEME
+    from rzgitclient.ui.theme.theme_manager import ThemeManager
+
+    session = RepoSession()
+    return PanelContext(
+        session=session,
+        selection=Selection(session),
+        theme=ThemeManager(qt_app(), LIGHT_THEME),
+    )

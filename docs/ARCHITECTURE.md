@@ -184,17 +184,48 @@ class PanelContext:
     session: RepoSession
     selection: Selection
     theme: ThemeManager
-    actions: AppActions
+    # actions: AppActions is added when AppActions exists (§8). No None placeholder.
 
 class Panel(QWidget):
     panel_id: ClassVar[str]                        # stable, saved in layouts: "history"
     title: ClassVar[str]                           # "History"
     surface: ClassVar[Surface] = Surface.CONTENT   # SIDEBAR for branches/files
-    header_changed = Signal(str)                   # optional dynamic header, e.g. "MODIFIED FILES (19)"
+    header_changed = Signal(str)                   # emitted by set_header()
 
-    def __init__(self, ctx: PanelContext, parent=None): ...
+    def __init__(self, ctx: PanelContext, parent=None): ...   # final: panels don't override it
+    def _setup(self) -> None: ...                         # the panel builds its widgets here
     def apply_theme(self, theme: AppTheme) -> None: ...   # default no-op; the base wires theme_changed
+    header: str                                           # read-only; `title` until set_header()
+    def set_header(self, text: str) -> None: ...          # e.g. "Modified files (19)"; emits on change
 ```
+
+The panel keeps its current header text, so a frame built later (when `LayoutHost` reuses
+a panel, §6.2) shows the latest one instead of falling back to `title`. Header text is
+normal case; `SectionHeader` displays it in upper case, and tab labels use it as is.
+
+`Panel.__init_subclass__` enforces the rules it can check when the class is defined: a
+panel that overrides `__init__`, or doesn't set `panel_id` and `title`, raises `TypeError`.
+
+**Construction order.** `Panel.__init__` is a template method. In order, it:
+
+1. calls `QWidget.__init__` and stores `ctx`,
+2. sets the `surface` style property,
+3. calls `self._setup()`. The panel builds its widgets, connects its signals and renders
+   the current state (contract rule 3),
+4. calls `self.apply_theme(ctx.theme.current)`,
+5. connects `ctx.theme.theme_changed` to `apply_theme`.
+
+Panels don't define `__init__` and take no constructor arguments besides `ctx` and `parent`.
+Everything they need comes through `ctx`. Widget attributes created in `_setup()` are
+declared in the class body (`_list: QListWidget`), so readers and type checkers see them.
+
+**Why a hook instead of each panel's own `__init__`:** the base has work to do *after* the
+panel's widgets exist (the first `apply_theme`). With a hook that order can't be got wrong
+or forgotten, and a step for every panel can be added in one place. "Call `super().__init__`
+last" isn't an option: PySide6 refuses to parent child widgets to a `QWidget` whose
+`__init__` hasn't run. The cost is a less familiar pattern and attributes created outside
+`__init__`. Revisit if a panel ever needs its own constructor arguments or the hook gets in
+the way.
 
 **Why panels subclass QWidget instead of wrapping one:** a widget is what the layout places,
 it's idiomatic Qt, and Qt disconnects signals automatically when the panel is destroyed.
@@ -221,9 +252,10 @@ Every panel follows these rules:
 ### 5.3 Registry
 
 `panels/panel_registry.py` has an explicit `PANEL_TYPES = (BranchesPanel, HistoryPanel,
-FilesPanel)` and a `panel_type(panel_id)` lookup. **Why explicit:** no import-time side
-effects or decorator magic, and one place to see every panel. A test checks that ids are
-unique.
+FilesPanel)` and a `panel_type(panel_id)` lookup that raises `KeyError` for an unknown id.
+**Why explicit:** no import-time side effects or decorator magic, and one place to see
+every panel. The lookup table is built at import by `index_panel_types()`, which raises
+`ValueError` on a duplicate id, so a clash fails at startup and in every test run.
 
 ### 5.4 Panels
 
@@ -392,8 +424,9 @@ cheap to fix **later**, without paying for them now:
 
 - `tests/support.py`: `make_repo()` / `commit_file()` build throwaway repos, `qt_app()`
   returns one shared offscreen `QApplication` (`QT_QPA_PLATFORM=offscreen` is set before
-  import), and `SignalRecorder` records emissions in order. Qt is imported only inside
-  `qt_app()`, so git-only tests never load it.
+  import), `SignalRecorder` records emissions in order, and `make_panel_context()` gives a
+  `PanelContext` with no repo open. Qt is imported only inside these functions, so git-only
+  tests never load it.
 - One test file per module: `test_repo` (git, no Qt), `test_repo_session` (signals and
   latest values on temp repos), `test_app_theme` / `test_theme_manager` (the stylesheet
   builds, and every role it uses exists), `test_layout_model` (round-trip and `normalize`
