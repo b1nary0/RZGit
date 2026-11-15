@@ -17,7 +17,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from rzgitclient.git.repo import GitError, Repo
+from rzgitclient.core.repo_session import RepoSession
+from rzgitclient.git.git_models import Commit, FileStatus
+from rzgitclient.git.repo import Repo
 from rzgitclient.ui.theme.style_roles import Role, Surface, set_role, set_surface
 from rzgitclient.ui.theme.theme_manager import ThemeManager
 
@@ -48,16 +50,23 @@ def _titled(title: str, widget: QWidget, surface: Surface) -> QWidget:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, theme: ThemeManager):
+    def __init__(self, theme: ThemeManager, session: RepoSession):
         super().__init__()
         self.theme = theme
-        self.repo: Repo | None = None
+        self.session = session
         self.settings = QSettings()
 
         self.setWindowTitle("RZGitClient")
         self.resize(1100, 700)
         self._build_actions()
         self._build_ui()
+
+        session.repo_changed.connect(self._on_repo_changed)
+        session.head_changed.connect(self._show_branches)
+        session.branches_changed.connect(self._show_branches)
+        session.history_changed.connect(self._show_history)
+        session.status_changed.connect(self._show_status)
+        session.error_occurred.connect(self._show_error)
 
     # ---- construction -------------------------------------------------
 
@@ -73,7 +82,7 @@ class MainWindow(QMainWindow):
 
         refresh_act = QAction(QIcon.fromTheme("view-refresh"), "&Refresh", self)
         refresh_act.setShortcut(QKeySequence.StandardKey.Refresh)
-        refresh_act.triggered.connect(self.refresh)
+        refresh_act.triggered.connect(lambda: self.session.refresh())
 
         quit_act = QAction(QIcon.fromTheme("application-exit"), "&Quit", self)
         quit_act.setShortcut(QKeySequence.StandardKey.Quit)
@@ -127,35 +136,26 @@ class MainWindow(QMainWindow):
     # ---- behaviour ----------------------------------------------------
 
     def choose_repo(self) -> None:
-        start = str(self.repo.root) if self.repo else ""
+        repo = self.session.repo
+        start = str(repo.root) if repo else ""
         path = QFileDialog.getExistingDirectory(self, "Open Git Repository", start)
         if path:
-            self.open_repo(path)
+            self.session.open(path)
 
-    def open_repo(self, path: str) -> bool:
-        try:
-            self.repo = Repo(path)
-        except GitError as exc:
-            QMessageBox.warning(self, "Not a git repository", str(exc))
-            return False
-        self.settings.setValue("last_repo", str(self.repo.root))
-        self.refresh()
-        return True
+    def _on_repo_changed(self, repo: Repo | None) -> None:
+        if repo is None:
+            self.setWindowTitle("RZGitClient")
+        else:
+            self.setWindowTitle(f"{repo.name} — RZGitClient")
+            self.settings.setValue("last_repo", str(repo.root))
+        self._update_status_bar()
 
-    def refresh(self) -> None:
-        if not self.repo:
-            return
-        try:
-            branches = self.repo.branches()
-            commits = self.repo.log()
-            changes = self.repo.status()
-            current = self.repo.current_branch()
-        except GitError as exc:
-            QMessageBox.critical(self, "Git error", str(exc))
-            return
+    def _show_error(self, message: str) -> None:
+        QMessageBox.warning(self, "Git error", message)
 
-        self.setWindowTitle(f"{self.repo.name} — RZGitClient")
-
+    def _show_branches(self, _value: object = None) -> None:
+        # Depends on both the branches and HEAD, so it reads the session.
+        branches, head = self.session.branches, self.session.head
         self.branch_list.clear()
         for b in branches:
             item = QListWidgetItem(b.name)
@@ -164,10 +164,12 @@ class MainWindow(QMainWindow):
                 font.setBold(True)
                 item.setFont(font)
             self.branch_list.addItem(item)
-        if not branches and current:
+        if not branches and head:
             # Fresh repo: the branch exists in HEAD but has no ref yet.
-            self.branch_list.addItem(QListWidgetItem(f"{current} (no commits)"))
+            self.branch_list.addItem(QListWidgetItem(f"{head} (no commits)"))
+        self._update_status_bar()
 
+    def _show_history(self, commits: tuple[Commit, ...]) -> None:
         self.commit_tree.clear()
         theme = self.theme.current
         mono = theme.mono_font()
@@ -183,7 +185,10 @@ class MainWindow(QMainWindow):
             self.commit_tree.addTopLevelItem(item)
         for col in (1, 2, 3):
             self.commit_tree.resizeColumnToContents(col)
+        self._update_status_bar()
 
+    def _show_status(self, changes: tuple[FileStatus, ...]) -> None:
+        theme = self.theme.current
         self.changes_tree.clear()
         for f in changes:
             path = f"{f.orig_path} → {f.path}" if f.orig_path else f.path
@@ -202,9 +207,14 @@ class MainWindow(QMainWindow):
             self.changes_tree.addTopLevelItem(item)
         for col in (1, 2):
             self.changes_tree.resizeColumnToContents(col)
+        self._update_status_bar()
 
-        branch_text = current or "detached HEAD"
+    def _update_status_bar(self) -> None:
+        s = self.session
+        if s.repo is None:
+            self.statusBar().showMessage("No repository open")
+            return
         self.statusBar().showMessage(
-            f"{self.repo.root}  ·  {branch_text}  ·  "
-            f"{len(commits)} commits  ·  {len(changes)} changed files"
+            f"{s.repo.root}  ·  {s.head or 'detached HEAD'}  ·  "
+            f"{len(s.history)} commits  ·  {len(s.status)} changed files"
         )

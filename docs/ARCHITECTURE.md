@@ -390,8 +390,10 @@ cheap to fix **later**, without paying for them now:
 
 ## 10. Testing
 
-- `tests/support.py`: `make_repo()` builds throwaway repos, and `qt_app()` returns one shared
-  offscreen `QApplication` (`QT_QPA_PLATFORM=offscreen` is set before import).
+- `tests/support.py`: `make_repo()` / `commit_file()` build throwaway repos, `qt_app()`
+  returns one shared offscreen `QApplication` (`QT_QPA_PLATFORM=offscreen` is set before
+  import), and `SignalRecorder` records emissions in order. Qt is imported only inside
+  `qt_app()`, so git-only tests never load it.
 - One test file per module: `test_repo` (git, no Qt), `test_repo_session` (signals and
   latest values on temp repos), `test_app_theme` / `test_theme_manager` (the stylesheet
   builds, and every role it uses exists), `test_layout_model` (round-trip and `normalize`

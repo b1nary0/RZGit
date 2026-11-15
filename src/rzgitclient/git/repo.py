@@ -8,51 +8,22 @@ from __future__ import annotations
 
 import os
 import subprocess
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from rzgitclient.git.git_models import Branch, Commit, FileStatus
+
 
 class GitError(Exception):
-    """Raised when a git command fails."""
+    """Raised when a git command fails, or can't be run at all.
 
+    ``returncode`` is git's exit code, or None when git never ran (for
+    example, the repository folder no longer exists).
+    """
 
-@dataclass(frozen=True)
-class Commit:
-    sha: str
-    author: str
-    date: datetime
-    subject: str
-
-    @property
-    def short_sha(self) -> str:
-        return self.sha[:8]
-
-
-@dataclass(frozen=True)
-class Branch:
-    name: str
-    is_current: bool
-
-
-@dataclass(frozen=True)
-class FileStatus:
-    index: str  # staged status code (X in porcelain XY)
-    worktree: str  # unstaged status code (Y in porcelain XY)
-    path: str
-    orig_path: str | None = None  # source path for renames/copies
-
-    @property
-    def is_untracked(self) -> bool:
-        return self.index == "?"
-
-    @property
-    def is_staged(self) -> bool:
-        return self.index not in (" ", "?")
-
-    @property
-    def has_unstaged(self) -> bool:
-        return self.worktree not in (" ",) and not self.is_untracked
+    def __init__(self, message: str, returncode: int | None = None):
+        super().__init__(message)
+        self.returncode = returncode
 
 
 def _git_env() -> dict[str, str]:
@@ -63,15 +34,21 @@ def _git_env() -> dict[str, str]:
 
 
 def run_git(cwd: str | Path, *args: str) -> str:
-    proc = subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        env=_git_env(),
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            env=_git_env(),
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:  # missing cwd, git not installed, …
+        raise GitError(f"Can't run git in {cwd}: {exc.strerror or exc}") from exc
     if proc.returncode != 0:
-        raise GitError(proc.stderr.strip() or f"git {' '.join(args)} failed")
+        raise GitError(
+            proc.stderr.strip() or f"git {' '.join(args)} failed",
+            proc.returncode,
+        )
     return proc.stdout
 
 
@@ -94,15 +71,19 @@ class Repo:
         try:
             self.git("rev-parse", "--verify", "-q", "HEAD")
             return True
-        except GitError:
-            return False
+        except GitError as exc:
+            if exc.returncode == 1:  # -q: HEAD doesn't resolve yet
+                return False
+            raise
 
     def current_branch(self) -> str | None:
         """Branch name, or None if HEAD is detached."""
         try:
             return self.git("symbolic-ref", "--short", "-q", "HEAD").strip() or None
-        except GitError:
-            return None
+        except GitError as exc:
+            if exc.returncode == 1:  # -q: HEAD isn't a symbolic ref (detached)
+                return None
+            raise
 
     def branches(self) -> list[Branch]:
         out = self.git(

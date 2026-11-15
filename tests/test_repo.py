@@ -1,31 +1,19 @@
-import subprocess
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
 from rzgitclient.git.repo import GitError, Repo
-
-
-def sh(cwd, *args):
-    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+from tests.support import commit_file, git, make_repo
 
 
 class RepoTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
-        self.path = Path(self._tmp.name)
-        sh(self.path, "init", "-b", "main")
-        sh(self.path, "config", "user.name", "Test User")
-        sh(self.path, "config", "user.email", "test@example.com")
-        sh(self.path, "config", "commit.gpgsign", "false")
+        self.path = make_repo(Path(self._tmp.name) / "repo")
 
     def tearDown(self):
         self._tmp.cleanup()
-
-    def commit_file(self, name, content, message):
-        (self.path / name).write_text(content)
-        sh(self.path, "add", name)
-        sh(self.path, "commit", "-m", message)
 
     def test_not_a_repo(self):
         with tempfile.TemporaryDirectory() as other:
@@ -45,9 +33,9 @@ class RepoTests(unittest.TestCase):
         self.assertEqual(Repo(sub).root.resolve(), self.path.resolve())
 
     def test_log_and_branches(self):
-        self.commit_file("a.txt", "1", "first")
-        self.commit_file("a.txt", "2", "second: with | odd chars")
-        sh(self.path, "branch", "feature")
+        commit_file(self.path, "a.txt", "1", "first")
+        commit_file(self.path, "a.txt", "2", "second: with | odd chars")
+        git(self.path, "branch", "feature")
         repo = Repo(self.path)
 
         log = repo.log()
@@ -58,12 +46,29 @@ class RepoTests(unittest.TestCase):
         branches = {b.name: b.is_current for b in repo.branches()}
         self.assertEqual(branches, {"main": True, "feature": False})
 
+    def test_detached_head(self):
+        commit_file(self.path, "a.txt", "1", "first")
+        git(self.path, "checkout", "-q", "--detach")
+        self.assertIsNone(Repo(self.path).current_branch())
+
+    def test_deleted_folder_raises_git_error(self):
+        commit_file(self.path, "a.txt", "1", "first")
+        repo = Repo(self.path)
+        shutil.rmtree(self.path)
+        # Every call fails with GitError, never an OSError and never a
+        # silent "detached"/"no commits" answer.
+        for call in (repo.current_branch, repo.has_commits, repo.branches,
+                     repo.log, repo.status):
+            with self.subTest(call.__name__), self.assertRaises(GitError) as ctx:
+                call()
+            self.assertIsNone(ctx.exception.returncode)
+
     def test_status(self):
-        self.commit_file("tracked.txt", "x", "init")
-        self.commit_file("old.txt", "rename me", "add old")
+        commit_file(self.path, "tracked.txt", "x", "init")
+        commit_file(self.path, "old.txt", "rename me", "add old")
         (self.path / "tracked.txt").write_text("changed")
         (self.path / "new file.txt").write_text("hi")
-        sh(self.path, "mv", "old.txt", "renamed.txt")
+        git(self.path, "mv", "old.txt", "renamed.txt")
 
         status = {f.path: f for f in Repo(self.path).status()}
 
