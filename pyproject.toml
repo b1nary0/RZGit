@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rzgitclient"
+version = "0.1.0"
+description = "A Qt-based git client for Linux"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["PySide6>=6.6"]
+
+[project.scripts]
+rzgit = "rzgitclient.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
