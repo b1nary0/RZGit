@@ -42,4 +42,6 @@ def main(argv: list[str] | None = None) -> int:
     if target:
         session.open(target)
 
-    return app.exec()
+    code = app.exec()
+    session.shutdown()  # wait for a git command still running
+    return code

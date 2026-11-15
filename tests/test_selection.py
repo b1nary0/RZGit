@@ -6,7 +6,7 @@ from pathlib import Path
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import FileSelection, FileSource, Selection
 from rzgitclient.git.git_models import Commit
-from tests.support import SignalRecorder, make_repo, qt_app
+from tests.support import SignalRecorder, make_repo, qt_app, wait_idle
 
 COMMIT = Commit("a" * 40, "Test User", datetime(2026, 1, 1, tzinfo=timezone.utc), "first")
 
@@ -47,11 +47,13 @@ class SelectionTests(unittest.TestCase):
 
     def test_cleared_when_repo_changes(self):
         self.assertTrue(self.session.open(make_repo(self.tmp / "a")))
+        wait_idle(self.session)
         self.selection.commit = COMMIT
         self.selection.file = FileSelection("a.py", FileSource.INDEX)
         self.rec.clear()
 
         self.assertTrue(self.session.open(make_repo(self.tmp / "b")))
+        wait_idle(self.session)
         self.assertIsNone(self.selection.commit)
         self.assertIsNone(self.selection.file)
         self.assertEqual(self.rec.events, [("commit_changed", None), ("file_changed", None)])

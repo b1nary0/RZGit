@@ -120,6 +120,7 @@ class RepoSession(QObject):
     history_changed  = Signal(object)  # tuple[Commit, ...]
     status_changed   = Signal(object)  # tuple[FileStatus, ...]
     error_occurred   = Signal(str)
+    busy_changed     = Signal(bool)  # True while git work is queued or running
 
     def open(self, path) -> bool
     def close(self) -> None
@@ -150,6 +151,19 @@ class RepoSession(QObject):
   for git failures, so errors look the same wherever they come from. `refresh()` stops at the
   first part that fails and sends one error. Parts already loaded keep their new values;
   the rest keep their old ones.
+- **Git runs on one worker thread.** `open()` checks the folder synchronously (one fast,
+  local git call) and returns True/False as before; loading the data and every `refresh()`
+  run on a single background thread, one job at a time, in order. Signals are emitted on
+  the main thread. **Why one thread, not a pool:** git commands on the same repo can clash
+  on `index.lock`, and in-order jobs can't deliver results out of order.
+  - A `refresh()` requested while another is waiting merges into the waiting one.
+  - Results from a repo that has since been closed or replaced are dropped (a generation
+    counter, bumped by `open()` and `close()`).
+  - A job loads its parts, then emits them in the fixed order; the error rule above holds
+    per job.
+  - On quit, the session waits for the running git command (it can't be interrupted).
+  - `busy_changed(True)` when the first job is queued, `False` when the queue is empty. The
+    window shows it in the status bar at once. Tests wait with `wait_idle()`.
 - **Growth:** when the session gains many commands (stage, commit, checkout, fetch…), they
   can move to a separate `core/git_commands.py` that the session delegates to. Not before.
 
@@ -460,7 +474,7 @@ cheap to fix **later**, without paying for them now:
 
 | Hot spot | When it matters | Planned fix | Kept open by |
 |---|---|---|---|
-| git on the UI thread | large repos, network ops | worker thread inside RepoSession | push-based signals (§4.1); panels never run git (§5.2) |
+| git on the UI thread | large repos, network ops | **done:** one worker thread inside RepoSession (§4.1) | push-based signals (§4.1); panels never run git (§5.2) |
 | History rebuilds as item widgets | 10k+ commits | `QAbstractTableModel` + paging | HistoryPanel is the only place that changes |
 | Full rebuild on every refresh | frequent refreshes | granular signals, emitted only on change | §4.1 (done now: cheap, and the right semantics anyway) |
 | Layout changes recreating panels | layout switching | panel reuse in `LayoutHost.apply` | §6.2 (done now: needed to keep panel state anyway) |
@@ -470,8 +484,9 @@ cheap to fix **later**, without paying for them now:
 
 - `tests/support.py`: `make_repo()` / `commit_file()` build throwaway repos, `qt_app()`
   returns one shared offscreen `QApplication` (`QT_QPA_PLATFORM=offscreen` is set before
-  import), `SignalRecorder` records emissions in order, and `make_panel_context()` gives a
-  `PanelContext` with no repo open. Qt is imported only inside these functions, so git-only
+  import), `SignalRecorder` records emissions in order, `make_panel_context()` gives a
+  `PanelContext` with no repo open, and `wait_idle(session)` waits for the git worker. A test
+  that opens a repo waits before it ends, so no late result reaches the next test. Qt is imported only inside these functions, so git-only
   tests never load it.
 - One test file per module: `test_repo` (git, no Qt), `test_repo_session` (signals and
   latest values on temp repos), `test_app_theme` / `test_theme_manager` (the stylesheet

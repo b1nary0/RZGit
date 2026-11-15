@@ -10,6 +10,7 @@ from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
 from rzgitclient.ui.theme.style_roles import Surface
 from tests.support import (
+    wait_idle,
     SignalRecorder,
     commit_file,
     make_panel_context,
@@ -72,10 +73,12 @@ class PanelTests(unittest.TestCase):
         panel = BranchNamesPanel(self.ctx)
         self.assertEqual(panel._label.text(), "No branches")
         self.ctx.session.open(self.repo)
+        wait_idle(self.ctx.session)
         self.assertEqual(panel._label.text(), "main")
 
     def test_renders_current_state_when_built_late(self):
         self.ctx.session.open(self.repo)
+        wait_idle(self.ctx.session)
         panel = BranchNamesPanel(self.ctx)
         self.assertEqual(panel._label.text(), "main")
 

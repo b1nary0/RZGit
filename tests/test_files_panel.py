@@ -7,6 +7,7 @@ from rzgitclient.core.selection import FileSelection, FileSource
 from rzgitclient.ui.panels.files_panel import FilesPanel
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
 from tests.support import (
+    wait_idle,
     SignalRecorder,
     commit_file,
     git,
@@ -55,6 +56,7 @@ class FilesPanelTests(unittest.TestCase):
         (self.repo / "new.txt").write_text("hi")
         git(self.repo, "mv", "old.txt", "renamed.txt")
         self.ctx.session.open(self.repo)
+        wait_idle(self.ctx.session)
         self.assertEqual(self.rows(), {
             "a.txt": ("", "Modified"),
             "new.txt": ("", "Untracked"),
@@ -75,6 +77,7 @@ class FilesPanelTests(unittest.TestCase):
         (self.repo / "staged.txt").write_text("x")
         git(self.repo, "add", "staged.txt")
         self.ctx.session.open(self.repo)
+        wait_idle(self.ctx.session)
         self.select("a.txt")
         self.assertEqual(self.ctx.selection.file, FileSelection("a.txt", FileSource.WORKTREE))
         self.select("staged.txt")
@@ -83,19 +86,23 @@ class FilesPanelTests(unittest.TestCase):
     def test_refresh_keeps_path_and_updates_source(self):
         (self.repo / "a.txt").write_text("changed")
         self.ctx.session.open(self.repo)
+        wait_idle(self.ctx.session)
         self.select("a.txt")
         rec = SignalRecorder(self.ctx.selection, "file_changed")
         git(self.repo, "add", "a.txt")
         self.ctx.session.refresh()
+        wait_idle(self.ctx.session)
         self.assertEqual(self.tree.currentItem().text(0), "a.txt")
         self.assertEqual(rec.events, [("file_changed", FileSelection("a.txt", FileSource.INDEX))])
 
     def test_selection_cleared_when_file_is_gone(self):
         (self.repo / "a.txt").write_text("changed")
         self.ctx.session.open(self.repo)
+        wait_idle(self.ctx.session)
         self.select("a.txt")
         git(self.repo, "commit", "-qam", "commit it")
         self.ctx.session.refresh()
+        wait_idle(self.ctx.session)
         self.assertEqual(self.rows(), {})
         self.assertIsNone(self.ctx.selection.file)
         self.assertEqual(self.panel.header, "Files")
@@ -103,6 +110,7 @@ class FilesPanelTests(unittest.TestCase):
     def test_apply_theme_recolours_rows(self):
         (self.repo / "a.txt").write_text("changed")
         self.ctx.session.open(self.repo)
+        wait_idle(self.ctx.session)
         status = dataclasses.replace(LIGHT_THEME.status, modified="#123456")
         self.ctx.theme.set_theme(dataclasses.replace(LIGHT_THEME, status=status))
         self.assertEqual(self.tree.topLevelItem(0).foreground(2).color().name(), "#123456")

@@ -8,7 +8,7 @@ from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.ui.layout.layout_model import SplitNode
 from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
 from rzgitclient.ui.main_window import MainWindow
-from tests.support import commit_file, make_panel_context, make_repo, qt_app
+from tests.support import commit_file, make_panel_context, make_repo, qt_app, wait_idle
 
 
 def strip_sizes(node):
@@ -26,18 +26,20 @@ class MainWindowTests(unittest.TestCase):
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)  # last: after every window is gone
         self.tmp = Path(self._tmp.name)
         self.settings_path = self.tmp / "settings.ini"
 
     def tearDown(self):
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        self._tmp.cleanup()
 
     def start(self):
         window = MainWindow(make_panel_context(), AppSettings(self.settings_path))
         window.show()
         self.app.processEvents()
         self.addCleanup(window.deleteLater)
+        # Runs first: no late git result may reach a window being deleted.
+        self.addCleanup(window.session.shutdown)
         return window
 
     def quit(self, window):
@@ -89,10 +91,25 @@ class MainWindowTests(unittest.TestCase):
         commit_file(repo, "a.txt", "1", "first")
         window = self.start()
         window.session.open(repo)
+        wait_idle(window.session)
         self.quit(window)
         self.assertEqual(
             Path(AppSettings(self.settings_path).last_repo).resolve(), repo.resolve()
         )
+
+
+    def test_loading_label_shows_while_git_is_busy(self):
+        repo = make_repo(self.tmp / "repo")
+        commit_file(repo, "a.txt", "1", "first")
+        window = self.start()
+        label = window._busy_label
+        self.assertFalse(label.isVisible())
+        window.session.open(repo)
+        self.assertTrue(label.isVisible())
+        self.assertEqual(label.text(), "Loading…")
+        wait_idle(window.session)
+        self.assertFalse(label.isVisible())
+        self.assertIn("1 commits", window.statusBar().currentMessage())  # summary kept
 
 
 if __name__ == "__main__":

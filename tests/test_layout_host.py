@@ -9,7 +9,7 @@ from rzgitclient.ui.layout.layout_host import LayoutHost
 from rzgitclient.ui.layout.layout_model import Orientation, PanelNode, SplitNode, TabsNode
 from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
 from rzgitclient.ui.layout.panel_frame import PanelFrame
-from tests.support import commit_file, make_panel_context, make_repo, qt_app
+from tests.support import commit_file, make_panel_context, make_repo, qt_app, wait_idle
 
 H, V = Orientation.HORIZONTAL, Orientation.VERTICAL
 TABS = TabsNode((PanelNode("history"), PanelNode("files")), current=1)
@@ -101,6 +101,7 @@ class LayoutHostTests(unittest.TestCase):
         commit_file(repo, "a.txt", "1", "first")
         commit_file(repo, "a.txt", "2", "second")
         self.ctx.session.open(repo)
+        wait_idle(self.ctx.session)
 
         self.host.apply(DEFAULT_LAYOUT)
         self.show()

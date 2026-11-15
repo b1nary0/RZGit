@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QFileDialog, QMainWindow, QMessageBox
+from PySide6.QtWidgets import QFileDialog, QLabel, QMainWindow, QMessageBox
 
 from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.git.repo import Repo
@@ -30,6 +30,7 @@ class MainWindow(QMainWindow):
         for signal in (session.head_changed, session.history_changed, session.status_changed):
             signal.connect(self._update_status_bar)
         session.error_occurred.connect(self._show_error)
+        session.busy_changed.connect(self._busy_label.setVisible)
 
     # ---- construction -------------------------------------------------
 
@@ -58,6 +59,10 @@ class MainWindow(QMainWindow):
         self.layout_host.apply(restore_layout(self.settings.layout))
         self.setCentralWidget(self.layout_host)
         self.statusBar().showMessage("No repository open")
+        # Beside the summary, not replacing it.
+        self._busy_label = QLabel("Loading…")
+        self._busy_label.setVisible(self.session.busy)
+        self.statusBar().addPermanentWidget(self._busy_label)
 
     # ---- behaviour ----------------------------------------------------
 

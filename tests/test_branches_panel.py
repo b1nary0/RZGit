@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from rzgitclient.ui.panels.branches_panel import BranchesPanel
-from tests.support import commit_file, git, make_panel_context, make_repo, qt_app
+from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 
 class BranchesPanelTests(unittest.TestCase):
@@ -29,12 +29,14 @@ class BranchesPanelTests(unittest.TestCase):
 
     def test_fresh_repo_shows_placeholder(self):
         self.ctx.session.open(self.repo)
+        wait_idle(self.ctx.session)
         self.assertEqual(self.rows(), ["main (no commits)"])
 
     def test_lists_branches_with_current_in_bold(self):
         commit_file(self.repo, "a.txt", "1", "first")
         git(self.repo, "branch", "feature")
         self.ctx.session.open(self.repo)
+        wait_idle(self.ctx.session)
         self.assertEqual(self.rows(), ["feature", "main"])
         bold = {self.list.item(i).text(): self.list.item(i).font().bold() for i in range(2)}
         self.assertEqual(bold, {"feature": False, "main": True})
@@ -43,9 +45,11 @@ class BranchesPanelTests(unittest.TestCase):
         commit_file(self.repo, "a.txt", "1", "first")
         git(self.repo, "branch", "feature")
         self.ctx.session.open(self.repo)
+        wait_idle(self.ctx.session)
         self.list.setCurrentRow(0)  # feature
         git(self.repo, "branch", "another")
         self.ctx.session.refresh()
+        wait_idle(self.ctx.session)
         self.assertEqual(self.rows(), ["another", "feature", "main"])
         self.assertEqual(self.list.currentItem().text(), "feature")
 

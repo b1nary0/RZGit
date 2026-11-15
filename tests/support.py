@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ if TYPE_CHECKING:
     from PySide6.QtCore import QObject
     from PySide6.QtWidgets import QApplication
 
+    from rzgitclient.core.repo_session import RepoSession
     from rzgitclient.ui.panels.panel import PanelContext
 
 
@@ -55,6 +57,18 @@ def commit_file(repo: str | Path, name: str, content: str, message: str) -> None
     (Path(repo) / name).write_text(content)
     git(repo, "add", name)
     git(repo, "commit", "-m", message)
+
+
+def wait_idle(session: RepoSession, timeout: float = 10.0) -> None:
+    """Process events until the session's git worker has nothing left to do."""
+    from PySide6.QtCore import QCoreApplication, QThread
+
+    deadline = time.monotonic() + timeout
+    while session.busy:
+        if time.monotonic() > deadline:
+            raise AssertionError(f"session still busy after {timeout}s")
+        QCoreApplication.processEvents()
+        QThread.msleep(1)
 
 
 # ---- signals ---------------------------------------------------------------

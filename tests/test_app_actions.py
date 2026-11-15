@@ -7,7 +7,7 @@ from PySide6.QtGui import QKeySequence
 
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.ui.app_actions import AppActions
-from tests.support import make_repo, qt_app
+from tests.support import make_repo, qt_app, wait_idle
 
 
 class AppActionsTests(unittest.TestCase):
@@ -27,17 +27,20 @@ class AppActionsTests(unittest.TestCase):
     def test_refresh_enabled_only_with_a_repo(self):
         self.assertFalse(self.actions.refresh.isEnabled())
         self.session.open(self.repo)
+        wait_idle(self.session)
         self.assertTrue(self.actions.refresh.isEnabled())
         self.session.close()
         self.assertFalse(self.actions.refresh.isEnabled())
 
     def test_enabled_state_matches_a_session_opened_earlier(self):
         self.session.open(self.repo)
+        wait_idle(self.session)
         actions = AppActions(self.session)
         self.assertTrue(actions.refresh.isEnabled())
 
     def test_refresh_refreshes_everything(self):
         self.session.open(self.repo)
+        wait_idle(self.session)
         with mock.patch.object(self.session, "refresh") as refresh:
             self.actions.refresh.trigger()
         refresh.assert_called_once_with()

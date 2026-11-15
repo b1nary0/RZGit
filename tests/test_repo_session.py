@@ -2,14 +2,16 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+import threading
 from unittest import mock
 
 from rzgitclient.core.repo_session import Refresh, RepoSession
 from rzgitclient.git.repo import GitError, Repo
-from tests.support import SignalRecorder, commit_file, git, make_repo, qt_app
+from tests.support import SignalRecorder, commit_file, git, make_repo, qt_app, wait_idle
 
 DATA_SIGNALS = ("head_changed", "branches_changed", "history_changed", "status_changed")
 ALL_SIGNALS = ("repo_changed", *DATA_SIGNALS, "error_occurred")
+BUSY = "busy_changed"
 
 
 class RepoSessionTests(unittest.TestCase):
@@ -32,12 +34,14 @@ class RepoSessionTests(unittest.TestCase):
 
     def open_and_clear(self, path=None):
         self.assertTrue(self.session.open(path or self.path))
+        wait_idle(self.session)
         self.rec.clear()
 
     # ---- open -----------------------------------------------------------
 
     def test_open_emits_everything_in_order(self):
         self.assertTrue(self.session.open(self.path))
+        wait_idle(self.session)
         self.assertEqual(self.rec.names(), ["repo_changed", *DATA_SIGNALS])
 
         s = self.session
@@ -55,6 +59,7 @@ class RepoSessionTests(unittest.TestCase):
         self.open_and_clear()
         repo = self.session.repo
         self.assertFalse(self.session.open(self.tmp))  # not a repository
+        wait_idle(self.session)
         self.assertEqual(self.rec.names(), ["error_occurred"])
         self.assertIs(self.session.repo, repo)
 
@@ -65,6 +70,7 @@ class RepoSessionTests(unittest.TestCase):
         # Both repos have identical data (main, nothing else); the second
         # one's must still reach the panels.
         self.assertTrue(self.session.open(empty_b))
+        wait_idle(self.session)
         self.assertEqual(self.rec.names(), ["repo_changed", *DATA_SIGNALS])
 
     def test_failed_load_during_open_leaves_parts_empty(self):
@@ -73,6 +79,7 @@ class RepoSessionTests(unittest.TestCase):
         commit_file(other, "b.txt", "1", "other first")
         with mock.patch.object(Repo, "log", side_effect=GitError("boom")):
             self.assertTrue(self.session.open(other))
+            wait_idle(self.session)
         # Head and branches loaded; history failed, so loading stopped. The
         # parts never loaded must not keep the previous repo's data.
         self.assertEqual(
@@ -104,6 +111,7 @@ class RepoSessionTests(unittest.TestCase):
     def test_unchanged_refresh_emits_nothing(self):
         self.open_and_clear()
         self.session.refresh()
+        wait_idle(self.session)
         self.assertEqual(self.rec.events, [])
 
     def test_refresh_only_the_parts_asked_for(self):
@@ -111,6 +119,7 @@ class RepoSessionTests(unittest.TestCase):
         (self.path / "new.txt").write_text("x")
         git(self.path, "checkout", "-q", "feature")
         self.session.refresh(Refresh.STATUS)
+        wait_idle(self.session)
         self.assertEqual(self.rec.names(), ["status_changed"])
         self.assertEqual(self.session.head, "main")  # HEAD not reloaded
 
@@ -118,12 +127,14 @@ class RepoSessionTests(unittest.TestCase):
         self.open_and_clear()
         commit_file(self.path, "a.txt", "2", "second")
         self.session.refresh()
+        wait_idle(self.session)
         # A new commit changes history and status; HEAD and the branch list
         # (names and which is current) stay the same.
         self.assertEqual(self.rec.names(), ["history_changed", "status_changed"])
 
     def test_refresh_without_repo_does_nothing(self):
         self.session.refresh()
+        wait_idle(self.session)
         self.assertEqual(self.rec.events, [])
 
     def test_refresh_error_reports_once_and_keeps_values(self):
@@ -131,10 +142,90 @@ class RepoSessionTests(unittest.TestCase):
         before = (self.session.head, self.session.branches, self.session.history)
         shutil.rmtree(self.path)
         self.session.refresh()
+        wait_idle(self.session)
         self.assertEqual(self.rec.names(), ["error_occurred"])
         self.assertEqual(
             (self.session.head, self.session.branches, self.session.history), before
         )
+
+
+    # ---- background loading ----------------------------------------------
+
+    def test_open_returns_before_the_data_arrives(self):
+        self.assertTrue(self.session.open(self.path))
+        self.assertEqual(self.rec.names(), ["repo_changed"])  # data not loaded yet
+        self.assertEqual(self.session.history, ())
+        self.assertTrue(self.session.busy)
+        wait_idle(self.session)
+        self.assertEqual([c.subject for c in self.session.history], ["first"])
+
+    def test_git_runs_off_the_main_thread_and_signals_arrive_on_it(self):
+        threads = []
+        real_log = Repo.log
+
+        def log(repo, *args, **kwargs):
+            threads.append(threading.current_thread())
+            return real_log(repo, *args, **kwargs)
+
+        emitted_on = []
+        self.session.history_changed.connect(lambda _: emitted_on.append(threading.current_thread()))
+        with mock.patch.object(Repo, "log", log):
+            self.session.open(self.path)
+            wait_idle(self.session)
+        self.assertNotEqual(threads, [threading.main_thread()])
+        self.assertEqual(emitted_on, [threading.main_thread()])
+
+    def test_refreshes_requested_while_busy_merge_into_one_job(self):
+        self.open_and_clear()
+        calls = []
+        real_status = Repo.status
+        with mock.patch.object(Repo, "status", lambda r: calls.append(1) or real_status(r)):
+            self.session.refresh(Refresh.STATUS)  # starts a job
+            self.session.refresh(Refresh.HISTORY)  # these two wait,
+            self.session.refresh(Refresh.STATUS)  # merged into one job
+            wait_idle(self.session)
+        self.assertEqual(len(calls), 2)
+
+    def test_busy_changes_once_per_busy_period(self):
+        rec = SignalRecorder(self.session, BUSY)
+        self.session.open(self.path)
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertEqual(rec.events, [(BUSY, True), (BUSY, False)])
+
+    def test_switching_repos_mid_load_drops_the_old_results(self):
+        other = make_repo(self.tmp / "other")
+        commit_file(other, "b.txt", "1", "other first")
+        self.session.open(self.path)
+        self.session.open(other)  # before the first repo's data arrived
+        wait_idle(self.session)
+        histories = self.rec.values("history_changed")
+        self.assertEqual([[c.subject for c in h] for h in histories], [["other first"]])
+        self.assertEqual(self.rec.names().count("repo_changed"), 2)
+
+    def test_close_mid_load_drops_the_results(self):
+        self.session.open(self.path)
+        self.session.close()
+        wait_idle(self.session)
+        self.assertEqual(self.rec.names(), ["repo_changed", "repo_changed", *DATA_SIGNALS])
+        self.assertEqual(self.session.history, ())
+
+    def test_unexpected_exception_is_reported_and_not_left_busy(self):
+        self.open_and_clear()
+        with mock.patch.object(Repo, "status", side_effect=RuntimeError("bug")):
+            with self.assertLogs("rzgitclient.core.repo_session", "ERROR"):
+                self.session.refresh(Refresh.STATUS)
+                wait_idle(self.session)
+        self.assertEqual(self.rec.names(), ["error_occurred"])
+        self.assertIn("bug", self.rec.values("error_occurred")[0])
+        self.assertFalse(self.session.busy)
+
+    def test_shutdown_drops_queued_work_and_waits(self):
+        self.open_and_clear()
+        self.session.refresh()
+        self.session.shutdown()
+        wait_idle(self.session, timeout=1)  # nothing left running
+        self.assertEqual(self.rec.events, [])  # the result was dropped
 
 
 if __name__ == "__main__":
