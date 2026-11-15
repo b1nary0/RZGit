@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSettings, QSize, Qt
-from PySide6.QtGui import QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMessageBox, QSplitter
 
 from rzgitclient.git.repo import Repo
@@ -32,31 +31,20 @@ class MainWindow(QMainWindow):
     # ---- construction -------------------------------------------------
 
     def _build_actions(self) -> None:
+        actions = self.ctx.actions
+        actions.open_repo.triggered.connect(self.choose_repo)
+        actions.quit.triggered.connect(self.close)
+
         toolbar = self.addToolBar("Main")
         toolbar.setObjectName("main-toolbar")
         toolbar.setMovable(False)
         toolbar.setIconSize(QSize(16, 16))
-
-        open_act = QAction(QIcon.fromTheme("document-open"), "&Open Repository…", self)
-        open_act.setShortcut(QKeySequence.StandardKey.Open)
-        open_act.triggered.connect(self.choose_repo)
-
-        refresh_act = QAction(QIcon.fromTheme("view-refresh"), "&Refresh", self)
-        refresh_act.setShortcut(QKeySequence.StandardKey.Refresh)
-        refresh_act.triggered.connect(lambda: self.session.refresh())
-
-        quit_act = QAction(QIcon.fromTheme("application-exit"), "&Quit", self)
-        quit_act.setShortcut(QKeySequence.StandardKey.Quit)
-        quit_act.triggered.connect(self.close)
-
-        toolbar.addAction(open_act)
-        toolbar.addAction(refresh_act)
+        toolbar.addActions([actions.open_repo, actions.refresh])
 
         file_menu = self.menuBar().addMenu("&File")
-        file_menu.addAction(open_act)
-        file_menu.addAction(refresh_act)
+        file_menu.addActions([actions.open_repo, actions.refresh])
         file_menu.addSeparator()
-        file_menu.addAction(quit_act)
+        file_menu.addAction(actions.quit)
 
     def _build_ui(self) -> None:
         self.branches_panel = BranchesPanel(self.ctx)

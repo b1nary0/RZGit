@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QWidget
 
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import Selection
+from rzgitclient.ui.app_actions import AppActions
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.theme.style_roles import Surface, set_surface
 from rzgitclient.ui.theme.theme_manager import ThemeManager
@@ -23,6 +24,7 @@ class PanelContext:
     session: RepoSession
     selection: Selection
     theme: ThemeManager
+    actions: AppActions
 
 
 class Panel(QWidget):

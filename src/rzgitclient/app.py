@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QApplication
 from rzgitclient import __version__
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import Selection
+from rzgitclient.ui.app_actions import AppActions
 from rzgitclient.ui.main_window import MainWindow
 from rzgitclient.ui.panels.panel import PanelContext
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
@@ -23,7 +24,12 @@ def main(argv: list[str] | None = None) -> int:
     theme = ThemeManager(app, LIGHT_THEME)
     session = RepoSession()
 
-    ctx = PanelContext(session=session, selection=Selection(session), theme=theme)
+    ctx = PanelContext(
+        session=session,
+        selection=Selection(session),
+        theme=theme,
+        actions=AppActions(session),
+    )
 
     window = MainWindow(ctx)
     window.show()

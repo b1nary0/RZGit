@@ -36,7 +36,7 @@ one names the sections below that it covers.
   ↑
  core/  application state. QtCore only (QObject, Signal). No widgets.
   ↑
- ui/    widgets. theme/ → widgets/ → panels/ → layout/ → main_window
+ ui/    widgets. theme/ → widgets/ → app_actions → panels/ → layout/ → main_window
   ↑
  app.py composition root. The only place concrete objects are created and wired together.
 ```
@@ -45,7 +45,15 @@ Rules (enforced by `tests/test_architecture.py`, which reads imports with `ast`)
 - `git/` never imports PySide6.
 - `core/` never imports `PySide6.QtWidgets` or `PySide6.QtGui`.
 - A panel never imports another panel, `layout/` or `main_window`.
+- A panel never imports `git/repo.py`: it never runs git (contract rule 4). It may import
+  `git/git_models.py` for types.
+- Imports point down the diagram: `git/` never imports `core/` or `ui/`, and `core/` never
+  imports `ui/`. Inside `ui/`, a module imports only from its own or a lower layer, in the
+  order above (`app.py` may import anything).
 - `ui/layout/layout_model.py` imports no Qt at all (it's plain data).
+
+The rule checker is a function, and its tests feed it small sources that break each rule,
+so every rule is shown to fire.
 
 **Why:** this lets the git layer be tested with no Qt, state be tested with no widgets, and
 panels be tested with no window. It also stops the usual drift where widgets start reaching
@@ -184,7 +192,7 @@ class PanelContext:
     session: RepoSession
     selection: Selection
     theme: ThemeManager
-    # actions: AppActions is added when AppActions exists (§8). No None placeholder.
+    actions: AppActions
 
 class Panel(QWidget):
     panel_id: ClassVar[str]                        # stable, saved in layouts: "history"

@@ -80,6 +80,9 @@ QToolButton:hover {
 QToolButton:pressed, QToolButton:checked {
     background: $button_pressed;
 }
+QToolButton:disabled {
+    color: $text_muted;
+}
 QPushButton {
     background: $button_bg;
     border: none;

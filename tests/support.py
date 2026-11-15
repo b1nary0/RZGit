@@ -92,6 +92,7 @@ def make_panel_context() -> PanelContext:
     """A PanelContext with a fresh session (no repo open) and the light theme."""
     from rzgitclient.core.repo_session import RepoSession
     from rzgitclient.core.selection import Selection
+    from rzgitclient.ui.app_actions import AppActions
     from rzgitclient.ui.panels.panel import PanelContext
     from rzgitclient.ui.theme.app_theme import LIGHT_THEME
     from rzgitclient.ui.theme.theme_manager import ThemeManager
@@ -101,4 +102,5 @@ def make_panel_context() -> PanelContext:
         session=session,
         selection=Selection(session),
         theme=ThemeManager(qt_app(), LIGHT_THEME),
+        actions=AppActions(session),
     )
