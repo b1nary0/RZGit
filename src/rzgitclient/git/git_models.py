@@ -23,6 +23,7 @@ class Commit:
 class Branch:
     name: str
     is_current: bool
+    merged: bool = False  # its tip is in HEAD, so `git branch -d` can delete it
 
 
 @dataclass(frozen=True)

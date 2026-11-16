@@ -324,6 +324,38 @@ class RepoSession(QObject):
                              Refresh.HEAD | Refresh.BRANCHES | Refresh.HISTORY
                              | Refresh.STATUS | Refresh.COUNT)
 
+    # Branches (spec §4.1, "Branch commands").
+
+    def switch_branch(self, name: str, stash: bool = False) -> GitCommand | None:
+        """Switch to ``name``; with ``stash``, stash every change first."""
+        return self._command(GitCommand(CommandKind.SWITCH, branch=name, stash=stash),
+                             Refresh.ALL)
+
+    def create_branch(self, name: str, start: str, switch: bool = False) -> GitCommand | None:
+        """A new branch ``name`` at ``start``; ``switch`` to it too."""
+        return self._command(
+            GitCommand(CommandKind.CREATE_BRANCH, branch=start, new_name=name, switch=switch),
+            Refresh.ALL if switch else Refresh.BRANCHES)
+
+    def rename_branch(self, old: str, new: str) -> GitCommand | None:
+        return self._command(GitCommand(CommandKind.RENAME_BRANCH, branch=old, new_name=new),
+                             Refresh.HEAD | Refresh.BRANCHES)
+
+    def delete_branch(self, name: str, force: bool = False) -> GitCommand | None:
+        """Delete ``name``; git refuses an unmerged one unless ``force``.
+        Callers confirm first."""
+        return self._command(GitCommand(CommandKind.DELETE_BRANCH, branch=name, force=force),
+                             Refresh.BRANCHES)
+
+    def merge(self, name: str) -> GitCommand | None:
+        """Merge ``name`` into the current branch; a conflict aborts it."""
+        return self._command(GitCommand(CommandKind.MERGE, branch=name), Refresh.ALL)
+
+    def rebase(self, onto: str) -> GitCommand | None:
+        """Rebase the current branch onto ``onto``; a conflict aborts it.
+        Callers confirm first: it rewrites commits."""
+        return self._command(GitCommand(CommandKind.REBASE, branch=onto), Refresh.ALL)
+
     def _command(self, command: GitCommand, parts: Refresh = Refresh.STATUS) -> GitCommand | None:
         """Queue ``command``; its job then loads ``parts``, what it changes."""
         if self._repo is None:

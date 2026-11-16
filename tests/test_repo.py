@@ -463,3 +463,133 @@ class RepoWatchListingTests(unittest.TestCase):
         before = index.stat().st_mtime_ns
         self.repo.status()
         self.assertEqual(index.stat().st_mtime_ns, before)
+
+
+class RepoBranchTests(unittest.TestCase):
+    """Branch commands (spec §4.1, "Branch commands")."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        commit_file(self.path, "a.txt", "1\n", "first")
+        self.repo = Repo(self.path)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def names(self):
+        return {b.name: (b.is_current, b.merged) for b in self.repo.branches()}
+
+    def diverge(self):
+        """``side`` and ``main`` both change a.txt: merging them conflicts."""
+        git(self.path, "switch", "-q", "-c", "side")
+        commit_file(self.path, "a.txt", "side\n", "side")
+        git(self.path, "switch", "-q", "main")
+        commit_file(self.path, "a.txt", "main\n", "main")
+
+    def assert_clean(self, head="main"):
+        self.assertEqual(self.repo.current_branch(), head)
+        self.assertEqual(self.repo.status(), [])
+        self.assertIsNone(self.repo._resolve("MERGE_HEAD"))
+        self.assertFalse(self.repo._rebasing())
+
+    def test_branches_say_whether_they_are_merged_into_head(self):
+        git(self.path, "branch", "old")
+        git(self.path, "switch", "-q", "-c", "ahead")
+        commit_file(self.path, "b.txt", "b", "second")
+        git(self.path, "switch", "-q", "main")
+        self.assertEqual(self.names(), {"ahead": (False, False), "main": (True, True),
+                                        "old": (False, True)})
+
+    def test_no_branch_is_merged_into_an_unborn_head(self):
+        git(self.path, "switch", "-q", "--orphan", "fresh")
+        self.assertEqual(self.names(), {"main": (False, False)})
+
+    def test_create_switch_rename_delete(self):
+        self.repo.create_branch("topic", "main")
+        self.assertEqual(self.repo.current_branch(), "main")
+        self.repo.create_branch("other", "main", switch=True)
+        self.assertEqual(self.repo.current_branch(), "other")
+        self.repo.switch("topic")
+        self.repo.rename_branch("topic", "renamed")  # the current branch
+        self.assertEqual(self.repo.current_branch(), "renamed")
+        self.repo.delete_branch("other")
+        self.assertEqual(set(self.names()), {"main", "renamed"})
+
+    def test_an_unmerged_branch_is_deleted_only_by_force(self):
+        self.diverge()
+        with self.assertRaises(GitError):
+            self.repo.delete_branch("side")
+        self.assertIn("side", self.names())
+        self.repo.delete_branch("side", force=True)
+        self.assertNotIn("side", self.names())
+
+    def test_bad_names_are_git_s_errors(self):
+        for bad in ("has space", "main", "a..b"):
+            with self.subTest(bad), self.assertRaises(GitError):
+                self.repo.create_branch(bad, "main")
+
+    def test_merge(self):
+        git(self.path, "switch", "-q", "-c", "side")
+        commit_file(self.path, "b.txt", "b", "side")
+        git(self.path, "switch", "-q", "main")
+        commit_file(self.path, "c.txt", "c", "main")
+        self.repo.merge("side")
+        self.assertTrue((self.path / "b.txt").exists())
+        self.assertEqual(git(self.path, "log", "-1", "--format=%P").count(" "), 1)  # a merge
+        self.assert_clean()
+
+    def test_a_conflicting_merge_is_aborted(self):
+        self.diverge()
+        head = self.repo.head_sha()
+        with self.assertRaises(GitError) as caught:
+            self.repo.merge("side")
+        self.assertIn("CONFLICT", str(caught.exception))
+        self.assertIn("aborted", str(caught.exception))
+        self.assertEqual(self.repo.head_sha(), head)
+        self.assertEqual((self.path / "a.txt").read_text(), "main\n")
+        self.assert_clean()
+
+    def test_a_merge_refused_before_it_starts_needs_no_abort(self):
+        self.diverge()
+        (self.path / "a.txt").write_text("dirty\n")
+        with self.assertRaises(GitError) as caught:
+            self.repo.merge("side")
+        self.assertNotIn("aborted", str(caught.exception))
+        self.assertEqual((self.path / "a.txt").read_text(), "dirty\n")
+
+    def test_rebase(self):
+        git(self.path, "switch", "-q", "-c", "side")
+        commit_file(self.path, "b.txt", "b", "side")
+        git(self.path, "switch", "-q", "main")
+        commit_file(self.path, "c.txt", "c", "main")
+        self.repo.rebase("side")
+        self.assertEqual(git(self.path, "log", "--format=%s").split(), ["main", "side", "first"])
+        self.assert_clean()
+
+    def test_a_conflicting_rebase_is_aborted(self):
+        self.diverge()
+        head = self.repo.head_sha()
+        with self.assertRaises(GitError) as caught:
+            self.repo.rebase("side")
+        self.assertIn("aborted", str(caught.exception))
+        self.assertNotIn("hint:", str(caught.exception))  # "resolve them" no longer applies
+        self.assertEqual(self.repo.head_sha(), head)
+        self.assert_clean()
+
+    def test_stash_push_takes_untracked_files_and_pop_restores_the_index(self):
+        commit_file(self.path, ".gitignore", "*.log\n", "ignore")
+        (self.path / "a.txt").write_text("staged\n")
+        git(self.path, "add", "a.txt")
+        (self.path / "new.txt").write_text("new")
+        (self.path / "x.log").write_text("ignored")
+        self.assertTrue(self.repo.stash_push("msg"))
+        self.assertEqual(self.repo.status(), [])
+        self.assertTrue((self.path / "x.log").exists())  # ignored files are left alone
+        self.assertEqual(git(self.path, "stash", "list", "--format=%gs"), "On main: msg\n")
+        self.repo.stash_pop()
+        status = {f.path: f.index + f.worktree for f in self.repo.status()}
+        self.assertEqual(status, {"a.txt": "M ", "new.txt": "??"})
+
+    def test_stash_push_with_nothing_to_stash_says_so(self):
+        self.assertFalse(self.repo.stash_push("msg"))

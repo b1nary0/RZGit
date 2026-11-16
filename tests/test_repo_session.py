@@ -834,5 +834,111 @@ class RepoSessionCommitTests(unittest.TestCase):
         self.assertEqual(self.finished, [])
 
 
+
+class RepoSessionBranchTests(unittest.TestCase):
+    """Branch commands and what they reload (spec §4.1)."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        commit_file(self.path, "a.txt", "1\n", "first")
+        git(self.path, "switch", "-q", "-c", "side")
+        commit_file(self.path, "a.txt", "side\n", "side")
+        git(self.path, "switch", "-q", "main")
+        self.session = RepoSession()
+        self.finished = []
+        self.session.command_finished.connect(lambda c, ok: self.finished.append((c.kind, ok)))
+        self.assertTrue(self.session.open(self.path))
+        wait_idle(self.session)
+
+    def tearDown(self):
+        self.session.shutdown()
+        self._tmp.cleanup()
+
+    def branches(self):
+        return {b.name: (b.is_current, b.merged) for b in self.session.branches}
+
+    def subjects(self):
+        return [c.subject for c in self.session.history]
+
+    def test_switch_updates_head_branches_history_status_and_count(self):
+        (self.path / "new.txt").write_text("new")
+        self.session.refresh()
+        wait_idle(self.session)
+        self.session.switch_branch("side", stash=True)
+        wait_idle(self.session)
+        self.assertEqual(self.session.head, "side")
+        self.assertEqual(self.branches(), {"main": (False, True), "side": (True, True)})
+        self.assertEqual(self.subjects(), ["side", "first"])
+        self.assertEqual(self.session.status, ())
+        self.assertEqual(self.session.commit_count, 2)
+        self.assertEqual(self.finished, [(CommandKind.SWITCH, True)])
+
+    def test_create_rename_delete(self):
+        self.session.create_branch("topic", "side")
+        wait_idle(self.session)
+        self.assertEqual(self.session.head, "main")
+        self.assertIn("topic", self.branches())
+        self.session.create_branch("now", "main", switch=True)
+        wait_idle(self.session)
+        self.assertEqual(self.session.head, "now")
+        self.session.rename_branch("now", "renamed")
+        wait_idle(self.session)
+        self.assertEqual(self.session.head, "renamed")
+        self.session.delete_branch("topic", force=True)
+        wait_idle(self.session)
+        self.assertEqual(set(self.branches()), {"main", "renamed", "side"})
+
+    def test_a_refused_delete_reports_its_error_and_keeps_the_branch(self):
+        rec = SignalRecorder(self.session, "error_occurred")
+        self.session.delete_branch("side")  # not merged into main
+        wait_idle(self.session)
+        self.assertEqual(len(rec.events), 1)
+        self.assertIn("side", self.branches())
+        self.assertEqual(self.finished, [(CommandKind.DELETE_BRANCH, False)])
+
+    def test_merge_and_rebase_reload_history(self):
+        git(self.path, "switch", "-q", "-c", "other", "main")
+        commit_file(self.path, "b.txt", "b", "other")
+        git(self.path, "switch", "-q", "main")
+        self.session.merge("side")  # a fast-forward
+        wait_idle(self.session)
+        self.assertEqual(self.subjects(), ["side", "first"])
+        self.session.switch_branch("other")
+        self.session.rebase("main")
+        wait_idle(self.session)
+        self.assertEqual(self.session.head, "other")
+        self.assertEqual(self.subjects(), ["other", "side", "first"])
+        self.assertEqual(self.session.commit_count, 3)
+
+    def test_a_conflicting_merge_shows_the_error_and_changes_nothing(self):
+        commit_file(self.path, "a.txt", "main\n", "main")
+        self.session.refresh()
+        wait_idle(self.session)
+        rec = SignalRecorder(self.session, "error_occurred")
+        self.session.merge("side")
+        wait_idle(self.session)
+        self.assertEqual(len(rec.events), 1)
+        self.assertIn("aborted", rec.values("error_occurred")[0])
+        self.assertEqual(self.session.status, ())
+        self.assertEqual(self.subjects(), ["main", "first"])
+
+    def test_branch_commands_with_no_repo_do_nothing(self):
+        self.session.close()
+        wait_idle(self.session)
+        for call in (lambda: self.session.switch_branch("side"),
+                     lambda: self.session.create_branch("x", "main"),
+                     lambda: self.session.rename_branch("a", "b"),
+                     lambda: self.session.delete_branch("side"),
+                     lambda: self.session.merge("side"),
+                     lambda: self.session.rebase("side")):
+            self.assertIsNone(call())
+        self.assertFalse(self.session.busy)
+
+
 if __name__ == "__main__":
     unittest.main()

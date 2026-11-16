@@ -1,12 +1,17 @@
-"""The branch list (spec §5.4)."""
+"""The branch list, and the place to work with branches (spec §5.4)."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QListWidget, QListWidgetItem, QVBoxLayout
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import QListWidget, QListWidgetItem, QMenu, QVBoxLayout
 
+from rzgitclient.ui.app_actions import BranchOp
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.style_roles import Surface
+
+_NAME = Qt.ItemDataRole.UserRole  # a branch row's name; None for "(no commits)"
+_CURRENT = " (current branch)"
 
 
 class BranchesPanel(Panel):
@@ -20,6 +25,9 @@ class BranchesPanel(Panel):
         self._list = QListWidget()
         self._list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._list.customContextMenuRequested.connect(self._show_menu)
+        self._list.itemDoubleClicked.connect(self._on_double_click)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._list)
@@ -40,6 +48,7 @@ class BranchesPanel(Panel):
             self._list.clear()
             for b in branches:
                 item = QListWidgetItem(b.name)
+                item.setData(_NAME, b.name)
                 if b.is_current:
                     font = item.font()
                     font.setBold(True)
@@ -52,3 +61,50 @@ class BranchesPanel(Panel):
                 self._list.addItem(QListWidgetItem(f"{head} (no commits)"))
         finally:
             self._list.blockSignals(blocked)
+
+    # ---- operations (spec §5.4): asked of AppActions, never run here ------
+
+    def _is_current(self, name: str) -> bool:
+        return any(b.name == name and b.is_current for b in self.ctx.session.branches)
+
+    def _on_double_click(self, item: QListWidgetItem) -> None:
+        name = item.data(_NAME)
+        if name is not None and not self._is_current(name):
+            self.ctx.actions.request_branch(BranchOp.SWITCH, name)
+
+    def _show_menu(self, pos: QPoint) -> None:
+        item = self._list.itemAt(pos)
+        name = item.data(_NAME) if item is not None else None
+        if name is not None:
+            self.menu_for(name).exec(self._list.viewport().mapToGlobal(pos))
+
+    def menu_for(self, name: str) -> QMenu:
+        """The right-click menu of branch ``name``."""
+        menu = QMenu(self)
+        is_current = self._is_current(name)
+        current = _menu_text(self.ctx.session.head or "HEAD")
+        label = _menu_text(name)
+        request = self.ctx.actions.request_branch
+
+        def add(target: QMenu, text: str, op: BranchOp, not_current: bool = False) -> None:
+            blocked = not_current and is_current
+            action = target.addAction(text + (_CURRENT if blocked else ""))
+            action.setEnabled(not blocked)
+            action.triggered.connect(lambda _=False: request(op, name))
+
+        add(menu, f"Switch to {label}", BranchOp.SWITCH, not_current=True)
+        add(menu, f"New Branch from {label}…", BranchOp.NEW)
+        add(menu, f"Rename {label}…", BranchOp.RENAME)
+        add(menu, f"Delete {label}…", BranchOp.DELETE, not_current=True)
+        integrate = menu.addMenu("Merge / Rebase")
+        add(integrate, f"Merge {label} into {current}…", BranchOp.MERGE, not_current=True)
+        add(integrate, f"Rebase {current} onto {label}…", BranchOp.REBASE, not_current=True)
+        menu.addSeparator()
+        copy = menu.addAction("Copy Name")
+        copy.triggered.connect(lambda _=False: QGuiApplication.clipboard().setText(name))
+        return menu
+
+
+def _menu_text(name: str) -> str:
+    """``name`` as menu text: a branch may hold "&", which Qt reads as a shortcut mark."""
+    return name.replace("&", "&&")

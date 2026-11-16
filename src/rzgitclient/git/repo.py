@@ -130,11 +130,16 @@ class Repo:
         out = self.git(
             "for-each-ref", "--format=%(HEAD)%00%(refname:short)", "refs/heads"
         )
-        result = []
-        for line in out.splitlines():
-            head, _, name = line.partition("\0")
-            result.append(Branch(name=name, is_current=head == "*"))
-        return result
+        rows = [line.partition("\0") for line in out.splitlines()]
+        merged: set[str] = set()
+        if rows:
+            try:
+                merged = set(self.git("for-each-ref", "--merged", "HEAD",
+                                      "--format=%(refname:short)", "refs/heads").splitlines())
+            except GitError:  # HEAD has no commit yet: nothing is merged into it
+                pass
+        return [Branch(name=name, is_current=head == "*", merged=name in merged)
+                for head, _, name in rows]
 
     def commit_count(self) -> int:
         """How many commits HEAD reaches (0 before the first commit)."""
@@ -268,6 +273,70 @@ class Repo:
         Only surrounding blank lines and trailing spaces are cleaned up, so a
         line starting with "#" is kept."""
         run_git(self.root, "commit", "-q", "--cleanup=whitespace", "-F", "-", input=message)
+
+    # Branches (spec §4.1, "Branch commands"). Names are git's to check.
+
+    def switch(self, name: str) -> None:
+        self.git("switch", "-q", name)
+
+    def create_branch(self, name: str, start: str, *, switch: bool = False) -> None:
+        if switch:
+            self.git("switch", "-q", "-c", name, start)
+        else:
+            self.git("branch", name, start)
+
+    def rename_branch(self, old: str, new: str) -> None:
+        self.git("branch", "-m", old, new)
+
+    def delete_branch(self, name: str, *, force: bool = False) -> None:
+        """``git branch -d``, which refuses an unmerged branch; ``-D`` with ``force``."""
+        self.git("branch", "-D" if force else "-d", name)
+
+    def stash_push(self, message: str) -> bool:
+        """Stash staged, unstaged and untracked changes (not ignored files).
+        True if a stash was made: with nothing to stash, git makes none."""
+        before = self._resolve("refs/stash")
+        self.git("stash", "push", "-q", "--include-untracked", "-m", message)
+        return self._resolve("refs/stash") != before
+
+    def stash_pop(self) -> None:
+        """Put the newest stash back, staged changes staged again."""
+        self.git("stash", "pop", "-q", "--index")
+
+    def merge(self, name: str) -> None:
+        """Merge ``name`` into the current branch. If it fails part-way (a
+        conflict), the merge is aborted, so the repository is as it was."""
+        try:
+            self.git("merge", "--no-edit", name)
+        except GitError as exc:
+            if self._resolve("MERGE_HEAD") is None:
+                raise
+            self.git("merge", "--abort")
+            raise _aborted(exc, "merge") from exc
+
+    def rebase(self, onto: str) -> None:
+        """Rebase the current branch onto ``onto``. If it stops part-way (a
+        conflict), the rebase is aborted, so the repository is as it was."""
+        try:
+            self.git("rebase", onto)
+        except GitError as exc:
+            if not self._rebasing():
+                raise
+            self.git("rebase", "--abort")
+            raise _aborted(exc, "rebase") from exc
+
+    def _resolve(self, ref: str) -> str | None:
+        """The object ``ref`` names, or None if it doesn't exist."""
+        try:
+            return self.git("rev-parse", "-q", "--verify", ref).strip()
+        except GitError as exc:
+            if exc.returncode == 1:
+                return None
+            raise
+
+    def _rebasing(self) -> bool:
+        out = self.git("rev-parse", "--git-path", "rebase-merge", "--git-path", "rebase-apply")
+        return any((self.root / p).exists() for p in out.splitlines())
 
     def apply(self, patch: str, *, cached: bool = False, reverse: bool = False) -> None:
         """Apply ``patch`` (a ``core.diff_patch`` patch): to the index with
@@ -403,6 +472,14 @@ def parse_diff(
             binary = True
     end_hunk()
     return FileDiff(path, tuple(hunks), old_path, binary, line_count=line_count)
+
+
+def _aborted(exc: GitError, what: str) -> GitError:
+    """``exc``, after its merge or rebase was aborted. git's hints (resolve the
+    conflicts, then continue) no longer apply, so they are left out."""
+    lines = [line for line in str(exc).splitlines() if not line.startswith("hint:")]
+    return GitError("\n".join(lines) + f"\n\nThe {what} was aborted, so nothing changed.",
+                    exc.returncode)
 
 
 def _unquote(name: str) -> str:

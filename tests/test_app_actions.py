@@ -7,7 +7,7 @@ from PySide6.QtGui import QKeySequence
 
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import FileSelection, FileSource, Selection
-from rzgitclient.ui.app_actions import AppActions
+from rzgitclient.ui.app_actions import AppActions, BranchOp
 from rzgitclient.ui.theme.theme_manager import ThemeMode
 from tests.support import commit_file, git, make_repo, qt_app, wait_idle
 
@@ -137,6 +137,13 @@ class AppActionsTests(unittest.TestCase):
     def test_commit_shortcut_is_ctrl_enter(self):
         self.assertEqual(self.actions.commit.shortcuts(),
                          [QKeySequence("Ctrl+Return"), QKeySequence("Ctrl+Enter")])
+
+    def test_request_branch_sends_branch_requested(self):
+        seen = []
+        self.actions.branch_requested.connect(lambda op, name: seen.append((op, name)))
+        self.actions.request_branch(BranchOp.MERGE, "feature")
+        self.assertEqual(seen, [(BranchOp.MERGE, "feature")])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -185,5 +185,85 @@ class LinesCommandTests(unittest.TestCase):
         self.assertEqual(self.index("a.txt"), "A\nb\nc\n")
 
 
+
+class SwitchCommandTests(unittest.TestCase):
+    """Switch, with and without a stash (spec §4.1)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        commit_file(self.path, "a.txt", "1\n", "first")
+        git(self.path, "branch", "other")
+        self.repo = Repo(self.path)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def switch(self, stash):
+        run_command(self.repo, GitCommand(CommandKind.SWITCH, branch="other", stash=stash))
+
+    def stashes(self):
+        return git(self.path, "stash", "list", "--format=%gs").splitlines()
+
+    def test_stash_and_switch_takes_every_change_along(self):
+        (self.path / "a.txt").write_text("2\n")
+        (self.path / "new.txt").write_text("new")
+        self.switch(stash=True)
+        self.assertEqual(self.repo.current_branch(), "other")
+        self.assertEqual(self.repo.status(), [])
+        self.assertEqual(self.stashes(), ["On main: RZGitClient: before switching to other"])
+
+    def test_switch_without_a_stash_carries_changes_over(self):
+        (self.path / "new.txt").write_text("new")
+        self.switch(stash=False)
+        self.assertEqual(self.repo.current_branch(), "other")
+        self.assertEqual([f.path for f in self.repo.status()], ["new.txt"])
+        self.assertEqual(self.stashes(), [])
+
+    def test_a_failed_switch_pops_the_stash_back(self):
+        (self.path / "a.txt").write_text("staged\n")
+        git(self.path, "add", "a.txt")
+        (self.path / "new.txt").write_text("new")
+        with mock.patch.object(Repo, "switch", side_effect=GitError("refused", 1)):
+            with self.assertRaises(GitError):
+                self.switch(stash=True)
+        self.assertEqual(self.repo.current_branch(), "main")
+        status = {f.path: f.index + f.worktree for f in self.repo.status()}
+        self.assertEqual(status, {"a.txt": "M ", "new.txt": "??"})
+        self.assertEqual(self.stashes(), [])
+
+    def test_a_failed_switch_with_nothing_stashed_pops_nothing(self):
+        (self.path / "b.txt").write_text("older stash")
+        git(self.path, "stash", "push", "-u", "-m", "older")
+        with mock.patch.object(Repo, "switch", side_effect=GitError("refused", 1)):
+            with self.assertRaises(GitError):
+                self.switch(stash=True)
+        self.assertEqual(self.stashes(), ["On main: older"])  # not popped
+
+    def test_if_the_pop_fails_too_the_error_names_the_stash(self):
+        (self.path / "a.txt").write_text("2\n")
+        with mock.patch.object(Repo, "switch", side_effect=GitError("refused", 1)), \
+                mock.patch.object(Repo, "stash_pop", side_effect=GitError("pop failed", 1)):
+            with self.assertRaises(GitError) as caught:
+                self.switch(stash=True)
+        self.assertIn("RZGitClient: before switching to other", str(caught.exception))
+        self.assertIn("pop failed", str(caught.exception))
+
+    def test_branch_commands_reach_the_repo(self):
+        for kind, kwargs, call, args, options in (
+            (CommandKind.CREATE_BRANCH, dict(branch="main", new_name="n", switch=True),
+             "create_branch", ("n", "main"), {"switch": True}),
+            (CommandKind.RENAME_BRANCH, dict(branch="a", new_name="b"),
+             "rename_branch", ("a", "b"), {}),
+            (CommandKind.DELETE_BRANCH, dict(branch="a", force=True),
+             "delete_branch", ("a",), {"force": True}),
+            (CommandKind.MERGE, dict(branch="a"), "merge", ("a",), {}),
+            (CommandKind.REBASE, dict(branch="a"), "rebase", ("a",), {}),
+        ):
+            with self.subTest(kind), mock.patch.object(Repo, call) as method:
+                run_command(self.repo, GitCommand(kind, **kwargs))
+                method.assert_called_once_with(*args, **options)
+
+
 if __name__ == "__main__":
     unittest.main()

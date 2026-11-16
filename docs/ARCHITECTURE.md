@@ -37,7 +37,7 @@ one names the sections below that it covers.
   ↑
  core/  application state. QtCore only (QObject, Signal). No widgets.
   ↑
- ui/    widgets. theme/ → widgets/ → app_actions → panels/ → layout/ → main_window
+ ui/    widgets. theme/ → widgets/ → app_actions → panels/ → layout/ → branch_dialogs → main_window
   ↑
  app.py composition root. The only place concrete objects are created and wired together.
 ```
@@ -80,7 +80,8 @@ src/rzgitclient/
     app_settings.py             AppSettings: typed wrapper over QSettings (last_repo, layout, …)
   ui/
     main_window.py              MainWindow: thin shell (menus, status bar, LayoutHost)
-    app_actions.py              AppActions: every QAction, defined once
+    app_actions.py              AppActions: every QAction, defined once; BranchOp
+    branch_dialogs.py           BranchDialogs: the confirmations and name boxes of branch operations
     theme/
       app_theme.py              AppTheme, ThemeColors, StatusColors, ThemeFonts, ThemeMetrics, LIGHT_THEME
       theme_stylesheet.py       build_stylesheet(theme) -> str
@@ -166,6 +167,12 @@ class RepoSession(QObject):
     def unstage_lines(self, diff, lines) -> GitCommand | None
     def discard_lines(self, diff, lines) -> GitCommand | None  # from the working tree; no undo
     def commit(self, message) -> GitCommand | None   # the staged changes; None with no repo
+    def switch_branch(self, name, stash=False) -> GitCommand | None   # git switch
+    def create_branch(self, name, start, switch=False) -> GitCommand | None
+    def rename_branch(self, old, new) -> GitCommand | None
+    def delete_branch(self, name, force=False) -> GitCommand | None   # -d, or -D with force
+    def merge(self, name) -> GitCommand | None       # name into the current branch
+    def rebase(self, onto) -> GitCommand | None      # the current branch onto `onto`
     commands_in_flight: tuple[GitCommand, ...]   # queued or running, until command_finished
 
     # Latest values, so a panel created later renders at once (read-only properties):
@@ -310,6 +317,34 @@ class RepoSession(QObject):
     failing hook is a failed command, and its output is the error. `--cleanup=whitespace`,
     not `strip`: the message box has no template, so a line starting with `#` is the
     user's text, not a comment.
+  - **Branch commands** (RZG-35). A command carries the branch it acts on (`branch`) and,
+    for New Branch and Rename, the new name (`new_name`). Git checks names; a bad or taken
+    one is git's error. Branch names never start with `-` (git refuses them), so they are
+    passed as they are.
+    - **Switch** (`git switch -q`) reloads `HEAD | BRANCHES | HISTORY | STATUS | COUNT`.
+      With `stash`, it first runs `git stash push -q --include-untracked -m "RZGitClient:
+      before switching to <branch>"`: staged, unstaged and untracked changes, not ignored
+      files. If the switch then fails, the stash is popped back (`stash pop -q --index`), so
+      the repository is as it was; if even that fails, the error says the changes are in
+      the stash. Whether a stash was made is read from `refs/stash` before and after, since
+      "nothing to stash" isn't an error. Without `stash`, git carries the changes over or
+      refuses.
+    - **New Branch** (`git branch <name> <start>`, or `git switch -q -c <name> <start>` with
+      `switch`) reloads `BRANCHES`, or everything Switch does.
+    - **Rename** (`git branch -m <old> <new>`, the current branch too) reloads
+      `HEAD | BRANCHES`.
+    - **Delete** (`git branch -d`, `-D` with `force`) reloads `BRANCHES`. Git refuses `-d`
+      on an unmerged branch, so a stale `merged` can't lose work.
+    - **Merge** (`git merge --no-edit <branch>`) and **Rebase** (`git rebase <onto>`)
+      reload everything. **Never left mid-way:** if either fails and left a merge or rebase
+      in progress (`MERGE_HEAD`, or the `rebase-merge` / `rebase-apply` folders, found with
+      `git rev-parse --git-path`), the worker runs `merge --abort` / `rebase --abort` and
+      the error says so (git's `hint:` lines, which say to resolve and continue, are left
+      out). A failure before anything started (a dirty working tree) needs no
+      abort. The app has no conflict view yet.
+    - `Branch.merged`: whether the branch's tip is in HEAD (`git for-each-ref --merged
+      HEAD`, a second read in `BRANCHES`; all False if HEAD has no commit). The Delete
+      confirmation uses it (§8).
   - **No editor or prompt, ever:** git runs with `GIT_EDITOR=false` and
     `GIT_TERMINAL_PROMPT=0`, and with stdin closed unless a command passes input. A
     command that would open an editor fails instead of waiting for it.
@@ -554,13 +589,26 @@ The first three are extracted from the original `main_window.py` with the same b
 | Panel | id | Surface | Shows | Writes |
 |---|---|---|---|---|
 | ControlsPanel | `controls` | chrome | Open, Refresh (`ctx.actions`), current branch | (later: fetch/pull/push, switch branch) |
-| BranchesPanel | `branches` | sidebar | branches, current in bold | (later: checkout) |
+| BranchesPanel | `branches` | sidebar | branches, current in bold | branch operations, through `actions.request_branch` |
 | HistoryPanel | `history` | content | Uncommitted changes, then the commit table | `selection.commit` |
 | CommitFilesPanel | `commit_files` | sidebar | "Commit Files": the selected commit's changed files, in place of Unstaged Files, Staged Files and Commit; collapsed for Uncommitted changes | `selection.select()` |
 | FilesPanel | `files` | sidebar | "Unstaged Files": unstaged and untracked files, status colours | `selection.select()`; stages |
 | StagedPanel | `staged` | sidebar | "Staged Files": the index's changes; collapsed when empty | `selection.select()`; unstages |
 | DiffPanel | `diff` | content | the diff of `selection.file`, unified or side by side | stages, unstages and discards hunks and lines |
 | CommitPanel | `commit` | sidebar | the commit message being written | commits the staged changes |
+
+**Branches** (BranchesPanel, RZG-35) is where branches are worked with. It never runs
+git or shows a dialog: it asks `actions.request_branch(op, name)` (§8), and the list
+follows the session.
+- **Double-click** a branch to switch to it (MainWindow confirms first). The current
+  branch, and the "(no commits)" row of a fresh repository, do nothing.
+- **Right-click** a branch for its menu, built by `menu_for(name)`:
+  Switch to *X*, New Branch from *X*…, Rename *X*…, Delete *X*…; a **Merge / Rebase**
+  submenu with Merge *X* into *current*… and Rebase *current* onto *X*…; then, after a
+  separator, Copy Name (to the clipboard, the panel's own job). *current* is the
+  current branch, or "HEAD" when detached. On the current branch, Switch, Delete, Merge
+  and Rebase are disabled and say why: "(current branch)". The "(no commits)" row and
+  the empty space below the list have no menu.
 
 **Unstaged Files** (FilesPanel) and **Staged Files** (StagedPanel, `staged_panel.py`)
 are one list each, as in GitKraken. Both are a thin panel around a `FileList`
@@ -1115,6 +1163,24 @@ Per-widget sheets are slow to apply and scatter the rules.
   and the panel reports its message ready (`set_commit_ready`); the panel connects
   `triggered`, since it holds the message. A panel that is hidden (deleted) reports not
   ready.
+- **Branch operations** (RZG-35): the Branches panel calls `actions.request_branch(op,
+  name)`, with a `BranchOp` (`SWITCH`, `NEW`, `RENAME`, `DELETE`, `MERGE`, `REBASE`),
+  which sends `branch_requested`. **`BranchDialogs`** (`ui/branch_dialogs.py`, made by
+  MainWindow to keep it thin) asks, then calls the session. Each box's buttons name the
+  operation, and Cancel is the default for those that lose work or rewrite history.
+  - **Switch:** "Switch to *X*?". With changes in the status (staged, unstaged or
+    untracked), it says so and offers **Stash and Switch** (the default), **Bring
+    Changes** (git carries them over, or refuses) and **Cancel**, and names the stash. A
+    stash isn't reapplied: the Stash panel (RZG-36) will show it; until then, `git stash
+    pop`.
+  - **New Branch…:** a name box, "New branch from *X*", with **Switch to it** (checked).
+  - **Rename…:** a name box filled with the old name. Unchanged or empty does nothing.
+  - **Delete…:** "Delete branch *X*?" (Cancel default). If *X* isn't merged into HEAD
+    (`Branch.merged`), a second box says its commits that aren't in *current* will be
+    lost and asks **Delete Anyway**, which forces it.
+  - **Merge:** "Merge *X* into *current*?", saying a conflict aborts it and changes
+    nothing. **Rebase:** "Rebase *current* onto *X*?", a warning that it rewrites the
+    commits of *current* not in *X* (Cancel default), and that a conflict aborts it.
 - **`MainWindow`** is a thin shell: menus built from `AppActions`, the status
   bar summary (from session signals: path · branch · commits · changed files), error dialogs (from `error_occurred`), and a
   `LayoutHost` as the central widget. The Open, Quit and Reset Layout handlers live here
@@ -1123,8 +1189,8 @@ Per-widget sheets are slow to apply and scatter the rules.
   ("2,421 commits", "1 commit"). Until it arrives, or if it failed, the loaded count, with a
   plus while more history is unloaded ("500+ commits").
 - **No toolbar:** its buttons are the **Controls panel** (§5.4), placed by the layout across
-  the top and styled like the toolbar was. Remote controls (fetch/pull/push) and switching
-  branches join it when those commands exist.
+  the top and styled like the toolbar was. Remote controls (fetch/pull/push) join it when
+  those commands exist; switching branches is in the Branches panel.
 
 ## 9. Performance stance
 

@@ -29,6 +29,13 @@ class CommandKind(StrEnum):
     STAGE_LINES = "stage_lines"
     UNSTAGE_LINES = "unstage_lines"
     DISCARD_LINES = "discard_lines"  # from the working tree; no undo
+    # Branches (``branch`` is the one acted on):
+    SWITCH = "switch"  # with ``stash``, the changes are stashed first
+    CREATE_BRANCH = "create_branch"  # ``new_name`` from ``branch``; ``switch`` to it
+    RENAME_BRANCH = "rename_branch"  # ``branch`` to ``new_name``
+    DELETE_BRANCH = "delete_branch"  # ``force``: even if unmerged
+    MERGE = "merge"  # ``branch`` into the current branch
+    REBASE = "rebase"  # the current branch onto ``branch``
 
 
 @dataclass(frozen=True, eq=False)
@@ -41,6 +48,11 @@ class GitCommand:
     message: str = ""  # COMMIT's
     diff: FileDiff | None = None  # the *_LINES commands': the diff the lines are from
     lines: frozenset[Line] = frozenset()  # (hunk, line) indices into ``diff``
+    branch: str = ""  # the branch commands'
+    new_name: str = ""  # CREATE_BRANCH's and RENAME_BRANCH's
+    stash: bool = False  # SWITCH's
+    switch: bool = False  # CREATE_BRANCH's
+    force: bool = False  # DELETE_BRANCH's
 
 
 def run_command(repo: Repo, command: GitCommand) -> None:
@@ -61,8 +73,43 @@ def run_command(repo: Repo, command: GitCommand) -> None:
             repo.commit(command.message)
         case CommandKind.STAGE_LINES | CommandKind.UNSTAGE_LINES | CommandKind.DISCARD_LINES:
             _apply_lines(repo, command)
+        case CommandKind.SWITCH:
+            _switch(repo, command.branch, command.stash)
+        case CommandKind.CREATE_BRANCH:
+            repo.create_branch(command.new_name, command.branch, switch=command.switch)
+        case CommandKind.RENAME_BRANCH:
+            repo.rename_branch(command.branch, command.new_name)
+        case CommandKind.DELETE_BRANCH:
+            repo.delete_branch(command.branch, force=command.force)
+        case CommandKind.MERGE:
+            repo.merge(command.branch)
+        case CommandKind.REBASE:
+            repo.rebase(command.branch)
         case _:
             raise ValueError(f"not a command: {command.kind!r}")
+
+
+def stash_message(branch: str) -> str:
+    """The message of the stash Switch makes before switching to ``branch``."""
+    return f"RZGitClient: before switching to {branch}"
+
+
+def _switch(repo: Repo, branch: str, stash: bool) -> None:
+    """Switch to ``branch``; with ``stash``, stash the changes first, and pop
+    them back if the switch fails, so the repository is as it was."""
+    stashed = stash and repo.stash_push(stash_message(branch))
+    try:
+        repo.switch(branch)
+    except GitError as exc:
+        if not stashed:
+            raise
+        try:
+            repo.stash_pop()
+        except GitError as pop_exc:
+            raise GitError(f"{exc}\n\nYour changes are in the stash "
+                           f"(\"{stash_message(branch)}\") but couldn't be put back: "
+                           f"{pop_exc}", exc.returncode) from exc
+        raise
 
 
 def _with_rename_sources(paths: tuple[str, ...], status: list[FileStatus]) -> list[str]:

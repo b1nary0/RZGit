@@ -7,6 +7,7 @@ objects, so text, icon, shortcut and enabled state are set in one place.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from enum import StrEnum
 
 from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
@@ -17,6 +18,17 @@ from rzgitclient.git.git_models import FileDiff
 from rzgitclient.ui.theme.theme_manager import ThemeMode
 
 
+class BranchOp(StrEnum):
+    """A branch operation the Branches panel asks for (spec §8)."""
+
+    SWITCH = "switch"
+    NEW = "new"  # a new branch from it
+    RENAME = "rename"
+    DELETE = "delete"
+    MERGE = "merge"  # it into the current branch
+    REBASE = "rebase"  # the current branch onto it
+
+
 class AppActions(QObject):
     """Holds the actions and their enabled state. Window-level handlers (the
     Open dialog, closing the window, resetting the layout, confirming a
@@ -25,6 +37,8 @@ class AppActions(QObject):
 
     # The Diff panel asks to discard lines; MainWindow confirms, then discards (spec §8).
     discard_lines_requested = Signal(object, object)  # FileDiff, frozenset[(hunk, line)]
+    # The Branches panel asks for a branch operation; BranchDialogs asks, then runs it.
+    branch_requested = Signal(object, str)  # BranchOp, branch name
 
     def __init__(self, session: RepoSession, selection: Selection,
                  parent: QObject | None = None):
@@ -103,6 +117,10 @@ class AppActions(QObject):
         chosen = frozenset(lines)
         if chosen:
             self.discard_lines_requested.emit(diff, chosen)
+
+    def request_branch(self, op: BranchOp, name: str) -> None:
+        """Ask for ``op`` on branch ``name``, once confirmed (spec §8)."""
+        self.branch_requested.emit(op, name)
 
     def selected(self, source: FileSource) -> tuple[str, ...]:
         """Paths of the selected rows from ``source`` (Stage, Unstage, Discard)."""

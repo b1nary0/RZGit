@@ -359,6 +359,13 @@ class MainWindowTests(unittest.TestCase):
         QTimer.singleShot(0, lambda: answer(True))
         self.assertTrue(window.confirm_discard(paths[:1]))
 
+    def test_branch_requests_reach_the_branch_dialogs(self):
+        from rzgitclient.ui.app_actions import BranchOp
+        window = self.start()
+        with mock.patch.object(window.branch_dialogs, "ask", return_value=None) as ask:
+            window.ctx.actions.request_branch(BranchOp.MERGE, "feature")
+        ask.assert_called_once()
+
     def test_reset_layout_shows_hidden_panels(self):
         window = self.start()
         window.layout_host.hide_panel("files")

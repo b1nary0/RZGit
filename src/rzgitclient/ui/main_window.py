@@ -7,6 +7,7 @@ from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.selection import FileSource
 from rzgitclient.git.git_models import FileDiff
 from rzgitclient.git.repo import Repo
+from rzgitclient.ui.branch_dialogs import BranchDialogs
 from rzgitclient.ui.layout.layout_host import LayoutHost
 from rzgitclient.ui.layout.layout_menu import LayoutMenu
 from rzgitclient.ui.layout.layout_model import to_dict
@@ -54,6 +55,7 @@ class MainWindow(QMainWindow):
 
         actions.discard.triggered.connect(self.discard_selected)
         actions.discard_lines_requested.connect(self.discard_lines)
+        self.branch_dialogs = BranchDialogs(self, self.session, actions)
         repo_menu = self.menuBar().addMenu("&Repository")
         repo_menu.addActions([actions.stage, actions.unstage, actions.discard])
         repo_menu.addSeparator()
