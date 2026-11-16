@@ -50,15 +50,17 @@ class PanelFrameTests(unittest.TestCase):
         frame = PanelFrame(self.panel)
         self.assertEqual(frame.property("surface"), "sidebar")
 
-    def test_renders_header_on_the_surface(self):
+    def test_renders_header_on_its_own_background_above_the_surface(self):
         from rzgitclient.ui.theme.app_theme import LIGHT_THEME
 
         frame = PanelFrame(self.panel)
         frame.resize(200, 100)
         frame.show()
         self.app.processEvents()
-        corner = frame.grab().toImage().pixelColor(1, 1).name()
-        self.assertEqual(corner, LIGHT_THEME.colors.sidebar_bg)
+        image = frame.grab().toImage()
+        self.assertEqual(image.pixelColor(1, 1).name(), LIGHT_THEME.colors.header_bg)
+        below = image.pixelColor(1, frame.height() - 2).name()
+        self.assertEqual(below, LIGHT_THEME.colors.sidebar_bg)
         frame.close()
 
 

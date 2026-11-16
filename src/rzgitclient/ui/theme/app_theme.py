@@ -17,6 +17,7 @@ class ThemeColors:
     menubar_hover: str
     toolbar_bg: str
     tab_bg: str
+    header_bg: str  # a panel's section header, above it in a split
     sidebar_bg: str
     content_bg: str
     border: str
@@ -153,6 +154,7 @@ LIGHT_THEME = AppTheme(
         menubar_hover="#4a4e54",
         toolbar_bg="#d9d9d9",
         tab_bg="#dedede",
+        header_bg="#dedede",  # same as tab_bg: a header and a tab bar look alike
         sidebar_bg="#e9e9e9",
         content_bg="#ffffff",
         border="#c6c6c6",

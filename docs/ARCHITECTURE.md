@@ -655,7 +655,9 @@ and Commit Files are directly below Unstaged Files (`files`), in that order:
   `state() -> LayoutState`, `hide_panel(id)`, `show_panel(id)`, and `layout_changed` after
   every change, which the menus follow.
 - In a split, each panel is wrapped in a `PanelFrame` (`layout/panel_frame.py`): a section
-  header plus the panel, with the panel's `surface` set as a style property. In tabs, the
+  header plus the panel, with the panel's `surface` set as a style property. The header
+  has its own background (`header_bg`), not the surface's, so it reads as chrome like a
+  tab bar; `LIGHT_THEME` gives it the tab bar's colour. In tabs, the
   tab label is the panel's `header` instead, and follows `header_changed`. A tab group
   also follows each panel's `activate_requested` and makes that tab current.
 - The host owns the panels (a read-only `panels` mapping by id); frames and containers are
@@ -812,7 +814,7 @@ back where the user had it. The default place is only the fallback.
 
 ```python
 @dataclass(frozen=True)
-class ThemeColors:   menubar_bg: str; toolbar_bg: str; sidebar_bg: str; content_bg: str; border: str;
+class ThemeColors:   menubar_bg: str; toolbar_bg: str; tab_bg: str; header_bg: str; sidebar_bg: str; content_bg: str; border: str;
                      text: str; text_muted: str; hover: str; selection: str; content_selection: str;
                      accent: str; button_*: str; scroll_*: str; diff_*: str (incl. diff_hunk_bg, diff_hunk_text); …
 @dataclass(frozen=True)

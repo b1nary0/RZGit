@@ -27,6 +27,12 @@ class AppThemeTests(unittest.TestCase):
         for role in Role:
             self.assertIn(f'[role="{role}"]', qss)
 
+    def test_section_header_has_its_own_background(self):
+        rule = re.search(r'QLabel\[role="section-header"\] \{(.*?)\}',
+                         LIGHT_THEME.stylesheet(), re.S)
+        self.assertIsNotNone(rule)
+        self.assertIn(f"background: {LIGHT_THEME.colors.header_bg};", rule.group(1))
+
     def test_colours_are_valid_hex(self):
         for group in (LIGHT_THEME.colors, LIGHT_THEME.status):
             for name, value in dataclasses.asdict(group).items():

@@ -167,6 +167,7 @@ QLabel[role="hint-warning"] {
     color: $warning;
 }
 QLabel[role="section-header"] {
+    background: $header_bg;
     font-weight: bold;
     font-size: ${header_point_size}pt;
     padding: 7px 8px 4px 8px;
