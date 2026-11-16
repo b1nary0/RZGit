@@ -2,14 +2,15 @@
 
 The text goes in with one ``setPlainText``: QPlainTextEdit lays out lazily,
 so a long diff costs little until it's scrolled to. Row backgrounds are
-painted for the visible rows only, under the text, from each row's kind.
+painted for the visible rows only, under the text, from each row's kind,
+and so are the changed words of a paired removed and added line.
 Hunk headers can show a link at the right edge. Whole changed lines are
 selected (a LineSelection), not text.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from enum import Enum
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, Signal
@@ -28,7 +29,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QFrame, QPlainTextEdit, QToolTip, QWidget
 
 from rzgitclient.ui.panels.diff_gutter import DiffGutter
-from rzgitclient.ui.panels.diff_rows import DiffRow, RowKind
+from rzgitclient.ui.panels.diff_rows import DiffRow, RowKind, Spans, word_spans
 from rzgitclient.ui.panels.line_selection import LineSelection
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.theme.style_roles import Role, set_role
@@ -60,6 +61,9 @@ class DiffView(QPlainTextEdit):
         self._base = QColor()
         self._selected_bg: dict[RowKind, QColor] = {}
         self._outline: dict[RowKind, QColor] = {}
+        self._word_bg: dict[RowKind, QColor] = {}
+        self._partners: Mapping[int, str] = {}  # paired row → its partner's text
+        self._spans: dict[int, Spans] = {}  # changed words per row, worked out when painted
         self.selection = LineSelection(self)
         self.selection.changed.connect(self._selection_changed)
         set_role(self, Role.DIFF_VIEW)
@@ -79,14 +83,18 @@ class DiffView(QPlainTextEdit):
     def rows(self) -> tuple[DiffRow, ...]:
         return self._rows
 
-    def set_rows(self, rows: Sequence[DiffRow], keep_scroll: bool = False) -> None:
+    def set_rows(self, rows: Sequence[DiffRow], keep_scroll: bool = False, *,
+                 partners: Mapping[int, str] | None = None) -> None:
         """Show ``rows``; with ``keep_scroll``, stay where the view was scrolled to (and
-        keep the selection, if the rows are the same)."""
+        keep the selection, if the rows are the same). ``partners`` maps a paired
+        changed row to the other line's text, for word highlights."""
         v, h = self.verticalScrollBar().value(), self.horizontalScrollBar().value()
         rows = tuple(rows)
         if not (keep_scroll and rows == self._rows):
             self.selection.clear()
         self._rows = rows
+        self._partners = partners or {}
+        self._spans = {}
         self.setPlainText("\n".join(r.text for r in self._rows))
         numbers = [n for r in self._rows for n in (r.old_no, r.new_no) if n is not None]
         self.gutter.set_digits(len(str(max(numbers, default=1))))
@@ -231,6 +239,8 @@ class DiffView(QPlainTextEdit):
         self._base = QColor(c.content_bg)
         self._selected_bg = {RowKind.ADDED: QColor(c.diff_added_selected_bg),
                              RowKind.REMOVED: QColor(c.diff_removed_selected_bg)}
+        self._word_bg = {RowKind.ADDED: QColor(c.diff_added_word),
+                         RowKind.REMOVED: QColor(c.diff_removed_word)}
         self._outline = {RowKind.ADDED: QColor(theme.status.added),
                          RowKind.REMOVED: QColor(theme.status.deleted)}
         self.setFont(theme.mono_font())
@@ -248,6 +258,8 @@ class DiffView(QPlainTextEdit):
             color = self.background(n, row)
             if color is not None:
                 painter.fillRect(QRectF(0, top, width, height), color)
+            if n in self._partners:
+                self._paint_words(painter, n, row, top, height)
         painter.end()
         super().paintEvent(event)
         if self.selection:
@@ -256,6 +268,47 @@ class DiffView(QPlainTextEdit):
             painter.end()
         if self._link:
             self._paint_links(event)
+
+    def word_spans(self, n: int) -> Spans:
+        """Row ``n``'s changed character ranges (none if it isn't paired, or its
+        pair has too little in common); worked out once per ``set_rows``."""
+        spans = self._spans.get(n)
+        if spans is None:
+            row, partner = self._rows[n], self._partners.get(n)
+            spans = ()
+            if partner is not None:
+                removed = row.kind is RowKind.REMOVED
+                both = word_spans(row.text, partner) if removed else word_spans(partner, row.text)
+                if both is not None:
+                    spans = both[0] if removed else both[1]
+            self._spans[n] = spans
+        return spans
+
+    def word_rects(self, n: int, top: float, height: float) -> list[QRectF]:
+        """Where row ``n``'s changed words are, in viewport coordinates."""
+        spans = self.word_spans(n)
+        if not spans:
+            return []
+        block = self.document().findBlockByNumber(n)
+        line = block.layout().lineAt(0)
+        if not line.isValid():
+            return []
+        left = self.blockBoundingGeometry(block).translated(self.contentOffset()).left()
+        text = self._rows[n].text
+        rects = []
+        for start, end in spans:
+            x0 = line.cursorToX(_utf16(text, start))[0]
+            x1 = line.cursorToX(_utf16(text, end))[0]
+            rects.append(QRectF(left + x0, top, x1 - x0, height))
+        return rects
+
+    def _paint_words(self, painter: QPainter, n: int, row: DiffRow,
+                     top: float, height: float) -> None:
+        color = self._word_bg.get(row.kind)
+        if color is None:
+            return
+        for rect in self.word_rects(n, top, height):
+            painter.fillRect(rect, color)
 
     def _paint_links(self, event: QPaintEvent) -> None:
         """Each hunk header's link, at the right edge, over the header's background."""
@@ -316,3 +369,9 @@ class DiffView(QPlainTextEdit):
                 self.gutter.set_hover(self.row_number_at(y))
         else:
             self.gutter.update(0, rect.y(), self.gutter.width(), rect.height())
+
+
+def _utf16(text: str, i: int) -> int:
+    """Qt's position for ``text[i]``: characters outside the BMP count twice."""
+    head = text[:i]
+    return i if head.isascii() else len(head.encode("utf-16-le")) // 2

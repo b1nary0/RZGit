@@ -20,7 +20,12 @@ from PySide6.QtWidgets import (
 from rzgitclient.core.diff_patch import Line, can_patch, hunk_lines
 from rzgitclient.core.selection import FileSelection, FileSource
 from rzgitclient.git.git_models import FileDiff, LineKind
-from rzgitclient.ui.panels.diff_rows import split_rows, unified_rows
+from rzgitclient.ui.panels.diff_rows import (
+    split_partners,
+    split_rows,
+    unified_partners,
+    unified_rows,
+)
 from rzgitclient.ui.panels.diff_view import DiffView, Numbers
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
@@ -214,16 +219,19 @@ class DiffPanel(Panel):
         link = f"{verb} Hunk" if verb and not why else ""
         if self.ctx.actions.side_by_side_diff.isChecked():
             left_rows, right_rows = split_rows(diff)
+            left_partners, right_partners = split_partners(left_rows, right_rows)
             left, right = self._split_views()
-            for view, rows in ((left, left_rows), (right, right_rows)):
+            for view, rows, partners in ((left, left_rows, left_partners),
+                                         (right, right_rows, right_partners)):
                 view.set_line_buttons(verb if link else "")
-                view.set_rows(rows, keep_scroll)
+                view.set_rows(rows, keep_scroll, partners=partners)
                 view.set_hunk_link(link, why or "")
             self._stack.setCurrentWidget(self._split)
         else:
             view = self._unified_view()
             view.set_line_buttons(verb if link else "")
-            view.set_rows(unified_rows(diff), keep_scroll)
+            rows = unified_rows(diff)
+            view.set_rows(rows, keep_scroll, partners=unified_partners(rows))
             view.set_hunk_link(link, why or "")
             self._stack.setCurrentWidget(view)
 

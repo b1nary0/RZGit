@@ -1,12 +1,16 @@
 """The rows a diff is shown as, unified or side by side (spec §5.4).
 
 Plain Python, no Qt: DiffView paints rows by their kind, and these functions
-decide which rows there are.
+decide which rows there are, which changed rows pair up, and which of a pair's
+words changed.
 """
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from enum import StrEnum
 
 from rzgitclient.git.git_models import DiffLine, FileDiff, LineKind
@@ -96,3 +100,89 @@ def _rows(line: DiffLine, hunk: int, index: int) -> list[DiffRow]:
     row = DiffRow(_KINDS[line.kind], line.text.translate(_VISIBLE), line.old_no, line.new_no,
                   hunk, index)
     return [row, _NOTE] if line.no_newline else [row]
+
+
+# ---- word highlights (RZG-22) ------------------------------------------------
+
+WORD_MIN_RATIO = 0.5  # below this, a pair has too little in common to compare by words
+WORD_MAX_LENGTH = 1000  # longer lines aren't compared by words
+_TOKEN = re.compile(r"\w+|\s+|[^\w\s]+")
+
+Spans = tuple[tuple[int, int], ...]  # (start, end) character ranges, in order
+
+
+def unified_partners(rows: Sequence[DiffRow]) -> dict[int, str]:
+    """Each paired changed row's number → its partner's text, in unified rows.
+
+    As in side by side: the nth removed line of a run pairs with the nth added
+    line of the run after it.
+    """
+    partners: dict[int, str] = {}
+    removed: list[int] = []
+    added: list[int] = []
+
+    def flush() -> None:
+        for r, a in zip(removed, added):
+            partners[r] = rows[a].text
+            partners[a] = rows[r].text
+        removed.clear()
+        added.clear()
+
+    for n, row in enumerate(rows):
+        if row.kind is RowKind.REMOVED:
+            if added:
+                flush()
+            removed.append(n)
+        elif row.kind is RowKind.ADDED:
+            added.append(n)
+        elif row.kind is not RowKind.NOTE:  # a note sits inside a run
+            flush()
+    flush()
+    return partners
+
+
+def split_partners(left: Sequence[DiffRow],
+                   right: Sequence[DiffRow]) -> tuple[dict[int, str], dict[int, str]]:
+    """For side by side: each side's paired rows → the other side's text."""
+    old: dict[int, str] = {}
+    new: dict[int, str] = {}
+    for n, (a, b) in enumerate(zip(left, right)):
+        if a.kind is RowKind.REMOVED and b.kind is RowKind.ADDED:
+            old[n], new[n] = b.text, a.text
+    return old, new
+
+
+def word_spans(old: str, new: str) -> tuple[Spans, Spans] | None:
+    """The changed character ranges of ``old`` and of ``new``, or None when the
+    two have too little in common (or are too long) to compare by words."""
+    if len(old) > WORD_MAX_LENGTH or len(new) > WORD_MAX_LENGTH:
+        return None
+    a, b = _tokens(old), _tokens(new)
+    matcher = SequenceMatcher(None, [t for t, _ in a], [t for t, _ in b], autojunk=False)
+    if matcher.ratio() < WORD_MIN_RATIO:
+        return None
+    old_spans: list[tuple[int, int]] = []
+    new_spans: list[tuple[int, int]] = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        _add(old_spans, a, i1, i2)
+        _add(new_spans, b, j1, j2)
+    return tuple(old_spans), tuple(new_spans)
+
+
+def _tokens(text: str) -> list[tuple[str, int]]:
+    """``(token, start)``: runs of word characters, of whitespace, of anything else."""
+    return [(m.group(), m.start()) for m in _TOKEN.finditer(text)]
+
+
+def _add(spans: list[tuple[int, int]], tokens: list[tuple[str, int]], i1: int, i2: int) -> None:
+    """Add tokens ``i1:i2`` as one range, joined to the last one if they touch."""
+    if i1 == i2:
+        return
+    start = tokens[i1][1]
+    end = tokens[i2 - 1][1] + len(tokens[i2 - 1][0])
+    if spans and spans[-1][1] == start:
+        spans[-1] = (spans[-1][0], end)
+    else:
+        spans.append((start, end))

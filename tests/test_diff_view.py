@@ -161,5 +161,106 @@ class DiffViewLinkTests(unittest.TestCase):
         self.assertIs(self.view.row_at(QPoint(20, int(top + height / 2))), LINKED[3])
 
 
+WORDS = (
+    DiffRow(RowKind.HUNK, "@@ -1,3 +1,3 @@"),
+    DiffRow(RowKind.REMOVED, "count = total + 1", 1, None),
+    DiffRow(RowKind.REMOVED, "\tx = old", 2, None),
+    DiffRow(RowKind.ADDED, "count = total + 2", None, 1),
+    DiffRow(RowKind.ADDED, "\tx = new", None, 2),
+    DiffRow(RowKind.CONTEXT, "same", 3, 3),
+)
+WORD_PARTNERS = {1: WORDS[3].text, 3: WORDS[1].text, 2: WORDS[4].text, 4: WORDS[2].text}
+
+
+class DiffViewWordTests(unittest.TestCase):
+    """Changed words are filled in the word colours (RZG-22, spec §5.4)."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def make_view(self, rows=WORDS, partners=WORD_PARTNERS, theme=LIGHT_THEME):
+        view = DiffView(Numbers.BOTH)
+        self.addCleanup(view.deleteLater)
+        view.apply_theme(theme)
+        view.resize(500, 200)
+        view.set_rows(rows, partners=partners)
+        view.show()
+        QApplication.processEvents()
+        return view
+
+    def row_geometry(self, view, n):
+        for m, _row, top, height in view.visible_rows(view.viewport().rect()):
+            if m == n:
+                return top, height
+        raise AssertionError(n)
+
+    def test_the_rects_cover_the_changed_word_only(self):
+        view = self.make_view()
+        top, height = self.row_geometry(view, 1)
+        [rect] = view.word_rects(1, top, height)
+        cursor = view.textCursor()
+        block = view.document().findBlockByNumber(1)
+        cursor.setPosition(block.position() + 16)  # before "1"
+        self.assertAlmostEqual(rect.left(), view.cursorRect(cursor).left(), delta=1)
+        self.assertAlmostEqual(rect.width(), view.fontMetrics().horizontalAdvance("1"), delta=1)
+        self.assertEqual((rect.top(), rect.height()), (top, height))
+
+    def test_a_tab_before_the_word_is_allowed_for(self):
+        view = self.make_view()
+        top, height = self.row_geometry(view, 2)
+        [rect] = view.word_rects(2, top, height)
+        cursor = view.textCursor()
+        cursor.setPosition(view.document().findBlockByNumber(2).position() + 5)  # before "old"
+        self.assertAlmostEqual(rect.left(), view.cursorRect(cursor).left(), delta=1)
+
+    def test_the_word_colours_are_painted(self):
+        for theme in (LIGHT_THEME, DARK_THEME):
+            view = self.make_view(theme=theme)
+            image = view.viewport().grab().toImage()
+            for n, token in ((1, theme.colors.diff_removed_word),
+                             (3, theme.colors.diff_added_word)):
+                top, height = self.row_geometry(view, n)
+                [rect] = view.word_rects(n, top, height)
+                inside = image.pixelColor(int(rect.left()) + 1, int(top + 1))
+                outside = image.pixelColor(int(rect.left()) - 20, int(top + 1))
+                self.assertTrue(near(inside, QColor(token), 10), (theme.name, n))
+                self.assertFalse(near(outside, QColor(token), 10), (theme.name, n))
+
+    def test_selected_rows_keep_their_word_colour(self):
+        view = self.make_view()
+        view.selection.set_rows([1])
+        QApplication.processEvents()
+        image = view.viewport().grab().toImage()
+        top, height = self.row_geometry(view, 1)
+        [rect] = view.word_rects(1, top, height)
+        self.assertTrue(near(image.pixelColor(int(rect.left()) + 1, int(top + 2)),
+                             QColor(LIGHT_THEME.colors.diff_removed_word), 10))
+
+    def test_unpaired_and_unlike_rows_have_no_words(self):
+        view = self.make_view(partners={1: "nothing at all alike here"})
+        self.assertEqual(view.word_spans(1), ())  # too little in common
+        self.assertEqual(view.word_spans(3), ())  # no partner
+        self.assertEqual(view.word_spans(5), ())  # context
+
+    def test_spans_are_worked_out_once_per_set_rows(self):
+        view = self.make_view()
+        self.assertEqual(view.word_spans(1), ((16, 17),))
+        self.assertIn(1, view._spans)
+        view.set_rows(WORDS)
+        self.assertEqual(view._spans, {})
+        self.assertEqual(view.word_spans(1), ())  # no partners now
+
+    def test_characters_outside_the_bmp_count_twice_for_qt(self):
+        rows = (DiffRow(RowKind.REMOVED, "😀 a = 1", 1, None),
+                DiffRow(RowKind.ADDED, "😀 a = 2", None, 1))
+        view = self.make_view(rows, {0: rows[1].text, 1: rows[0].text})
+        top, height = self.row_geometry(view, 0)
+        [rect] = view.word_rects(0, top, height)
+        cursor = view.textCursor()
+        cursor.setPosition(len("😀 a = ".encode("utf-16-le")) // 2)
+        self.assertAlmostEqual(rect.left(), view.cursorRect(cursor).left(), delta=1)
+
+
 if __name__ == "__main__":
     unittest.main()

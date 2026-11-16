@@ -1,7 +1,17 @@
 import unittest
 
 from rzgitclient.git.git_models import DiffLine, FileDiff, Hunk, LineKind
-from rzgitclient.ui.panels.diff_rows import NO_NEWLINE, DiffRow, RowKind, split_rows, unified_rows
+from rzgitclient.ui.panels.diff_rows import (
+    NO_NEWLINE,
+    WORD_MAX_LENGTH,
+    DiffRow,
+    RowKind,
+    split_partners,
+    split_rows,
+    unified_partners,
+    unified_rows,
+    word_spans,
+)
 
 C, A, R = LineKind.CONTEXT, LineKind.ADDED, LineKind.REMOVED
 K = RowKind
@@ -70,3 +80,79 @@ class SplitRowsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WordSpanTests(unittest.TestCase):
+    """Changed words of a removed and added pair (RZG-22, spec §5.4)."""
+
+    def test_only_the_changed_word_is_a_span(self):
+        self.assertEqual(word_spans("count = total + 1", "count = total + 2"),
+                         (((16, 17),), ((16, 17),)))
+
+    def test_tokens_are_words_spaces_and_punctuation_runs(self):
+        old, new = word_spans("call(a, b);", "call(a, c);")
+        self.assertEqual((old, new), (((8, 9),), ((8, 9),)))
+        old, new = word_spans("x = foo_bar", "x = foo_baz")
+        self.assertEqual(old, ((4, 11),))  # a whole word, not just its last letter
+        old, new = word_spans("a += b", "a -= b")
+        self.assertEqual(old, ((2, 4),))  # a run of punctuation is one token
+
+    def test_an_insertion_has_a_span_on_the_new_side_only(self):
+        old, new = word_spans("f(a, b)", "f(a, x, b)")
+        self.assertEqual(old, ())
+        self.assertEqual(new, ((5, 8),))  # "x, "
+
+    def test_changed_tokens_in_a_row_are_one_span(self):
+        old, new = word_spans("one two-three four five", "one 2+3 four five")
+        self.assertEqual(old, ((4, 13),))
+        self.assertEqual(new, ((4, 7),))
+        old, new = word_spans("one two three four five", "one 2 3 four five")
+        self.assertEqual(old, ((4, 7), (8, 13)))  # the unchanged space between splits them
+
+    def test_identical_lines_have_no_spans(self):
+        self.assertEqual(word_spans("same", "same"), ((), ()))
+
+    def test_lines_with_little_in_common_are_not_compared(self):
+        self.assertIsNone(word_spans("return value;", "if (ready) start();"))
+
+    def test_long_lines_are_not_compared(self):
+        long = "x " * (WORD_MAX_LENGTH // 2 + 1)
+        self.assertIsNone(word_spans(long, long + "y"))
+        self.assertIsNotNone(word_spans("x " * 10, "x " * 10 + "y"))
+
+
+class PartnerTests(unittest.TestCase):
+    """Which changed rows pair up, in both views (RZG-22)."""
+
+    def test_unified_pairs_runs_like_side_by_side(self):
+        rows = unified_rows(DIFF)
+        # rows: 2 "old 1", 3 "old 2" removed; 4 "new 1" added; 6 "tail" added after context
+        self.assertEqual(unified_partners(rows), {2: "new 1", 4: "old 1"})
+
+    def test_unified_agrees_with_side_by_side(self):
+        diff = FileDiff("f", (Hunk("@@", 1, 1, (
+            DiffLine(R, 1, None, "a1"), DiffLine(R, 2, None, "a2"),
+            DiffLine(A, None, 1, "b1"), DiffLine(A, None, 2, "b2"), DiffLine(A, None, 3, "b3"),
+            DiffLine(R, 3, None, "c1"), DiffLine(A, None, 4, "d1"),
+        )),))
+        unified = unified_rows(diff)
+        pairs = {unified[n].text: text for n, text in unified_partners(unified).items()}
+        left, right = split_rows(diff)
+        old, new = split_partners(left, right)
+        split = {left[n].text: t for n, t in old.items()} | {right[n].text: t for n, t in new.items()}
+        self.assertEqual(pairs, split)
+        self.assertEqual(pairs, {"a1": "b1", "b1": "a1", "a2": "b2", "b2": "a2",
+                                 "c1": "d1", "d1": "c1"})
+
+    def test_a_no_newline_note_does_not_break_a_run(self):
+        diff = FileDiff("f", (Hunk("@@", 1, 1, (
+            DiffLine(R, 1, None, "end", no_newline=True), DiffLine(A, None, 1, "end;"),
+        )),))
+        rows = unified_rows(diff)
+        self.assertEqual(unified_partners(rows), {1: "end;", 3: "end"})
+
+    def test_side_by_side_pairs_only_removed_with_added(self):
+        left, right = split_rows(DIFF)
+        old, new = split_partners(left, right)
+        self.assertEqual({left[n].text for n in old}, {"old 1"})
+        self.assertEqual(set(new.values()), {"old 1"})

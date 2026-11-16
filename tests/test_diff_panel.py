@@ -92,6 +92,18 @@ class DiffPanelTests(unittest.TestCase):
         self.ctx.actions.side_by_side_diff.setChecked(False)
         self.assertEqual(self.page(), "unified")
 
+    def test_both_views_highlight_changed_words(self):
+        self.select(A)
+        view = self.panel._unified
+        first_removed = next(n for n, r in enumerate(view.rows) if r.kind is RowKind.REMOVED)
+        first_added = next(n for n, r in enumerate(view.rows) if r.kind is RowKind.ADDED)
+        self.assertEqual(view.word_spans(first_removed), ((0, 4),))  # "line" → "LINE"
+        self.assertEqual(view.word_spans(first_added), ((0, 4),))
+        self.ctx.actions.side_by_side_diff.setChecked(True)
+        n = next(n for n, r in enumerate(self.panel._left.rows) if r.kind is RowKind.REMOVED)
+        self.assertEqual(self.panel._left.word_spans(n), ((0, 4),))
+        self.assertEqual(self.panel._right.word_spans(n), ((0, 4),))
+
     def test_a_panel_built_late_starts_in_the_saved_view_and_shows_the_diff(self):
         self.select(A)
         self.ctx.actions.side_by_side_diff.setChecked(True)

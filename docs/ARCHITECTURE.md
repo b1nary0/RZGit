@@ -104,7 +104,7 @@ src/rzgitclient/
       diff_view.py              DiffView: read-only diff text, row backgrounds, hunk header links
       diff_gutter.py            DiffGutter: line buttons, line numbers and +/− marks beside a DiffView
       line_selection.py         LineSelection: which changed rows of a DiffView are selected
-      diff_rows.py              DiffRow, unified_rows, split_rows (plain Python, no Qt)
+      diff_rows.py              DiffRow, unified_rows, split_rows, *_partners, word_spans (no Qt)
       commit_panel.py           CommitPanel: the message box and Commit button
     layout/
       layout_model.py           PanelNode / SplitNode / TabsNode, (de)serialisation, normalize
@@ -698,6 +698,19 @@ than rebuilding them.
     shows it at the right edge of the view, in the accent colour, over the header's own
     background. The pointer becomes a hand over it, and a click sends `hunk_clicked(hunk)`.
     With no link text, the panel can give a tooltip for hunk headers instead.
+  - **Word highlights** (RZG-22): in a pair of removed and added lines, the changed words
+    are filled in `diff_removed_word` / `diff_added_word`, over the line's (or selected
+    line's) background and under the text. Lines pair as in side by side: the nth removed
+    line of a run with the nth added line of the run after it (`unified_partners(rows)`,
+    `split_partners(left, right)`: each paired row's number → its partner's text). `word_spans(old, new)`
+    in `diff_rows.py` (no Qt) splits both lines into tokens (runs of word characters, of
+    whitespace, of other characters), compares them with `difflib.SequenceMatcher`, and
+    returns each side's changed character ranges; it returns None when the token
+    similarity ratio is below 0.5 or either line is over 1000 characters, so lines with
+    little in common keep only their line colour. The panel gives the view each row's
+    partner text with its rows (`set_rows(rows, partners=…)`). Spans are worked out while
+    painting, for visible rows only, cached per row until the next `set_rows`, and placed
+    with the block's `QTextLayout.cursorToX`, so tabs line up.
   - **Rows know their line:** each `DiffRow` holds the index of its hunk and of its line in
     the `FileDiff`, so `selected_lines()` turns the line selection into `(hunk, line)`
     pairs. Side by side, each view only holds its own side's lines.
@@ -990,7 +1003,7 @@ back where the user had it. The default place is only the fallback.
 @dataclass(frozen=True)
 class ThemeColors:   menubar_bg: str; toolbar_bg: str; tab_bg: str; header_bg: str; sidebar_bg: str; content_bg: str; border: str; tree_guide: str;
                      text: str; text_muted: str; hover: str; selection: str; content_selection: str;
-                     accent: str; button_*: str; scroll_*: str; diff_*: str (incl. diff_hunk_bg, diff_hunk_text, diff_line_button*, diff_*_selected_bg); …
+                     accent: str; button_*: str; scroll_*: str; diff_*: str (incl. diff_hunk_bg, diff_hunk_text, diff_line_button*, diff_*_selected_bg, diff_*_word); …
 @dataclass(frozen=True)
 class StatusColors:  modified, added, deleted, renamed, copied, type_changed, conflict, untracked: str
                      def for_code(self, code: str) -> str | None   # porcelain letter → colour; None if unknown
