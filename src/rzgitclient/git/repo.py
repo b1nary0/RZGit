@@ -41,13 +41,17 @@ def _git_env() -> dict[str, str]:
     env = os.environ.copy()
     env["LC_ALL"] = "C"  # stable, parseable output
     env["GIT_TERMINAL_PROMPT"] = "0"  # never block on a hidden prompt
+    env["GIT_EDITOR"] = "false"  # a command that wants an editor fails instead of waiting
     return env
 
 
-def run_git(cwd: str | Path, *args: str, ok_codes: Collection[int] = (0,)) -> str:
+def run_git(
+    cwd: str | Path, *args: str, ok_codes: Collection[int] = (0,), input: str | None = None
+) -> str:
     """git's output as text (newlines normalised). Raises GitError for any
-    exit code not in ``ok_codes``."""
-    return _run(cwd, args, ok_codes, text=True)
+    exit code not in ``ok_codes``. ``input`` is written to git's stdin, which
+    is otherwise closed."""
+    return _run(cwd, args, ok_codes, text=True, input=input)
 
 
 def run_git_bytes(cwd: str | Path, *args: str, ok_codes: Collection[int] = (0,)) -> bytes:
@@ -55,7 +59,10 @@ def run_git_bytes(cwd: str | Path, *args: str, ok_codes: Collection[int] = (0,))
     return _run(cwd, args, ok_codes, text=False)
 
 
-def _run(cwd: str | Path, args: tuple[str, ...], ok_codes: Collection[int], *, text: bool):
+def _run(cwd: str | Path, args: tuple[str, ...], ok_codes: Collection[int], *, text: bool,
+         input: str | None = None):
+    # With no input, stdin is closed: git can never wait on the app's terminal.
+    stdin = {"input": input} if input is not None else {"stdin": subprocess.DEVNULL}
     try:
         proc = subprocess.run(
             ["git", *args],
@@ -63,13 +70,16 @@ def _run(cwd: str | Path, args: tuple[str, ...], ok_codes: Collection[int], *, t
             env=_git_env(),
             capture_output=True,
             text=text,
+            **stdin,
         )
     except OSError as exc:  # missing cwd, git not installed, …
         raise GitError(f"Can't run git in {cwd}: {exc.strerror or exc}") from exc
     if proc.returncode not in ok_codes:
-        stderr = proc.stderr if text else proc.stderr.decode("utf-8", "replace")
+        out, err = (proc.stdout, proc.stderr) if text else (
+            proc.stdout.decode("utf-8", "replace"), proc.stderr.decode("utf-8", "replace"))
+        # Some failures (a hook, "nothing to commit") explain themselves on stdout.
         raise GitError(
-            stderr.strip() or f"git {' '.join(args)} failed",
+            err.strip() or out.strip() or f"git {' '.join(args)} failed",
             proc.returncode,
         )
     return proc.stdout
@@ -193,6 +203,13 @@ class Repo:
         tree goes back to the index, so staged changes are kept."""
         if paths:
             self._literal("restore", "--worktree", "--", *paths)
+
+    def commit(self, message: str) -> None:
+        """Commit the staged changes with ``message``, passed on stdin: no
+        editor opens. Hooks run; one that fails raises GitError with its output.
+        Only surrounding blank lines and trailing spaces are cleaned up, so a
+        line starting with "#" is kept."""
+        run_git(self.root, "commit", "-q", "--cleanup=whitespace", "-F", "-", input=message)
 
     def _literal(self, *args: str) -> str:
         """Run git with paths that mean themselves: ":x" or "*.c" aren't patterns."""

@@ -109,5 +109,25 @@ class AppActionsTests(unittest.TestCase):
                 self.assertEqual(getattr(self.actions, name).shortcut(), QKeySequence(key))
 
 
+    def test_commit_needs_a_repo_something_staged_and_a_ready_message(self):
+        commit = self.actions.commit
+        self.actions.set_commit_ready(True)
+        self.assertFalse(commit.isEnabled())  # no repo
+        commit_file(self.repo, "a.txt", "1", "first")
+        self.session.open(self.repo)
+        wait_idle(self.session)
+        self.assertFalse(commit.isEnabled())  # nothing staged
+        (self.repo / "a.txt").write_text("2")
+        git(self.repo, "add", "a.txt")
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertTrue(commit.isEnabled())
+        self.actions.set_commit_ready(False)
+        self.assertFalse(commit.isEnabled())
+
+    def test_commit_shortcut_is_ctrl_enter(self):
+        self.assertEqual(self.actions.commit.shortcuts(),
+                         [QKeySequence("Ctrl+Return"), QKeySequence("Ctrl+Enter")])
+
 if __name__ == "__main__":
     unittest.main()

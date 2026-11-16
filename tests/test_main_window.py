@@ -97,7 +97,7 @@ class MainWindowTests(unittest.TestCase):
         self.quit(window)
 
         again = self.start()
-        self.assertEqual(set(again.layout_host.panels), {"controls", "files", "history", "diff"})
+        self.assertEqual(set(again.layout_host.panels), {"controls", "files", "history", "diff", "staged", "commit"})
         again.layout_host.show_panel("branches")  # and comes back where it was
         self.assertEqual(strip_sizes(again.layout_host.current_layout()), strip_sizes(DEFAULT_LAYOUT))
 
@@ -124,13 +124,13 @@ class MainWindowTests(unittest.TestCase):
         diff = again.layout_host.panels["diff"]
         self.assertIs(diff._stack.currentWidget(), diff._message_page)  # no file yet
 
-    def test_repository_menu_has_the_staging_actions(self):
+    def test_repository_menu_has_the_staging_and_commit_actions(self):
         window = self.start()
         menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "&Repository")
         actions = window.ctx.actions
         self.assertEqual([a for a in menu.actions() if not a.isSeparator()],
                          [actions.stage, actions.unstage, actions.discard,
-                          actions.stage_all, actions.unstage_all])
+                          actions.stage_all, actions.unstage_all, actions.commit])
 
     def test_discard_asks_first_and_acts_only_on_unstaged_rows(self):
         window = self.start()
@@ -183,7 +183,7 @@ class MainWindowTests(unittest.TestCase):
         window = self.start()
         window.layout_host.hide_panel("files")
         window.ctx.actions.reset_layout.trigger()
-        self.assertEqual(set(window.layout_host.panels), {"controls", "branches", "files", "history", "diff"})
+        self.assertEqual(set(window.layout_host.panels), {"controls", "branches", "files", "history", "diff", "staged", "commit"})
         self.assertEqual(window.layout_host.hidden, {})
 
     def test_status_bar_counts_every_commit_not_just_the_loaded_page(self):

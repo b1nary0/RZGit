@@ -40,7 +40,8 @@ class LayoutHost(QWidget):
 
     ``apply`` rebuilds the containers (splitters, tabs, frames) but keeps the
     panel instances, so their lists, scroll positions and selection survive.
-    It also remembers where hidden panels sat, so they come back there (§6.6).
+    It also remembers where hidden panels sat, so they come back there (§6.6),
+    and hides the panes of collapsed panels (§5.1) without changing the tree.
     """
 
     layout_changed = Signal()  # after every apply
@@ -52,6 +53,8 @@ class LayoutHost(QWidget):
         self._tree: LayoutNode | None = None
         self._hidden: dict[str, Anchor] = {}
         self._containers: list[QSplitter | QTabWidget] = []  # in pre-order of _tree
+        # A collapsed panel's size in its split when it collapsed: what to save.
+        self._collapsed_sizes: dict[str, int] = {}
         self._root: QWidget | None = None
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
@@ -94,7 +97,7 @@ class LayoutHost(QWidget):
         hidden = dict(self._hidden)
         anchor = hidden.pop(panel_id, None)
         self.apply(insert_panel(self.current_layout(), panel_id, anchor,
-                                default_anchor(panel_id)), hidden)
+                                default_anchor(panel_id, self._panels)), hidden)
 
     def apply(self, node: LayoutNode, hidden: Mapping[str, Anchor] | None = None) -> None:
         """Show ``node``. ``hidden`` (default: none) is kept for panels not in it.
@@ -105,7 +108,8 @@ class LayoutHost(QWidget):
         tree = normalize(node, _KNOWN_IDS)
         if tree is not None:
             for panel_id in _ALWAYS_SHOWN:
-                tree = insert_panel(tree, panel_id, None, default_anchor(panel_id))
+                tree = insert_panel(tree, panel_id, None,
+                                    default_anchor(panel_id, panel_ids(tree)))
         wanted = set(panel_ids(tree))
         self._hidden = {
             pid: a for pid, a in (hidden or {}).items() if pid in _KNOWN_IDS and pid not in wanted
@@ -139,7 +143,7 @@ class LayoutHost(QWidget):
                     splitter = next(containers)
                     children = tuple(read(c) for c in node.children)
                     return dataclasses.replace(
-                        node, children=children, sizes=tuple(splitter.sizes())
+                        node, children=children, sizes=self._sizes(splitter)
                     )
                 case TabsNode():
                     return dataclasses.replace(node, current=next(containers).currentIndex())
@@ -147,12 +151,50 @@ class LayoutHost(QWidget):
 
         return read(self._tree)
 
+    def _sizes(self, splitter: QSplitter) -> tuple[int, ...]:
+        """The splitter's sizes, with each collapsed pane at its size when it
+        collapsed, as if it were shown (see ``_lend``)."""
+        sizes = splitter.sizes()
+        for i in range(splitter.count()):
+            frame = splitter.widget(i)
+            if isinstance(frame, PanelFrame) and frame.panel.collapsed and sizes[i] == 0:
+                if (size := self._collapsed_sizes.get(frame.panel.panel_id)) is not None:
+                    sizes = _lend(sizes, i, size) or sizes
+        return tuple(sizes)
+
+    @Slot(bool)
+    def _on_collapsed(self, collapsed: bool) -> None:
+        panel = self.sender()
+        if not isinstance(panel, Panel):
+            return
+        frame = panel.parentWidget()
+        splitter = frame.parentWidget() if isinstance(frame, PanelFrame) else None
+        if isinstance(frame, PanelFrame) and isinstance(splitter, QSplitter):
+            index, sizes = splitter.indexOf(frame), splitter.sizes()
+            if collapsed:
+                if sizes[index] > 0:
+                    self._collapsed_sizes[panel.panel_id] = sizes[index]
+                frame.hide()
+                new = _lend(sizes, index, 0)
+            else:
+                frame.show()
+                size = self._collapsed_sizes.get(panel.panel_id)
+                new = _lend(sizes, index, size) if size else None
+            if new is not None and sum(sizes) > 0:
+                splitter.setSizes(new)
+            return
+        for tabs in self._containers:
+            if isinstance(tabs, _PanelTabs) and (index := tabs.indexOf(panel)) >= 0:
+                tabs.setTabVisible(index, not collapsed)
+                return
+
     # ---- building --------------------------------------------------------
 
     def _panel(self, panel_id: str) -> Panel:
         panel = self._panels.get(panel_id)
         if panel is None:
             panel = self._panels[panel_id] = panel_type(panel_id)(self._ctx)
+            panel.collapsed_changed.connect(self._on_collapsed)
         return panel
 
     def _build(self, node: LayoutNode) -> QWidget:
@@ -165,8 +207,16 @@ class LayoutHost(QWidget):
                 self._containers.append(splitter)
                 for child in node.children:
                     splitter.addWidget(self._build(child))
-                if node.sizes is not None:
-                    splitter.setSizes(list(node.sizes))
+                sizes = list(node.sizes) if node.sizes is not None else None
+                for i in range(splitter.count()):
+                    frame = splitter.widget(i)
+                    if isinstance(frame, PanelFrame) and frame.panel.collapsed:
+                        frame.hide()
+                        if sizes is not None:  # lent out from the start, as if it had collapsed
+                            self._collapsed_sizes[frame.panel.panel_id] = sizes[i]
+                            sizes = _lend(sizes, i, 0) or sizes
+                if sizes is not None:
+                    splitter.setSizes(sizes)
                 if node.orientation is Orientation.VERTICAL:
                     _fix_heights(splitter)
                 return splitter
@@ -174,10 +224,36 @@ class LayoutHost(QWidget):
                 tabs = _PanelTabs()
                 self._containers.append(tabs)
                 for child in node.children:
-                    tabs.add_panel(self._panel(child.panel_id))
+                    panel = self._panel(child.panel_id)
+                    tabs.add_panel(panel)
+                    if panel.collapsed:
+                        tabs.setTabVisible(tabs.count() - 1, False)
                 tabs.setCurrentIndex(node.current)
                 return tabs
         raise TypeError(f"not a layout node: {node!r}")
+
+
+def _lend(sizes: list[int], index: int, size: int) -> list[int] | None:
+    """``sizes`` with pane ``index`` at ``size``, the difference taken from (or
+    given to) the shown pane before it: the one it sits below or beside (the
+    one after, if it is first).
+
+    So Commit's space goes to Files when it collapses, and comes back from it,
+    never from Branches. None when that pane can't make up the difference:
+    Qt then shares it out as usual.
+    """
+    before = [j for j in range(index - 1, -1, -1) if sizes[j] > 0]
+    after = [j for j in range(index + 1, len(sizes)) if sizes[j] > 0]
+    neighbours = before or after
+    if not neighbours:
+        return None
+    j = neighbours[0]
+    delta = size - sizes[index]
+    if delta >= sizes[j]:
+        return None
+    new = list(sizes)
+    new[index], new[j] = size, sizes[j] - delta
+    return new
 
 
 def _fix_heights(splitter: QSplitter) -> None:

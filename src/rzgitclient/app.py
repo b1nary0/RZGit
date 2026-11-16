@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QApplication
 
 from rzgitclient import __version__
 from rzgitclient.core.app_settings import AppSettings
+from rzgitclient.core.commit_drafts import CommitDrafts
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import Selection
 from rzgitclient.ui.app_actions import AppActions
@@ -26,14 +27,15 @@ def main(argv: list[str] | None = None) -> int:
     session = RepoSession()
 
     selection = Selection(session)
+    settings = AppSettings()
     ctx = PanelContext(
         session=session,
         selection=selection,
         theme=theme,
         actions=AppActions(session, selection),
+        drafts=CommitDrafts(settings),
     )
 
-    settings = AppSettings()
     window = MainWindow(ctx, settings)
     window.show()
 

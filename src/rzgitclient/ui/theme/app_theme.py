@@ -25,6 +25,7 @@ class ThemeColors:
     text: str
     text_muted: str
     placeholder: str
+    warning: str  # text past a soft limit, e.g. a long commit subject
     # interaction
     hover: str
     content_hover: str
@@ -159,6 +160,7 @@ LIGHT_THEME = AppTheme(
         text="#2b2b2b",
         text_muted="#8a8a8a",
         placeholder="#a8a8a8",
+        warning="#c0640a",
         hover="#dcdcdc",
         content_hover="#f1f5fa",
         selection="#cbcbcb",

@@ -286,5 +286,74 @@ class RepoCommandTests(unittest.TestCase):
             self.repo.stage(["no-such-file"])
 
 
+
+def add_hook(repo: Path, name: str, script: str) -> None:
+    hook = repo / ".git" / "hooks" / name
+    hook.write_text("#!/bin/sh\n" + script)
+    hook.chmod(0o755)
+
+
+class RepoCommitTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        self.repo = Repo(self.path)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def message(self):
+        return git(self.path, "log", "-1", "--format=%B")
+
+    def test_the_first_commit_in_an_empty_repo(self):
+        (self.path / "a.txt").write_text("a")
+        self.repo.stage(["a.txt"])
+        self.repo.commit("First")
+        self.assertEqual(self.repo.commit_count(), 1)
+        self.assertEqual(self.repo.current_branch(), "main")
+        self.assertEqual(self.repo.status(), [])
+
+    def test_a_multi_line_message_is_kept_as_written(self):
+        commit_file(self.path, "a.txt", "1", "first")
+        (self.path / "a.txt").write_text("2")
+        self.repo.stage(["a.txt"])
+        self.repo.commit("\nSubject  \n\nBody line one\n#42 is not a comment\n\n\n")
+        # Only surrounding blank lines and trailing spaces go.
+        self.assertEqual(self.message(), "Subject\n\nBody line one\n#42 is not a comment\n\n")
+
+    def test_a_failing_hook_stops_the_commit_with_its_output(self):
+        commit_file(self.path, "a.txt", "1", "first")
+        add_hook(self.path, "pre-commit", "echo 'lint failed: a.txt'\nexit 1\n")
+        (self.path / "a.txt").write_text("2")
+        self.repo.stage(["a.txt"])
+        with self.assertRaisesRegex(GitError, "lint failed: a.txt"):
+            self.repo.commit("Change")
+        self.assertEqual(self.repo.commit_count(), 1)
+
+    def test_hooks_see_the_message(self):
+        add_hook(self.path, "commit-msg", "grep -q JIRA- \"$1\" || { echo 'no ticket' >&2; exit 1; }\n")
+        (self.path / "a.txt").write_text("a")
+        self.repo.stage(["a.txt"])
+        with self.assertRaisesRegex(GitError, "no ticket"):
+            self.repo.commit("No ticket here")
+        self.repo.commit("JIRA-1 With a ticket")
+        self.assertEqual(self.message(), "JIRA-1 With a ticket\n\n")
+
+    def test_nothing_staged_is_an_error(self):
+        commit_file(self.path, "a.txt", "1", "first")
+        with self.assertRaises(GitError):
+            self.repo.commit("Nothing")
+
+    def test_git_never_waits_for_an_editor_or_the_terminal(self):
+        commit_file(self.path, "a.txt", "1", "first")
+        (self.path / "a.txt").write_text("2")
+        self.repo.stage(["a.txt"])
+        # No message: git would open an editor. It fails at once instead.
+        with self.assertRaises(GitError):
+            self.repo.git("commit")
+        add_hook(self.path, "pre-commit", "read answer\n[ -z \"$answer\" ] || exit 1\n")
+        self.repo.commit("Hook read nothing")  # stdin is closed, not the test's terminal
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -30,6 +30,8 @@ class Role(StrEnum):
     SECTION_HEADER = "section-header"
     PLACEHOLDER = "placeholder"  # a muted "nothing to show" message
     DIFF_VIEW = "diff-view"  # the diff's text: no frame, rows reach the edges
+    HINT = "hint"  # a small muted note, e.g. the commit subject's length
+    HINT_WARNING = "hint-warning"  # the same note past its limit
 
 
 def set_surface(widget: QWidget, surface: Surface) -> None:

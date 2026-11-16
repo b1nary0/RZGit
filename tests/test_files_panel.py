@@ -8,21 +8,16 @@ from PySide6.QtCore import QCoreApplication, QEvent, QItemSelectionModel, Qt
 
 from rzgitclient.core.selection import FileSelection, FileSource
 from rzgitclient.ui.panels.files_panel import FilesPanel
+from rzgitclient.ui.panels.staged_panel import StagedPanel
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
-from tests.support import (
-    SignalRecorder,
-    commit_file,
-    git,
-    make_panel_context,
-    make_repo,
-    qt_app,
-    wait_idle,
-)
+from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 W, I = FileSource.WORKTREE, FileSource.INDEX
 
 
 class FilesPanelTests(unittest.TestCase):
+    """Unstaged Files, and how it shares the selection with Staged Files (§5.4)."""
+
     @classmethod
     def setUpClass(cls):
         qt_app()
@@ -34,9 +29,9 @@ class FilesPanelTests(unittest.TestCase):
         commit_file(self.repo, "old.txt", "rename me", "add old")
         self.ctx = make_panel_context()
         self.session = self.ctx.session
-        self.panel = FilesPanel(self.ctx)
-        self.addCleanup(self.panel.deleteLater)
-        self.tree = self.panel._tree
+        self.unstaged, self.staged = FilesPanel(self.ctx), StagedPanel(self.ctx)
+        for panel in (self.unstaged, self.staged):
+            self.addCleanup(panel.deleteLater)
 
     def tearDown(self):
         self.session.shutdown()
@@ -54,56 +49,90 @@ class FilesPanelTests(unittest.TestCase):
         self.session.refresh()
         wait_idle(self.session)
 
-    def groups(self):
-        """{group title: [(path, status), ...]}"""
-        result = {}
-        for g in range(self.tree.topLevelItemCount()):
-            group = self.tree.topLevelItem(g)
-            result[group.text(0)] = [(group.child(i).text(0), group.child(i).text(1))
-                                     for i in range(group.childCount())]
-        return result
+    def tree(self, source):
+        panel = self.unstaged if source is W else self.staged
+        self.assertIsNotNone(panel._list)  # Staged Files builds it when something is staged
+        return panel._list._tree
+
+    def shown(self, source):
+        """[(path, status), ...] of a panel."""
+        tree = self.tree(source)
+        return [(tree.topLevelItem(i).text(0), tree.topLevelItem(i).text(1))
+                for i in range(tree.topLevelItemCount())]
 
     def item(self, path, source):
-        for g in range(self.tree.topLevelItemCount()):
-            group = self.tree.topLevelItem(g)
-            for i in range(group.childCount()):
-                child = group.child(i)
-                if child.data(0, Qt.ItemDataRole.UserRole)[0] == FileSelection(path, source):
-                    return child
+        tree = self.tree(source)
+        for i in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(i)
+            if item.data(0, Qt.ItemDataRole.UserRole)[0] == FileSelection(path, source):
+                return item
         self.fail(f"no row {path!r} in {source}")
 
-    def select(self, *keys):
+    def highlighted(self, source):
+        tree = self.tree(source)
+        return sorted(i.data(0, Qt.ItemDataRole.UserRole)[0].path for i in tree.selectedItems())
+
+    def select(self, source, *paths):
         """Select rows like the user: the first becomes current, the rest are added."""
-        self.tree.setCurrentItem(self.item(*keys[0]))
-        model = self.tree.selectionModel()
-        for key in keys[1:]:
-            model.select(self.tree.indexFromItem(self.item(*key)),
-                         QItemSelectionModel.SelectionFlag.Select)
+        tree = self.tree(source)
+        # Not setCurrentItem: it reads the keyboard modifiers, which another test may leave.
+        tree.selectionModel().setCurrentIndex(
+            tree.indexFromItem(self.item(paths[0], source)),
+            QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        for path in paths[1:]:
+            tree.selectionModel().select(tree.indexFromItem(self.item(path, source)),
+                                         QItemSelectionModel.SelectionFlag.Select)
 
     # ---- rows --------------------------------------------------------------
 
     def test_empty_state(self):
-        self.assertEqual(self.groups(), {})
-        self.assertEqual(self.panel.header, "Files")
+        self.assertEqual(self.shown(W), [])
+        self.assertIsNone(self.staged._list)  # built when something is first staged
+        self.assertEqual((self.unstaged.header, self.staged.header),
+                         ("Unstaged Files", "Staged Files"))
+        self.assertTrue(self.staged.collapsed)
+        self.assertFalse(self.unstaged.collapsed)
 
-    def test_unstaged_and_staged_groups(self):
+    def test_each_panel_lists_its_side(self):
         (self.repo / "a.txt").write_text("staged")
         git(self.repo, "add", "a.txt")
-        (self.repo / "a.txt").write_text("staged, then changed")  # in both groups
+        (self.repo / "a.txt").write_text("staged, then changed")  # in both panels
         (self.repo / "new.txt").write_text("hi")
         git(self.repo, "mv", "old.txt", "renamed.txt")
         self.open()
-        self.assertEqual(self.groups(), {
-            "Unstaged (2)": [("a.txt", "Modified"), ("new.txt", "Untracked")],
-            "Staged (2)": [("a.txt", "Modified"), ("old.txt → renamed.txt", "Renamed")],
-        })
-        self.assertEqual(self.panel.header, "Files (3)")
+        self.assertEqual(self.shown(W), [("a.txt", "Modified"), ("new.txt", "Untracked")])
+        self.assertEqual(self.shown(I), [("a.txt", "Modified"), ("old.txt → renamed.txt", "Renamed")])
+        self.assertEqual((self.unstaged.header, self.staged.header),
+                         ("Unstaged Files (2)", "Staged Files (2)"))
+        self.assertFalse(self.staged.collapsed)
         status = LIGHT_THEME.status
         self.assertEqual(self.item("new.txt", W).foreground(1).color().name(), status.untracked)
         self.assertEqual(self.item("renamed.txt", I).foreground(1).color().name(), status.renamed)
-        group = self.tree.topLevelItem(0)
-        self.assertFalse(group.flags() & Qt.ItemFlag.ItemIsSelectable)
-        self.assertTrue(group.font(0).bold())
+
+    def test_staged_files_collapses_when_the_last_file_is_unstaged(self):
+        (self.repo / "a.txt").write_text("2")
+        git(self.repo, "add", "a.txt")
+        self.open()
+        self.assertFalse(self.staged.collapsed)
+        git(self.repo, "reset", "-q")
+        self.refresh()
+        self.assertTrue(self.staged.collapsed)
+
+    def test_a_list_built_after_the_window_shows_has_the_same_rows(self):
+        from PySide6.QtWidgets import QVBoxLayout, QWidget
+        window = QWidget()
+        self.addCleanup(window.deleteLater)
+        box = QVBoxLayout(window)
+        for panel in (self.unstaged, self.staged):
+            box.addWidget(panel)
+        window.show()
+        self.addCleanup(window.hide)
+        (self.repo / "a.txt").write_text("2")
+        (self.repo / "b.txt").write_text("b")
+        git(self.repo, "add", "a.txt")
+        self.open()  # Staged Files builds its list now, while shown
+        rect = lambda source, path: self.tree(source).visualItemRect(self.item(path, source))
+        self.assertEqual(rect(I, "a.txt").height(), rect(W, "b.txt").height())
 
     def test_apply_theme_recolours_rows(self):
         (self.repo / "a.txt").write_text("changed")
@@ -112,114 +141,125 @@ class FilesPanelTests(unittest.TestCase):
         self.ctx.theme.set_theme(dataclasses.replace(LIGHT_THEME, status=status))
         self.assertEqual(self.item("a.txt", W).foreground(1).color().name(), "#123456")
 
-    # ---- selection ---------------------------------------------------------
+    # ---- one selection at a time -------------------------------------------
 
-    def test_rows_select_their_side_and_several_can_be_selected(self):
+    def test_several_rows_of_a_panel_can_be_selected(self):
         (self.repo / "a.txt").write_text("changed")
-        (self.repo / "staged.txt").write_text("x")
-        git(self.repo, "add", "staged.txt")
+        (self.repo / "b.txt").write_text("new")
         self.open()
-        self.select(("staged.txt", I), ("a.txt", W))
+        self.select(W, "b.txt", "a.txt")
         selection = self.ctx.selection
-        self.assertEqual(selection.file, FileSelection("staged.txt", I))
-        self.assertEqual(selection.files, (FileSelection("a.txt", W), FileSelection("staged.txt", I)))
+        self.assertEqual(selection.file, FileSelection("b.txt", W))
+        self.assertEqual(selection.files, (FileSelection("a.txt", W), FileSelection("b.txt", W)))
 
-    def test_refresh_keeps_the_row_or_takes_the_same_path_in_the_other_group(self):
+    def test_clicking_one_row_after_another_shows_each(self):
+        (self.repo / "a.txt").write_text("changed")
+        (self.repo / "b.txt").write_text("new")
+        (self.repo / "c.txt").write_text("new")
+        self.open()
+        tree, flags = self.tree(W), QItemSelectionModel.SelectionFlag
+        for path in ("a.txt", "b.txt", "c.txt"):
+            with self.subTest(path=path):
+                # A mouse press's order: current first, still unselected, then the selection.
+                index = tree.indexFromItem(self.item(path, W))
+                tree.selectionModel().setCurrentIndex(index, flags.NoUpdate)
+                tree.selectionModel().select(index, flags.ClearAndSelect | flags.Rows)
+                self.assertEqual(self.ctx.selection.file, FileSelection(path, W))
+                self.assertEqual(self.highlighted(W), [path])
+
+    def test_selecting_in_one_panel_clears_the_other(self):
+        (self.repo / "a.txt").write_text("changed")
+        (self.repo / "s.txt").write_text("x")
+        git(self.repo, "add", "s.txt")
+        self.open()
+        self.select(W, "a.txt")
+        self.select(I, "s.txt")
+        self.assertEqual(self.ctx.selection.files, (FileSelection("s.txt", I),))
+        self.assertEqual((self.highlighted(W), self.highlighted(I)), ([], ["s.txt"]))
+        self.select(W, "a.txt")
+        self.assertEqual((self.highlighted(W), self.highlighted(I)), (["a.txt"], []))
+        self.assertEqual(self.ctx.selection.file, FileSelection("a.txt", W))
+
+    def test_a_row_staged_outside_the_app_moves_to_staged_files(self):
         (self.repo / "a.txt").write_text("changed")
         self.open()
-        self.select(("a.txt", W))
-        rec = SignalRecorder(self.ctx.selection, "file_changed")
+        self.select(W, "a.txt")
+        git(self.repo, "add", "a.txt")
         self.refresh()
-        self.assertEqual(rec.events, [])  # nothing changed
-        git(self.repo, "add", "a.txt")  # outside the app: the row moves
-        self.refresh()
-        self.assertEqual(rec.events, [("file_changed", FileSelection("a.txt", I))])
+        self.assertEqual(self.ctx.selection.file, FileSelection("a.txt", I))
+        self.assertEqual((self.highlighted(W), self.highlighted(I)), ([], ["a.txt"]))
 
     def test_selection_cleared_when_file_is_gone(self):
         (self.repo / "a.txt").write_text("changed")
         self.open()
-        self.select(("a.txt", W))
+        self.select(W, "a.txt")
         git(self.repo, "commit", "-qam", "commit it")
         self.refresh()
-        self.assertEqual(self.groups(), {})
         self.assertIsNone(self.ctx.selection.file)
         self.assertEqual(self.ctx.selection.files, ())
 
     # ---- staging -----------------------------------------------------------
 
-    def test_double_click_toggles_and_the_selection_follows(self):
+    def test_double_click_moves_the_file_and_the_selection_follows(self):
         (self.repo / "a.txt").write_text("1\n2\n")
         self.open()
-        self.select(("a.txt", W))
-        self.tree.itemDoubleClicked.emit(self.item("a.txt", W), 0)
+        self.select(W, "a.txt")
+        self.tree(W).itemDoubleClicked.emit(self.item("a.txt", W), 0)
         wait_idle(self.session)
-        self.assertEqual(self.groups(), {"Staged (1)": [("a.txt", "Modified")]})
+        self.assertEqual((self.shown(W), self.shown(I)), ([], [("a.txt", "Modified")]))
         self.assertEqual(self.ctx.selection.file, FileSelection("a.txt", I))
-        self.tree.itemDoubleClicked.emit(self.item("a.txt", I), 0)
+        self.assertEqual(self.highlighted(I), ["a.txt"])
+        self.tree(I).itemDoubleClicked.emit(self.item("a.txt", I), 0)
         wait_idle(self.session)
         self.assertEqual(self.ctx.selection.file, FileSelection("a.txt", W))
+        self.assertTrue(self.staged.collapsed)
 
-    def test_stage_follows_to_the_staged_row_though_unstaged_changes_remain(self):
+    def test_stage_follows_to_staged_files_though_unstaged_changes_remain(self):
         (self.repo / "a.txt").write_text("staged")
         git(self.repo, "add", "a.txt")
         (self.repo / "a.txt").write_text("more")
         (self.repo / "b.txt").write_text("new")
         self.open()
-        self.select(("b.txt", W))
+        self.select(W, "b.txt")
         self.ctx.actions.stage.trigger()
         wait_idle(self.session)
         self.assertEqual(self.ctx.selection.file, FileSelection("b.txt", I))
-        # A partly staged file: Unstage moves to its unstaged row.
-        self.select(("a.txt", I))
+        # A partly staged file: Unstage moves to its row in Unstaged Files.
+        self.select(I, "a.txt")
         self.ctx.actions.unstage.trigger()
         wait_idle(self.session)
         self.assertEqual(self.ctx.selection.file, FileSelection("a.txt", W))
+        self.assertEqual((self.highlighted(W), self.highlighted(I)), (["a.txt"], []))
 
     def test_several_rows_stage_together_and_stay_selected(self):
         for name in ("x.txt", "y.txt"):
             (self.repo / name).write_text(name)
         self.open()
-        self.select(("x.txt", W), ("y.txt", W))
+        self.select(W, "x.txt", "y.txt")
         self.ctx.actions.stage.trigger()
         wait_idle(self.session)
         self.assertEqual(self.ctx.selection.files, (FileSelection("x.txt", I), FileSelection("y.txt", I)))
+        self.assertEqual(self.highlighted(I), ["x.txt", "y.txt"])
 
-    def test_follow_waits_for_a_status_that_has_the_row(self):
+    def test_enter_moves_the_selected_rows(self):
         (self.repo / "a.txt").write_text("changed")
         self.open()
-        self.select(("a.txt", W))
-        self.panel._follow_to(I)  # as if Stage ran, but the status hasn't changed yet
-        self.refresh()
-        self.assertEqual(self.ctx.selection.file, FileSelection("a.txt", W))
-        git(self.repo, "add", "a.txt")
-        (self.repo / "a.txt").write_text("changed again")  # in both groups now
-        self.refresh()
-        self.assertEqual(self.ctx.selection.file, FileSelection("a.txt", I))
-
-    def test_choosing_a_row_cancels_the_follow(self):
-        (self.repo / "a.txt").write_text("changed")
-        (self.repo / "b.txt").write_text("new")
-        self.open()
-        self.select(("a.txt", W))
-        self.panel._follow_to(I)
-        self.select(("b.txt", W))
-        self.assertEqual(self.panel._follow, {})
-
-    def test_enter_toggles_the_selected_rows(self):
-        (self.repo / "a.txt").write_text("changed")
-        self.open()
-        self.select(("a.txt", W))
+        self.select(W, "a.txt")
         with mock.patch.object(self.session, "stage") as stage:
-            self.panel._toggle(self.tree.selectedItems())
-        stage.assert_called_once_with(["a.txt"])
+            self.unstaged._list._move(self.tree(W).selectedItems())
+        stage.assert_called_once_with(("a.txt",))
 
-    def test_context_menu_shows_the_staging_actions(self):
+    def test_each_context_menu_shows_its_panel_s_actions(self):
         actions = self.ctx.actions
-        menu = self.panel._menu()
-        self.addCleanup(menu.deleteLater)
-        self.assertEqual([a for a in menu.actions() if not a.isSeparator()],
-                         [actions.stage, actions.unstage, actions.discard,
-                          actions.stage_all, actions.unstage_all])
+        (self.repo / "a.txt").write_text("2")
+        git(self.repo, "add", "a.txt")
+        self.open()
+        for panel, want in ((self.unstaged, [actions.stage, actions.discard, actions.stage_all]),
+                            (self.staged, [actions.unstage, actions.unstage_all])):
+            with self.subTest(panel.title):
+                menu = panel._list._menu()
+                self.addCleanup(menu.deleteLater)
+                self.assertEqual([a for a in menu.actions() if not a.isSeparator()], want)
 
 
 if __name__ == "__main__":

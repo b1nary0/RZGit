@@ -58,6 +58,7 @@ class RepoSession(QObject):
     status_changed = Signal(object)  # tuple[FileStatus, ...]
     commit_count_changed = Signal(object)  # int | None  (None: not counted yet)
     diff_changed = Signal(object, object)  # FileSelection | None, FileDiff | None
+    command_finished = Signal(object, bool)  # GitCommand, whether it ran without error
     error_occurred = Signal(str)
     busy_changed = Signal(bool)  # True while git work is queued or running
 
@@ -237,32 +238,41 @@ class RepoSession(QObject):
             self._start_next()
 
     # ---- commands (spec §4.1) ------------------------------------------------
+    # Each returns the queued command, which ``command_finished`` reports, or
+    # None with no repo.
 
-    def stage(self, paths: Iterable[str]) -> None:
+    def stage(self, paths: Iterable[str]) -> GitCommand | None:
         """Stage ``paths`` (changes, new files, deletions) in the background."""
-        self._command(GitCommand(CommandKind.STAGE, tuple(paths)))
+        return self._command(GitCommand(CommandKind.STAGE, tuple(paths)))
 
-    def unstage(self, paths: Iterable[str]) -> None:
+    def unstage(self, paths: Iterable[str]) -> GitCommand | None:
         """Unstage ``paths``; the working tree keeps its changes."""
-        self._command(GitCommand(CommandKind.UNSTAGE, tuple(paths)))
+        return self._command(GitCommand(CommandKind.UNSTAGE, tuple(paths)))
 
-    def stage_all(self) -> None:
-        self._command(GitCommand(CommandKind.STAGE_ALL))
+    def stage_all(self) -> GitCommand | None:
+        return self._command(GitCommand(CommandKind.STAGE_ALL))
 
-    def unstage_all(self) -> None:
-        self._command(GitCommand(CommandKind.UNSTAGE_ALL))
+    def unstage_all(self) -> GitCommand | None:
+        return self._command(GitCommand(CommandKind.UNSTAGE_ALL))
 
-    def discard(self, paths: Iterable[str]) -> None:
+    def discard(self, paths: Iterable[str]) -> GitCommand | None:
         """Throw away the unstaged changes to ``paths``; staged ones are kept.
         Untracked files are moved to the trash. Callers confirm first."""
-        self._command(GitCommand(CommandKind.DISCARD, tuple(paths)))
+        return self._command(GitCommand(CommandKind.DISCARD, tuple(paths)))
 
-    def _command(self, command: GitCommand, parts: Refresh = Refresh.STATUS) -> None:
+    def commit(self, message: str) -> GitCommand | None:
+        """Commit the staged changes with ``message``."""
+        return self._command(GitCommand(CommandKind.COMMIT, message=message),
+                             Refresh.HEAD | Refresh.BRANCHES | Refresh.HISTORY
+                             | Refresh.STATUS | Refresh.COUNT)
+
+    def _command(self, command: GitCommand, parts: Refresh = Refresh.STATUS) -> GitCommand | None:
         """Queue ``command``; its job then loads ``parts``, what it changes."""
         if self._repo is None:
-            return
+            return None
         self._commands.append(command)
         self.refresh(parts)
+        return command
 
     def _drop_diff(self) -> None:
         """Forget the target and its diff (the repo changes)."""
@@ -315,6 +325,8 @@ class RepoSession(QObject):
                     # A count queued behind a failed load would fail too: one error is enough.
                     self._pending &= ~Refresh.COUNT
             self._store_forced_as_empty()  # parts a failed first load left behind
+            for i, command in enumerate(result.commands):
+                self.command_finished.emit(command, i < result.commands_ok)
         self._running = False
         if (self._pending or self._more_pending or self._diff_pending) and self._repo is not None:
             self._start_next()
@@ -378,6 +390,8 @@ class _JobResult:
     diff_read: bool = False  # it tried; ``diff`` is None if that failed
     diff: FileDiff | None = None
     command_failed: bool = False  # ``error`` is a command's; the parts still loaded
+    commands: tuple[GitCommand, ...] = ()  # the job's
+    commands_ok: int = 0  # how many of them ran without error, from the first
 
 
 class _Relay(QObject):
@@ -391,7 +405,7 @@ def _run_job(job: _Job) -> _JobResult:
     complete: bool | None = None
     diff: dict[str, object] = {"diff_generation": job.diff_generation,
                                "diff_wanted": job.diff is not None}
-    for command in job.commands:
+    for ran, command in enumerate(job.commands):
         try:
             run_command(job.repo, command)
         except Exception as exc:
@@ -399,7 +413,11 @@ def _run_job(job: _Job) -> _JobResult:
             loaded = _run_job(dataclasses.replace(job, commands=()))
             # The command's error comes first: it happened first.
             return dataclasses.replace(loaded, error=_error(exc, command.kind),
-                                       command_failed=True)
+                                       command_failed=True, commands=job.commands,
+                                       commands_ok=ran)
+    if job.commands:
+        loaded = _run_job(dataclasses.replace(job, commands=()))
+        return dataclasses.replace(loaded, commands=job.commands, commands_ok=len(job.commands))
     for part in _PARTS:
         wanted = part in job.parts or (part is Refresh.HISTORY and job.more)
         if not wanted:

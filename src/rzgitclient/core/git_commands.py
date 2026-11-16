@@ -22,12 +22,17 @@ class CommandKind(StrEnum):
     STAGE_ALL = "stage_all"
     UNSTAGE_ALL = "unstage_all"
     DISCARD = "discard"  # unstaged changes; untracked files go to the trash
+    COMMIT = "commit"  # the staged changes, with ``message``
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class GitCommand:
+    """One queued command. Compared by identity: two commits with the same
+    message are still two commands, and the session reports each."""
+
     kind: CommandKind
     paths: tuple[str, ...] = ()
+    message: str = ""  # COMMIT's
 
 
 def run_command(repo: Repo, command: GitCommand) -> None:
@@ -44,6 +49,8 @@ def run_command(repo: Repo, command: GitCommand) -> None:
             repo.unstage_all()
         case CommandKind.DISCARD:
             _discard(repo, paths)
+        case CommandKind.COMMIT:
+            repo.commit(command.message)
         case _:
             raise ValueError(f"not a command: {command.kind!r}")
 

@@ -60,5 +60,30 @@ class RunCommandTests(unittest.TestCase):
         self.assertEqual(self.status(), {"a.txt": "M "})
 
 
+
+class CommitCommandTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        self.repo = Repo(self.path)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_commit_commits_the_staged_changes_with_the_message(self):
+        (self.path / "a.txt").write_text("a")
+        (self.path / "b.txt").write_text("b")
+        git(self.path, "add", "a.txt")
+        run_command(self.repo, GitCommand(CommandKind.COMMIT, message="Add a"))
+        self.assertEqual(git(self.path, "log", "--format=%s"), "Add a\n")
+        self.assertEqual({f.path: f.index + f.worktree for f in self.repo.status()},
+                         {"b.txt": "??"})
+
+    def test_commands_are_compared_by_identity(self):
+        one, two = (GitCommand(CommandKind.COMMIT, message="Same") for _ in range(2))
+        self.assertNotEqual(one, two)
+        self.assertEqual(one, one)
+
+
 if __name__ == "__main__":
     unittest.main()

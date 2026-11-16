@@ -6,15 +6,17 @@ from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 
 from rzgitclient.ui.panels.branches_panel import BranchesPanel
+from rzgitclient.ui.panels.commit_panel import CommitPanel
 from rzgitclient.ui.panels.controls_panel import ControlsPanel
 from rzgitclient.ui.panels.diff_panel import DiffPanel
 from rzgitclient.ui.panels.files_panel import FilesPanel
 from rzgitclient.ui.panels.history_panel import HistoryPanel
 from rzgitclient.ui.panels.panel import Panel
+from rzgitclient.ui.panels.staged_panel import StagedPanel
 
 # Explicit on purpose: one place to see every panel, no import-time magic.
 PANEL_TYPES: tuple[type[Panel], ...] = (
-    ControlsPanel, BranchesPanel, HistoryPanel, FilesPanel, DiffPanel
+    ControlsPanel, BranchesPanel, HistoryPanel, FilesPanel, StagedPanel, DiffPanel, CommitPanel
 )
 
 

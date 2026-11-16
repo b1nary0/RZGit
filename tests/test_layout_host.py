@@ -58,7 +58,7 @@ class LayoutHostTests(unittest.TestCase):
 
     def test_builds_the_default_layout(self):
         self.host.apply(DEFAULT_LAYOUT)
-        self.assertEqual(set(self.host.panels), {"controls", "branches", "files", "history", "diff"})
+        self.assertEqual(set(self.host.panels), {"controls", "branches", "files", "history", "diff", "staged", "commit"})
 
         top = self.root()
         self.assertEqual(top.orientation(), Qt.Orientation.Vertical)
@@ -81,7 +81,7 @@ class LayoutHostTests(unittest.TestCase):
         self.host.apply(TABS)
         tabs = self.body()
         self.assertIsInstance(tabs, QTabWidget)
-        self.assertEqual([tabs.tabText(i) for i in range(2)], ["History", "Files"])
+        self.assertEqual([tabs.tabText(i) for i in range(2)], ["History", "Unstaged Files"])
         self.assertEqual(tabs.currentIndex(), 1)
         self.host.panels["files"].set_header("Files (3)")
         self.assertEqual(tabs.tabText(1), "Files (3)")
@@ -136,8 +136,9 @@ class LayoutHostTests(unittest.TestCase):
         self.host.apply(DEFAULT_LAYOUT)  # back from tabs to frames
         flush_deletes()
         self.app.processEvents()
-        shown = [p for pid, p in self.host.panels.items() if pid != "diff"]  # Diff: History's other tab
-        self.assertTrue(all(p.isVisible() for p in shown))
+        # Only Diff, History's other tab, and Staged Files and Commit, collapsed.
+        self.assertEqual({pid for pid, p in self.host.panels.items() if not p.isVisible()},
+                         {"diff", "staged", "commit"})
 
     def test_header_changes_after_moving_out_of_tabs(self):
         self.host.apply(TABS)
@@ -158,7 +159,7 @@ class LayoutHostTests(unittest.TestCase):
         self.show()
         self.host.hide_panel("files")
         flush_deletes()
-        self.assertEqual(set(self.host.panels), {"controls", "branches", "history", "diff"})
+        self.assertEqual(set(self.host.panels), {"controls", "branches", "history", "diff", "staged", "commit"})
         self.assertEqual(set(self.host.hidden), {"files"})
         self.assertEqual(self.host.state().hidden, self.host.hidden)
 
@@ -231,6 +232,82 @@ class LayoutHostTests(unittest.TestCase):
         self.assertEqual(set(self.host.hidden), {"files"})
         self.host.apply(PanelNode("history"))  # a preset or reset forgets hidden panels
         self.assertEqual(self.host.hidden, {})
+
+    # ---- collapsed panels (§5.1) ------------------------------------------
+
+    SIDE = SplitNode(H, (PanelNode("history"), PanelNode("commit")), sizes=(500, 300))
+
+    def test_a_collapsed_pane_lends_its_space_and_takes_it_back(self):
+        self.host.apply(self.SIDE)
+        self.show()
+        commit = self.host.panels["commit"]
+        commit.set_collapsed(False)
+        self.app.processEvents()
+        splitter = self.body()
+        before = splitter.sizes()
+        commit.set_collapsed(True)
+        self.app.processEvents()
+        self.assertFalse(splitter.widget(1).isVisible())
+        self.assertEqual(splitter.sizes()[1], 0)
+        self.assertEqual(splitter.sizes()[0], sum(before) + splitter.handleWidth())
+        commit.set_collapsed(False)
+        self.app.processEvents()
+        self.assertEqual(splitter.sizes(), before)
+
+    def test_a_layout_read_while_collapsed_keeps_the_pane_s_size(self):
+        self.host.apply(self.SIDE)
+        self.show()
+        commit = self.host.panels["commit"]
+        commit.set_collapsed(False)
+        self.app.processEvents()
+        before = self.host.current_layout()
+        commit.set_collapsed(True)
+        self.app.processEvents()
+        read = self.host.current_layout()
+        self.assertEqual(read.children[1].children, before.children[1].children)
+        for got, want in zip(read.children[1].sizes, before.children[1].sizes):
+            self.assertAlmostEqual(got, want, delta=1)
+
+    def test_a_panel_collapsed_from_the_start_comes_back_at_its_saved_size(self):
+        self.host.apply(self.SIDE)  # nothing staged: Commit is collapsed
+        self.show()
+        splitter = self.body()
+        self.assertFalse(splitter.widget(1).isVisible())
+        self.assertEqual(self.host.current_layout().children[1].sizes[1], 300)
+        self.host.panels["commit"].set_collapsed(False)
+        self.app.processEvents()
+        self.assertTrue(splitter.widget(1).isVisible())
+        self.assertAlmostEqual(splitter.sizes()[1] / sum(splitter.sizes()), 300 / 800, delta=0.01)
+
+    def test_a_collapsing_pane_lends_its_space_to_the_pane_above(self):
+        tree = SplitNode(V, (PanelNode("branches"), PanelNode("files"), PanelNode("commit")),
+                         sizes=(150, 250, 150))
+        self.host.apply(SplitNode(H, (tree, PanelNode("history"))))  # Commit starts collapsed
+        self.show()
+        column = self.body().widget(0)
+        branches, files, commit = column.sizes()
+        self.assertEqual(commit, 0)
+        self.host.panels["commit"].set_collapsed(False)
+        self.app.processEvents()
+        self.assertEqual(column.sizes(), [branches, files - 150 - column.handleWidth(), 150])
+        self.host.panels["commit"].set_collapsed(True)
+        self.app.processEvents()
+        self.assertEqual(column.sizes(), [branches, files, 0])  # Files took it back
+        read = self.host.current_layout().children[1].children[0]
+        self.assertEqual(read.sizes[0], branches)
+        self.assertEqual(read.sizes[2], 150)
+
+    def test_a_collapsed_tab_is_hidden_and_the_panel_stays_in_the_layout(self):
+        self.host.apply(TabsNode((PanelNode("history"), PanelNode("commit"))))
+        self.show()
+        tabs = self.body()
+        self.assertFalse(tabs.isTabVisible(1))
+        self.host.panels["commit"].set_collapsed(False)
+        self.assertTrue(tabs.isTabVisible(1))
+        self.host.panels["commit"].set_collapsed(True)
+        self.assertFalse(tabs.isTabVisible(1))
+        self.assertIn("commit", self.host.panels)  # still shown, as far as View → Panels goes
+        self.assertTrue(self.host.can_hide("commit"))
 
     # ---- reading back ---------------------------------------------------
 

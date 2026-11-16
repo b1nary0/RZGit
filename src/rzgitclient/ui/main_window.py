@@ -54,6 +54,8 @@ class MainWindow(QMainWindow):
         repo_menu.addActions([actions.stage, actions.unstage, actions.discard])
         repo_menu.addSeparator()
         repo_menu.addActions([actions.stage_all, actions.unstage_all])
+        repo_menu.addSeparator()
+        repo_menu.addAction(actions.commit)
 
         actions.reset_layout.triggered.connect(self.reset_layout)
         view_menu = self.menuBar().addMenu("&View")

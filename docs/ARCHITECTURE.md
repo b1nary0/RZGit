@@ -70,9 +70,10 @@ src/rzgitclient/
   core/
     repo_session.py             RepoSession: the open repo, its data, git commands
     diff_request.py             DiffRequest, the size limit, load_diff (the worker side of diffs)
-    git_commands.py             GitCommand, run_command (the worker side of commands: stage, …)
+    git_commands.py             GitCommand, run_command (the worker side of commands: stage, commit, …)
+    commit_drafts.py            CommitDrafts: the unfinished commit message of each repository
     selection.py                Selection: what the user has selected (commit, file)
-    app_settings.py             AppSettings: typed wrapper over QSettings (last_repo, layout)
+    app_settings.py             AppSettings: typed wrapper over QSettings (last_repo, layout, …)
   ui/
     main_window.py              MainWindow: thin shell (menus, status bar, LayoutHost)
     app_actions.py              AppActions: every QAction, defined once
@@ -90,10 +91,13 @@ src/rzgitclient/
       branches_panel.py         BranchesPanel
       history_panel.py          HistoryPanel
       history_model.py          HistoryModel: the commit table's Qt model, paged
-      files_panel.py            FilesPanel
+      files_panel.py            FilesPanel: "Unstaged Files"
+      staged_panel.py           StagedPanel: "Staged Files"
+      file_list.py              FileList: one source's changed files, the body of both
       diff_panel.py             DiffPanel
       diff_view.py              DiffView: read-only text with a line-number gutter
       diff_rows.py              DiffRow, unified_rows, split_rows (plain Python, no Qt)
+      commit_panel.py           CommitPanel: the message box and Commit button
     layout/
       layout_model.py           PanelNode / SplitNode / TabsNode, (de)serialisation, normalize
       layout_presets.py         PRESETS, DEFAULT_LAYOUT, restore_layout
@@ -130,6 +134,7 @@ class RepoSession(QObject):
     status_changed   = Signal(object)  # tuple[FileStatus, ...]
     commit_count_changed = Signal(object)  # int | None  (commits reachable from HEAD)
     diff_changed     = Signal(object, object)  # FileSelection | None, FileDiff | None
+    command_finished = Signal(object, bool)    # GitCommand, whether it ran without error
     error_occurred   = Signal(str)
     busy_changed     = Signal(bool)  # True while git work is queued or running
 
@@ -145,6 +150,7 @@ class RepoSession(QObject):
     def stage_all(self) -> None
     def unstage_all(self) -> None
     def discard(self, paths) -> None      # unstaged changes; untracked files go to the trash
+    def commit(self, message) -> GitCommand | None   # the staged changes; None with no repo
 
     # Latest values, so a panel created later renders at once (read-only properties):
     repo, head, branches, history, status, commit_count, history_complete, diff_file, diff
@@ -241,6 +247,19 @@ class RepoSession(QObject):
     kept. Untracked files are moved to the trash (`QFile.moveToTrash`), never deleted; if the
     trash can't be used, that is an error. The confirmation is the window's job (§8).
   - Paths are passed with `--literal-pathspecs`, so a file named `:x` or `*.c` means itself.
+  - **Results:** after a job, `command_finished(command, ok)` is sent for each of its
+    commands, in order, after the parts and the error: `ok` is False for the one that
+    failed and for those skipped after it. The command object is the one the method
+    queued (`commit()` returns it), so a panel can tell its own command by identity.
+    Commands of a repository closed meanwhile report nothing, like the rest of the job.
+  - **Commit** (`git commit -q --cleanup=whitespace -F -`) passes the message on stdin and
+    reloads `HEAD | BRANCHES | HISTORY | STATUS | COUNT`. Hooks run as in a terminal; a
+    failing hook is a failed command, and its output is the error. `--cleanup=whitespace`,
+    not `strip`: the message box has no template, so a line starting with `#` is the
+    user's text, not a comment.
+  - **No editor or prompt, ever:** git runs with `GIT_EDITOR=false` and
+    `GIT_TERMINAL_PROMPT=0`, and with stdin closed unless a command passes input. A
+    command that would open an editor fails instead of waiting for it.
 
 ### 4.2 Selection
 
@@ -265,17 +284,26 @@ class Selection(QObject):
     files_changed  = Signal(object)  # tuple[FileSelection, ...]: every selected row
 ```
 
-History sets `selection.commit`. Files sets `selection.files` (every selected row, which
+History sets `selection.commit`. The Unstaged Files and Staged Files panels call
+`selection.select(files, current)`, which sets `selection.files` (every selected row, which
 the stage actions act on) and `selection.file` (the current row); the Diff panel listens to
 `file_changed`. Setters emit only when the value changes. This is the mediator pattern:
 panels share state, not references.
 
-Selection is cleared when the repo changes. When the selected file disappears after a
-refresh, the Files panel sets `selection.file = None` and the Diff panel shows its empty
-state. When the same file moves between unstaged and staged, the Files panel selects it
-with its new source; after Stage or Unstage it selects the side the file was moved to
-(§5.4). What happens to a selected commit that disappears (after an amend)
-is decided with RZG-21.
+**Selected files follow the status.** Selection owns what happens to selected files when
+the status changes, so the two file panels never need to know each other. It listens to
+`status_changed` before any panel does (it is created first), and each selected row:
+- stays, if the new status still has it (`file_rows(status)`: a worktree row for each
+  unstaged or untracked file, an index row for each staged one);
+- or moves to its **follow target**: `follow(paths, source)` says those paths are about
+  to move to `source` (Stage and Unstage call it, from the menu, the keyboard or a
+  double-click). The target waits until a status has the row (an older refresh may arrive
+  first), and `select()` cancels it: the user chose something else;
+- or moves to the same path in the other source (staged or unstaged outside the app);
+- or is dropped, and the Diff panel shows its empty state if it was the current one.
+
+Selection is cleared when the repo changes. What happens to a selected commit that
+disappears (after an amend) is decided with RZG-21.
 
 ## 5. Panels
 
@@ -288,6 +316,7 @@ class PanelContext:
     selection: Selection
     theme: ThemeManager
     actions: AppActions
+    drafts: CommitDrafts                           # the Commit panel's unfinished messages
 
 class Panel(QWidget):
     panel_id: ClassVar[str]                        # stable, saved in layouts: "history"
@@ -298,6 +327,7 @@ class Panel(QWidget):
     always_shown: ClassVar[bool] = False           # True: the layout never leaves it out (§6.6)
     header_changed = Signal(str)                   # emitted by set_header()
     activate_requested = Signal()                  # emitted by request_activation()
+    collapsed_changed = Signal(bool)               # emitted by set_collapsed()
 
     def __init__(self, ctx: PanelContext, parent=None): ...   # final: panels don't override it
     def _setup(self) -> None: ...                         # the panel builds its widgets here
@@ -305,7 +335,15 @@ class Panel(QWidget):
     header: str                                           # read-only; `title` until set_header()
     def set_header(self, text: str) -> None: ...          # e.g. "Modified files (19)"; emits on change
     def request_activation(self) -> None: ...             # "bring me to the front" (a tab)
+    collapsed: bool                                       # read-only; False until set_collapsed()
+    def set_collapsed(self, collapsed: bool) -> None: ... # "nothing to show here now"; emits on change
 ```
+
+`set_collapsed(True)` asks the layout to give the panel's space to its neighbours for now,
+without hiding it (§6.2): the panel stays in the tree, View → Panels still shows it
+checked, and saved layouts keep its size. The Commit panel collapses while nothing is
+staged. Hiding, by contrast, is the user's choice (§6.6), and a hidden panel stays hidden
+whatever it would ask.
 
 `request_activation()` asks the layout to make the panel visible; the panel doesn't know
 whether it sits in a tab group. The host raises its tab (§6.2); in a split it is visible
@@ -365,7 +403,7 @@ Every panel follows these rules:
 ### 5.3 Registry
 
 `panels/panel_registry.py` has an explicit `PANEL_TYPES = (ControlsPanel, BranchesPanel,
-HistoryPanel, FilesPanel, DiffPanel)` and a `panel_type(panel_id)` lookup that raises `KeyError` for an unknown id.
+HistoryPanel, FilesPanel, StagedPanel, DiffPanel, CommitPanel)` and a `panel_type(panel_id)` lookup that raises `KeyError` for an unknown id.
 **Why explicit:** no import-time side effects or decorator magic, and one place to see
 every panel. The lookup table is built at import by `index_panel_types()`, which raises
 `ValueError` on a duplicate id, so a clash fails at startup and in every test run.
@@ -380,21 +418,27 @@ The first three are extracted from the original `main_window.py` with the same b
 | ControlsPanel | `controls` | chrome | Open, Refresh (`ctx.actions`), current branch | (later: fetch/pull/push, switch branch) |
 | BranchesPanel | `branches` | sidebar | branches, current in bold | (later: checkout) |
 | HistoryPanel | `history` | content | commit table | `selection.commit` |
-| FilesPanel | `files` | sidebar | working tree changes in Unstaged and Staged groups, status colours | `selection.files`, `selection.file`; stages and unstages |
+| FilesPanel | `files` | sidebar | "Unstaged Files": unstaged and untracked files, status colours | `selection.select()`; stages |
+| StagedPanel | `staged` | sidebar | "Staged Files": the index's changes; collapsed when empty | `selection.select()`; unstages |
 | DiffPanel | `diff` | content | the diff of `selection.file`, unified or side by side | (later: stage hunks) |
+| CommitPanel | `commit` | sidebar | the commit message being written | commits the staged changes |
 
-FilesPanel lists the working tree changes in two groups, as in Sublime Merge:
-**Unstaged** (unstaged changes and untracked files, labelled "Untracked") and **Staged**. A
-file with both appears in both, and each row is one `FileSelection` (worktree or index).
-Its header shows the number of changed files, e.g. "Files (24)".
-- **Selecting:** extended selection (Ctrl and Shift). Group rows can't be selected.
-- **Staging:** the context menu shows the stage actions (§8), which act on every selected
-  row. Double-click, or Enter, toggles staging: an unstaged row is staged, a staged one
-  unstaged.
-- **The selection follows the action:** after Stage the files' Staged rows are selected,
-  after Unstage their Unstaged rows. The panel remembers the target until a status has it
-  (an older refresh may arrive first) or the user selects something else. Without a target,
-  a refresh keeps each selected row, or the same path in the other group if its row is gone.
+**Unstaged Files** (FilesPanel) and **Staged Files** (StagedPanel, `staged_panel.py`)
+are one list each, as in GitKraken. Both are a thin panel around a `FileList`
+(`file_list.py`, a widget for one source), since a panel never imports another. A file
+with both kinds of change is in both, and each row is one `FileSelection` (worktree or
+index). Headers show the count, e.g. "Unstaged Files (29)". Staged Files sits between
+Unstaged Files and Commit and collapses (§5.1) when nothing is staged. Like Commit, it
+builds its list the first time something is staged (6 ms of startup otherwise).
+- **Selecting:** extended selection (Ctrl and Shift) within a panel. One panel holds the
+  selection at a time: selecting in one clears the other, since each shows only the rows
+  of `selection.files` that are its own.
+- **Staging:** the context menu shows that panel's actions (§8): Stage, Discard and Stage
+  All in Unstaged Files; Unstage and Unstage All in Staged Files. Double-click, or Enter,
+  moves the selected rows to the other panel.
+- **The selection follows the action:** after Stage the files' rows in Staged Files are
+  selected, after Unstage their rows in Unstaged Files, through `selection.follow()`
+  (§4.2). The rest of "what stays selected after a refresh" is Selection's too.
 
 HistoryPanel is a `QTableView` over `HistoryModel` (`QAbstractTableModel`), because item
 widgets for 100k commits are too slow to build. The model creates nothing per row: `data()`
@@ -421,8 +465,9 @@ asks, so a theme change is one `dataChanged`.
   measure only that row. Every row is as tall as the first wants.
 
 **Selection survives a refresh.** A list panel rebuilds with its signals blocked, then
-re-selects the same item (a commit by sha, a file by path and source). It writes
-`Selection` only when the selected item no longer exists. So a refresh never clears what
+re-selects the same item (a commit by sha; a file as `selection.files` now says, §4.2).
+History writes `Selection` only when the selected commit no longer exists; the file panels
+never write it on a refresh. So a refresh never clears what
 another panel (a future Diff) is showing. `apply_theme` recolours existing rows rather
 than rebuilding them.
 
@@ -450,7 +495,38 @@ than rebuilding them.
   at the top. Selecting a file at another path calls `request_activation()`, so the Diff
   tab comes to the front; a refresh never does.
 
-Planned feature panels (commit message) plug in the same way, with no architecture changes.
+**CommitPanel** writes a commit. It sits directly below Files in every preset (§6.1), as
+in GitKraken: a one-line **summary** (`QLineEdit`) with its length counter inside it on the
+right, a **description** (`QPlainTextEdit`), and a full-width button for the Commit
+action (§8). Viewing a commit selected in History is a separate panel (Commit Details,
+RZG-26).
+- **The message** is `summary`, or `summary + "\n\n" + description` when there is a
+  description. Enter in the summary moves to the description; Ctrl+Enter commits from
+  either.
+- **Shown only when something is staged:** otherwise it is collapsed (§5.1) and Files
+  takes its space. While either field has focus it stays, so unstaging everything
+  mid-sentence doesn't snatch it away; it collapses once focus has left both (checked
+  after the event loop turns, so moving from one field to the other doesn't count).
+- **The button says what's needed:** "Stage Files to Commit", "Type a Message to
+  Commit" (the summary is blank), "Committing…", or "Commit 3 Files" (the staged files).
+  Only the last is enabled.
+- **Committing:** the panel tells `AppActions` whether its message is ready
+  (`set_commit_ready`: a summary, and no commit of its own still running), and the Commit
+  action, Ctrl+Enter or the button calls `session.commit(message)`. When
+  `command_finished` reports that command ok, both fields are cleared, unless the user has
+  changed them since. On failure they are kept; the error is shown like any other (§4.1).
+- **Drafts:** the message is the open repository's draft, kept in `ctx.drafts`
+  (`CommitDrafts`, `core/commit_drafts.py`) as it is typed, so it comes back after
+  switching repositories or restarting; it is split back into summary (the first line)
+  and description (the rest, without the blank line). A cleared message removes the
+  draft.
+  `CommitDrafts` writes through `AppSettings` (`commit/drafts`, JSON keyed by the
+  repository root); tests give it none, and it keeps drafts in memory.
+- **Summary hint:** "n/50", muted (`Role.HINT`), and in the warning colour past 72
+  (`Role.HINT_WARNING`). Nothing is enforced.
+- **Built when first shown:** the panel starts collapsed (the repository opens after the
+  window), so its widgets are created the first time something is staged. Until then
+  its message is the stored draft. This keeps it out of the startup time (3.5 ms).
 
 ## 6. Layout
 
@@ -496,13 +572,16 @@ class LayoutState: root: LayoutNode; hidden: Mapping[str, Anchor] = {}   # what'
 
 **Presets** (`layout_presets.py`, `PRESETS`) are named trees that show every panel. Each
 has the Controls panel across the top, above the arrangement described. In every preset,
-History and Diff are tabs of one group, with History current:
-- **Standard** (`DEFAULT_LAYOUT`): Branches above Files in a left sidebar, History and Diff
-  on the right: `Split(V, [controls, Split(H, [Split(V, [branches, files], sizes=(300,
-  400)), Tabs([history, diff])], sizes=(220, 880))])`.
-- **Sidebar Tabs:** Branches and Files as tabs on the left, each with the full height;
-  History and Diff on the right.
-- **Stacked:** History and Diff across the top; Branches and Files side by side below.
+History and Diff are tabs of one group, with History current, and Staged Files and
+Commit are directly below Unstaged Files (`files`), in that order:
+- **Standard** (`DEFAULT_LAYOUT`): Branches, Unstaged Files, Staged Files and Commit
+  stacked in a left sidebar, History and Diff on the right: `Split(V, [controls, Split(H,
+  [Split(V, [branches, files, staged, commit], sizes=(200, 220, 120, 160)), Tabs([history,
+  diff])], sizes=(220, 880))])`.
+- **Sidebar Tabs:** Branches and Unstaged Files as tabs on the left, Staged Files and
+  Commit below the tabs; History and Diff on the right.
+- **Stacked:** History and Diff across the top; below, Branches beside Unstaged Files,
+  with Staged Files and Commit below it.
 
 ### 6.2 LayoutHost
 
@@ -521,14 +600,24 @@ History and Diff are tabs of one group, with History current:
 - The host owns the panels (a read-only `panels` mapping by id); frames and containers are
   rebuilt on every `apply`. Panes can't be collapsed to nothing by dragging a divider
   (`setChildrenCollapsible(False)`): with 1px dividers a collapsed pane is hard to find.
+- **A collapsed panel** (§5.1) has its frame hidden in a split, or its tab hidden in a tab
+  group. In a split, its space goes to the pane before it (the one it sits below or
+  beside; the one after, if it is first), and comes back from that pane when it is shown
+  again, at the size it had: so Staged Files or Commit appearing takes its height from
+  Unstaged Files (the nearest shown pane above), never from
+  Branches. (If that pane can't spare it, Qt shares it out as usual.) `current_layout()`
+  reports the pane at that size, taken from the same pane, so a layout saved meanwhile
+  brings it back at that size.
 - An empty tree (everything dropped by `normalize`) shows an empty area. Falling back to
   `DEFAULT_LAYOUT` is the loader's job (§6.3).
 
 ### 6.3 Persistence
 
 `AppSettings` (`core/app_settings.py`) is the only code that touches `QSettings`. It has
-typed accessors (`last_repo`, `layout`, `window_geometry`, `side_by_side_diff`) and takes a file path for tests.
-`app.py` creates it and passes it to `MainWindow`; panels don't get it.
+typed accessors (`last_repo`, `layout`, `window_geometry`, `side_by_side_diff`,
+`commit_drafts`) and takes a file path for tests. `app.py` creates it and passes it to
+`MainWindow`; panels don't get it. The one thing a panel saves, the commit draft, goes
+through `CommitDrafts` (§5.4), which holds only that.
 
 On close, the window saves the host's `state()` (as JSON, so the format is ours) and its
 geometry: size and maximized state, plus position where the platform allows it (not on
@@ -542,6 +631,12 @@ returns the `LayoutState` to apply:
   place in `DEFAULT_LAYOUT` (§6.6), and the rest of the user's layout is kept. When it
   joins a tab group, the tab the user had current stays current (a Diff tab added beside
   History doesn't hide History on the first start).
+  - "Its place" is taken among the panels on screen (`default_anchor(id, shown)`), so two
+    panels new in one version land together: Staged Files below Files, then Commit below
+    Staged Files. (`show_panel` uses the same rule for a panel never hidden.)
+  - A split that gained new panels, and now holds the same panes as a split of a preset,
+    takes that split's sizes; otherwise each new pane takes its share of its neighbour's
+    space, and a second new pane would take a share of the first's.
 
 **View → Reset Layout** applies `DEFAULT_LAYOUT` at once, showing every panel.
 
@@ -637,7 +732,8 @@ LIGHT_THEME = AppTheme(...)
 ### 7.2 Semantic roles
 
 `style_roles.py` defines `Surface` (SIDEBAR, CONTENT, CHROME) and `Role` (SECTION_HEADER,
-PLACEHOLDER for a muted "nothing to show" message, DIFF_VIEW for the borderless diff text).
+PLACEHOLDER for a muted "nothing to show" message, DIFF_VIEW for the borderless diff text,
+HINT and HINT_WARNING for a small muted note and the same past a limit).
 Widgets get them as Qt dynamic properties through `set_surface()` / `set_role()`, and the
 stylesheet targets those (`QWidget[surface="sidebar"]`). The theme decides what "sidebar"
 looks like; panels only say what they are.
@@ -673,8 +769,14 @@ Per-widget sheets are slow to apply and scatter the rules.
   that kind (`selection.files`), Discard Changes… (Ctrl+Backspace) on the selected unstaged
   rows, Stage All (Ctrl+Shift+S) and Unstage All (Ctrl+Shift+U) on the whole status. Each is
   enabled only when it has something to act on. They're in the **Repository** menu and the
-  Files panel's context menu. Discard is connected by MainWindow, which asks for
+  file panels' context menus. Stage and Unstage call `selection.follow()` first, so the
+  moved rows are selected in the other panel (§4.2). Discard is connected by MainWindow, which asks for
   confirmation first (listing the files, and that untracked ones go to the trash).
+- **Commit** (Ctrl+Enter, in the Repository menu) commits the staged changes with the
+  Commit panel's message. It is enabled when a repository is open, something is staged
+  and the panel reports its message ready (`set_commit_ready`); the panel connects
+  `triggered`, since it holds the message. A panel that is hidden (deleted) reports not
+  ready.
 - **`MainWindow`** is a thin shell: menus built from `AppActions`, the status
   bar summary (from session signals: path · branch · commits · changed files), error dialogs (from `error_occurred`), and a
   `LayoutHost` as the central widget. The Open, Quit and Reset Layout handlers live here
@@ -713,7 +815,7 @@ cheap to fix **later**, without paying for them now:
   edge cases), `test_layout_host` (build, panel reuse, reading sizes back),
   `test_<name>_panel` (each panel renders a temp repo and the empty state),
   `test_diff_request` and `test_diff_rows` (the diff's worker side and its rows),
-  `test_git_commands` (commands on temp repos), and
+  `test_git_commands` (commands on temp repos), `test_commit_drafts`, and
   `test_architecture` (§2 import rules, unique panel ids).
 - Stays on stdlib `unittest`: there are no extra dependencies, and VS Code's test panel is
   already set up for it.

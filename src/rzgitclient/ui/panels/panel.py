@@ -8,6 +8,7 @@ from typing import ClassVar
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QWidget
 
+from rzgitclient.core.commit_drafts import CommitDrafts
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import Selection
 from rzgitclient.ui.app_actions import AppActions
@@ -25,6 +26,7 @@ class PanelContext:
     selection: Selection
     theme: ThemeManager
     actions: AppActions
+    drafts: CommitDrafts  # the Commit panel's unfinished messages
 
 
 class Panel(QWidget):
@@ -53,6 +55,7 @@ class Panel(QWidget):
 
     header_changed = Signal(str)
     activate_requested = Signal()  # "bring me to the front": the layout raises my tab
+    collapsed_changed = Signal(bool)  # "nothing to show now": the layout lends my space out
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -68,6 +71,7 @@ class Panel(QWidget):
         super().__init__(parent)
         self.ctx = ctx
         self._header = self.title
+        self._collapsed = False
         set_surface(self, self.surface)
         self._setup()
         self.apply_theme(ctx.theme.current)
@@ -99,3 +103,17 @@ class Panel(QWidget):
         Only in answer to something the user did, never on a refresh (§5.1).
         """
         self.activate_requested.emit()
+
+    # ---- collapsing ------------------------------------------------------
+
+    @property
+    def collapsed(self) -> bool:
+        return self._collapsed
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        """Ask the layout to give this panel's space to its neighbours for now
+        (True), or to take it back. The panel stays in the layout (§5.1)."""
+        if collapsed == self._collapsed:
+            return
+        self._collapsed = collapsed
+        self.collapsed_changed.emit(collapsed)

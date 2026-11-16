@@ -6,7 +6,7 @@ objects, so text, icon, shortcut and enabled state are set in one place.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, Slot
 from PySide6.QtGui import QAction, QIcon, QKeySequence
 
 from rzgitclient.core.repo_session import RepoSession
@@ -16,7 +16,8 @@ from rzgitclient.core.selection import FileSource, Selection
 class AppActions(QObject):
     """Holds the actions and their enabled state. Window-level handlers (the
     Open dialog, closing the window, resetting the layout, confirming a
-    discard) are connected by MainWindow."""
+    discard) are connected by MainWindow; Commit by the Commit panel, which
+    holds the message."""
 
     def __init__(self, session: RepoSession, selection: Selection,
                  parent: QObject | None = None):
@@ -41,16 +42,43 @@ class AppActions(QObject):
         self.discard = self._action("edit-undo", "&Discard Changes…", "Ctrl+Backspace")
         self.stage_all = self._action("list-add", "Stage &All", "Ctrl+Shift+S")
         self.unstage_all = self._action("list-remove", "U&nstage All", "Ctrl+Shift+U")
+        self.commit = self._action("vcs-commit", "&Commit", "Ctrl+Return")
+        self.commit.setShortcuts([QKeySequence("Ctrl+Return"), QKeySequence("Ctrl+Enter")])
+        self._commit_ready = False
 
         # triggered(bool) would land in refresh's `parts` argument.
         self.refresh.triggered.connect(lambda: session.refresh())
-        self.stage.triggered.connect(lambda: session.stage(self.selected(FileSource.WORKTREE)))
-        self.unstage.triggered.connect(lambda: session.unstage(self.selected(FileSource.INDEX)))
+        self.stage.triggered.connect(lambda: self.move(self.selected(FileSource.WORKTREE),
+                                                       FileSource.INDEX))
+        self.unstage.triggered.connect(lambda: self.move(self.selected(FileSource.INDEX),
+                                                         FileSource.WORKTREE))
         self.stage_all.triggered.connect(lambda: session.stage_all())
         self.unstage_all.triggered.connect(lambda: session.unstage_all())
         for signal in (session.repo_changed, session.status_changed, selection.files_changed):
             signal.connect(self._update_enabled)
         self._update_enabled()
+
+    def set_commit_ready(self, ready: bool) -> None:
+        """The Commit panel says whether its message can be committed now."""
+        self._commit_ready = ready
+        self._update_enabled()
+
+    @Slot()
+    def clear_commit_ready(self) -> None:
+        """Not ready: for the Commit panel's ``destroyed``. A bound slot, so Qt
+        drops the connection if these actions go first (at exit)."""
+        self.set_commit_ready(False)
+
+    def move(self, paths: tuple[str, ...], to: FileSource) -> None:
+        """Stage ``paths`` (``to`` the index) or unstage them, and have their new
+        rows selected once they arrive (spec §4.2)."""
+        if not paths:
+            return
+        self._selection.follow(paths, to)
+        if to is FileSource.INDEX:
+            self._session.stage(paths)
+        else:
+            self._session.unstage(paths)
 
     def selected(self, source: FileSource) -> tuple[str, ...]:
         """Paths of the selected rows from ``source`` (Stage, Unstage, Discard)."""
@@ -74,4 +102,6 @@ class AppActions(QObject):
         self.discard.setEnabled(worktree)
         self.unstage.setEnabled(bool(self.selected(FileSource.INDEX)))
         self.stage_all.setEnabled(any(f.has_unstaged or f.is_untracked for f in session.status))
-        self.unstage_all.setEnabled(any(f.is_staged for f in session.status))
+        staged = any(f.is_staged for f in session.status)
+        self.unstage_all.setEnabled(staged)
+        self.commit.setEnabled(staged and self._commit_ready and session.repo is not None)

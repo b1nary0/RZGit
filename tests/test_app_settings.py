@@ -65,5 +65,22 @@ class AppSettingsTests(unittest.TestCase):
         self.assertIsNone(self.settings.layout)
 
 
+    def test_commit_drafts_survive_a_reopen(self):
+        self.assertEqual(self.settings.commit_drafts, {})
+        self.settings.commit_drafts = {"/repos/one": "Fix the thing\n\nBecause"}
+        self.assertEqual(self.reopen().commit_drafts, {"/repos/one": "Fix the thing\n\nBecause"})
+        self.settings.commit_drafts = {}
+        self.assertEqual(self.reopen().commit_drafts, {})
+
+    def test_drafts_that_are_not_valid_are_ignored(self):
+        self.settings._settings.setValue("commit/drafts", "{not json")
+        with self.assertLogs("rzgitclient.core.app_settings", "WARNING"):
+            self.assertEqual(self.settings.commit_drafts, {})
+        self.settings._settings.setValue("commit/drafts", "[1, 2]")
+        self.assertEqual(self.settings.commit_drafts, {})
+        self.settings._settings.setValue("commit/drafts", '{"/a": 3, "/b": "ok"}')
+        self.assertEqual(self.settings.commit_drafts, {"/b": "ok"})
+
+
 if __name__ == "__main__":
     unittest.main()

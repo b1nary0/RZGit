@@ -646,5 +646,79 @@ class RepoSessionCommandTests(unittest.TestCase):
         self.assertFalse(self.session.busy)
 
 
+
+class RepoSessionCommitTests(unittest.TestCase):
+    """Committing, and how commands report back (spec §4.1)."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        self.session = RepoSession()
+        self.finished = []  # (command, ok)
+        self.session.command_finished.connect(lambda c, ok: self.finished.append((c, ok)))
+
+    def tearDown(self):
+        self.session.shutdown()
+        self._tmp.cleanup()
+
+    def open(self):
+        self.assertTrue(self.session.open(self.path))
+        wait_idle(self.session)
+        self.finished.clear()
+
+    def test_the_first_commit_updates_head_branches_history_status_and_count(self):
+        (self.path / "a.txt").write_text("a")
+        git(self.path, "add", "a.txt")
+        self.open()
+        self.assertEqual(self.session.branches, ())
+        rec = SignalRecorder(self.session, *ALL_SIGNALS)
+        command = self.session.commit("First")
+        wait_idle(self.session)
+        self.assertEqual([c.subject for c in self.session.history], ["First"])
+        self.assertEqual([b.name for b in self.session.branches], ["main"])
+        self.assertEqual(self.session.status, ())
+        self.assertEqual(self.session.commit_count, 1)
+        self.assertNotIn("error_occurred", rec.names())
+        self.assertEqual(self.finished, [(command, True)])
+
+    def test_a_failed_commit_reports_its_error_and_not_ok(self):
+        commit_file(self.path, "a.txt", "1", "first")
+        self.open()
+        rec = SignalRecorder(self.session, "error_occurred")
+        command = self.session.commit("Nothing staged")
+        wait_idle(self.session)
+        self.assertEqual(len(rec.events), 1)
+        self.assertEqual(self.finished, [(command, False)])
+        self.assertEqual(self.session.commit_count, 1)
+
+    def test_each_command_of_a_job_reports_in_order_and_those_after_a_failure_fail(self):
+        commit_file(self.path, "a.txt", "1", "first")
+        (self.path / "a.txt").write_text("2")
+        self.open()
+        self.session.refresh()  # the worker is busy, so the commands share the next job
+        commands = [self.session.stage(["a.txt"]), self.session.stage(["missing.txt"]),
+                    self.session.commit("Skipped")]
+        wait_idle(self.session)
+        self.assertEqual(self.finished, list(zip(commands, (True, False, False))))
+        self.assertEqual(self.session.commit_count, 1)
+
+    def test_commit_with_no_repo_does_nothing(self):
+        self.assertIsNone(self.session.commit("Nowhere"))
+        self.assertFalse(self.session.busy)
+
+    def test_a_closed_repo_s_command_reports_nothing(self):
+        (self.path / "a.txt").write_text("a")
+        git(self.path, "add", "a.txt")
+        self.open()
+        self.session.commit("First")
+        self.session.close()
+        wait_idle(self.session)
+        self.assertEqual(self.finished, [])
+
+
 if __name__ == "__main__":
     unittest.main()

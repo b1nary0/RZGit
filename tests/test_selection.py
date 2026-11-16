@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from rzgitclient.core.repo_session import RepoSession
-from rzgitclient.core.selection import FileSelection, FileSource, Selection
-from rzgitclient.git.git_models import Commit
+from rzgitclient.core.selection import FileSelection, FileSource, Selection, file_rows
+from rzgitclient.git.git_models import Commit, FileStatus
 from tests.support import SignalRecorder, make_repo, qt_app, wait_idle
 
 COMMIT = Commit("a" * 40, "Test User", datetime(2026, 1, 1, tzinfo=timezone.utc), "first")
@@ -70,6 +70,87 @@ class SelectionTests(unittest.TestCase):
     def test_clear_when_empty_emits_nothing(self):
         self.selection.clear()
         self.assertEqual(self.rec.events, [])
+
+
+W, I = FileSource.WORKTREE, FileSource.INDEX
+
+
+def status(*entries):
+    """FileStatus from "XY path" strings."""
+    return tuple(FileStatus(e[0], e[1], e[3:]) for e in entries)
+
+
+class FileRowsTests(unittest.TestCase):
+    def test_unstaged_and_untracked_rows_then_staged_rows(self):
+        rows = file_rows(status("MM a.txt", "?? new.txt", "A  b.txt", " D gone.txt"))
+        self.assertEqual(rows, [FileSelection("a.txt", W), FileSelection("new.txt", W),
+                                FileSelection("gone.txt", W),
+                                FileSelection("a.txt", I), FileSelection("b.txt", I)])
+
+
+class SelectionFollowsTheStatusTests(unittest.TestCase):
+    """What stays selected after a status change (spec §4.2)."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def setUp(self):
+        self.session = RepoSession()
+        self.selection = Selection(self.session)
+
+    def change(self, *entries):
+        self.session.status_changed.emit(status(*entries))
+
+    def selected(self):
+        return self.selection.files, self.selection.file
+
+    def test_a_row_that_is_still_there_stays(self):
+        a = FileSelection("a.txt", W)
+        self.selection.select([a], a)
+        rec = SignalRecorder(self.selection, "files_changed", "file_changed")
+        self.change(" M a.txt", "?? b.txt")
+        self.assertEqual(self.selected(), ((a,), a))
+        self.assertEqual(rec.events, [])
+
+    def test_a_row_moved_outside_the_app_takes_the_other_side(self):
+        self.selection.select([FileSelection("a.txt", W)], FileSelection("a.txt", W))
+        self.change("M  a.txt")
+        self.assertEqual(self.selected(), ((FileSelection("a.txt", I),), FileSelection("a.txt", I)))
+
+    def test_a_row_that_is_gone_is_dropped(self):
+        a, b = FileSelection("a.txt", W), FileSelection("b.txt", W)
+        self.selection.select([a, b], b)
+        self.change(" M a.txt")
+        self.assertEqual(self.selected(), ((a,), None))
+
+    def test_follow_waits_for_a_status_with_the_new_row(self):
+        a = FileSelection("a.txt", W)
+        self.selection.select([a], a)
+        self.selection.follow(["a.txt"], I)
+        self.change(" M a.txt")  # an older refresh: not staged yet
+        self.assertEqual(self.selected(), ((a,), a))
+        self.change("MM a.txt")  # staged, with changes left: still follows
+        self.assertEqual(self.selected(), ((FileSelection("a.txt", I),), FileSelection("a.txt", I)))
+        self.change("MM a.txt")
+        self.assertEqual(self.selection.file, FileSelection("a.txt", I))  # done following
+
+    def test_selecting_cancels_the_follow(self):
+        a, b = FileSelection("a.txt", W), FileSelection("b.txt", W)
+        self.selection.select([a], a)
+        self.selection.follow(["a.txt"], I)
+        self.selection.select([b], b)
+        self.selection.select([a], a)
+        self.change("MM a.txt", "?? b.txt")
+        self.assertEqual(self.selection.file, a)
+
+    def test_several_rows_follow_in_list_order(self):
+        x, y = FileSelection("x.txt", W), FileSelection("y.txt", W)
+        self.selection.select([y, x], y)
+        self.selection.follow(["x.txt", "y.txt"], I)
+        self.change("A  x.txt", "A  y.txt")
+        self.assertEqual(self.selected(), ((FileSelection("x.txt", I), FileSelection("y.txt", I)),
+                                           FileSelection("y.txt", I)))
 
 
 if __name__ == "__main__":

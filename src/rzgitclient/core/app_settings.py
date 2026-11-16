@@ -19,6 +19,7 @@ _LAST_REPO = "last_repo"
 _LAYOUT = "layout"
 _WINDOW_GEOMETRY = "window/geometry"
 _SIDE_BY_SIDE_DIFF = "diff/side_by_side"
+_COMMIT_DRAFTS = "commit/drafts"
 
 
 class AppSettings:
@@ -71,6 +72,23 @@ class AppSettings:
     @side_by_side_diff.setter
     def side_by_side_diff(self, on: bool) -> None:
         self._set(_SIDE_BY_SIDE_DIFF, bool(on))
+
+    @property
+    def commit_drafts(self) -> dict[str, str]:
+        """Unfinished commit messages by repository root ({} if none, or not valid)."""
+        raw = self._settings.value(_COMMIT_DRAFTS, "", str)
+        try:
+            data = json.loads(raw) if raw else {}
+        except ValueError as exc:
+            log.warning("Saved commit drafts aren't valid JSON (%s); ignoring them", exc)
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
+
+    @commit_drafts.setter
+    def commit_drafts(self, drafts: dict[str, str]) -> None:
+        self._set(_COMMIT_DRAFTS, json.dumps(drafts) if drafts else None)
 
     def sync(self) -> None:
         """Write pending changes to disk now (Qt also does this on exit)."""

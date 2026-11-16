@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,13 +22,15 @@ from rzgitclient.ui.layout.layout_model import (
     insert_panel,
     normalize,
     panel_ids,
+    remove_panel,
 )
 
 log = logging.getLogger(__name__)
 
 H, V = Orientation.HORIZONTAL, Orientation.VERTICAL
 BRANCHES, FILES, HISTORY = PanelNode("branches"), PanelNode("files"), PanelNode("history")
-CONTROLS, DIFF = PanelNode("controls"), PanelNode("diff")
+CONTROLS, DIFF, COMMIT = PanelNode("controls"), PanelNode("diff"), PanelNode("commit")
+STAGED = PanelNode("staged")
 # History and the diff of the selected file share one tab group in every preset.
 CONTENT = TabsNode((HISTORY, DIFF))
 
@@ -42,26 +46,43 @@ def _below_controls(root: LayoutNode) -> SplitNode:
     return SplitNode(V, (CONTROLS, root))
 
 
-# Branches above Files in a left sidebar; History and Diff on the right.
-DEFAULT_LAYOUT = _below_controls(
-    SplitNode(H, (SplitNode(V, (BRANCHES, FILES), sizes=(300, 400)), CONTENT), sizes=(220, 880))
-)
+# In every preset Staged Files and Commit are directly below (Unstaged) Files,
+# as in GitKraken. Standard: Branches, Unstaged Files, Staged Files and Commit
+# stacked in a left sidebar; History and Diff on the right.
+DEFAULT_LAYOUT = _below_controls(SplitNode(
+    H, (SplitNode(V, (BRANCHES, FILES, STAGED, COMMIT), sizes=(200, 220, 120, 160)), CONTENT),
+    sizes=(220, 880)))
 
 PRESETS = (
     Preset("Standard", DEFAULT_LAYOUT),
-    # Branches and Files as tabs, each with the sidebar's full height.
-    Preset("Sidebar Tabs", _below_controls(
-        SplitNode(H, (TabsNode((BRANCHES, FILES)), CONTENT), sizes=(220, 880)))),
-    # History and Diff across the top; Branches and Files side by side below.
-    Preset("Stacked", _below_controls(
-        SplitNode(V, (CONTENT, SplitNode(H, (BRANCHES, FILES), sizes=(400, 700))),
-                  sizes=(450, 250)))),
+    # Branches and Unstaged Files as tabs, above Staged Files and Commit.
+    Preset("Sidebar Tabs", _below_controls(SplitNode(H, (
+        SplitNode(V, (TabsNode((BRANCHES, FILES)), STAGED, COMMIT), sizes=(330, 120, 160)),
+        CONTENT), sizes=(220, 880)))),
+    # History and Diff across the top; below, Branches beside Unstaged Files,
+    # with Staged Files and Commit below it.
+    Preset("Stacked", _below_controls(SplitNode(V, (
+        CONTENT,
+        SplitNode(H, (BRANCHES, SplitNode(V, (FILES, STAGED, COMMIT), sizes=(120, 90, 160))),
+                  sizes=(400, 700))),
+        sizes=(240, 370)))),
 )
 
 
-def default_anchor(panel_id: str) -> Anchor | None:
-    """Where ``panel_id`` sits in ``DEFAULT_LAYOUT``: the fallback place to show it."""
-    return anchor_of(DEFAULT_LAYOUT, panel_id)
+def default_anchor(panel_id: str, shown: Collection[str] | None = None) -> Anchor | None:
+    """Where ``panel_id`` sits in ``DEFAULT_LAYOUT``: the fallback place to show it.
+
+    With ``shown``, the panels on screen, its place among those only: so Files
+    shown while Commit is hidden goes below Branches, not next to the missing
+    Commit (and two panels new in a version, such as Files and Commit, still
+    land together).
+    """
+    reference: LayoutNode | None = DEFAULT_LAYOUT
+    if shown is not None:
+        for other in panel_ids(DEFAULT_LAYOUT):
+            if other != panel_id and other not in shown and reference is not None:
+                reference = remove_panel(reference, other)[0]
+    return anchor_of(reference, panel_id) if reference is not None else None
 
 
 def restore_layout(saved: Any) -> LayoutState:
@@ -86,8 +107,40 @@ def restore_layout(saved: Any) -> LayoutState:
         return LayoutState(DEFAULT_LAYOUT)
     shown = set(panel_ids(root))
     hidden = {pid: a for pid, a in state.hidden.items() if pid in known and pid not in shown}
+    new = {pid for pid in known if pid not in shown and pid not in hidden}
     for pid in known:
-        if pid not in shown and pid not in hidden:  # added in a newer version
+        if pid in new:  # added in a newer version
+            anchor = default_anchor(pid, panel_ids(root))
             # The tab the user had current stays current.
-            root = insert_panel(root, pid, default_anchor(pid), make_current=False)
-    return LayoutState(root, hidden)
+            root = insert_panel(root, pid, anchor, default_anchor(pid), make_current=False)
+    return LayoutState(_default_sizes(root, new) if new else root, hidden)
+
+
+def _default_sizes(node: LayoutNode, new: set[str]) -> LayoutNode:
+    """``node`` where each split that gained one of the ``new`` panels, and now
+    holds the same panes as a split of a preset, takes that split's sizes: several new panels side by side (Staged Files and Commit) would
+    otherwise each take a share of the last one's space, and end up tiny."""
+    if not isinstance(node, SplitNode):
+        return node
+    node = dataclasses.replace(node, children=tuple(_default_sizes(c, new) for c in node.children))
+    if any(isinstance(c, PanelNode) and c.panel_id in new for c in node.children):
+        for split in (s for preset in PRESETS for s in _splits(preset.root)):
+            if _shape(split) == _shape(node):
+                return dataclasses.replace(node, sizes=split.sizes)
+    return node
+
+
+def _splits(node: LayoutNode) -> list[SplitNode]:
+    if not isinstance(node, SplitNode):
+        return []
+    return [node, *(s for c in node.children for s in _splits(c))]
+
+
+def _shape(node: LayoutNode) -> object:
+    """``node`` without its sizes or current tab."""
+    match node:
+        case SplitNode():
+            return node.orientation, tuple(_shape(c) for c in node.children)
+        case TabsNode():
+            return "tabs", tuple(c.panel_id for c in node.children)
+    return node

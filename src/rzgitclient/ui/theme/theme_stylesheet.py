@@ -105,6 +105,10 @@ QPushButton:default {
     background: $accent;
     color: $accent_text;
 }
+QPushButton:default:disabled {
+    background: $button_bg;
+    color: $text_muted;
+}
 
 /* ---- text inputs ---------------------------------------------------- */
 QLineEdit, QTextEdit, QPlainTextEdit {
@@ -155,6 +159,12 @@ QWidget[surface="content"] {
 }
 QLabel[role="placeholder"] {
     color: $text_muted;
+}
+QLabel[role="hint"] {
+    color: $text_muted;
+}
+QLabel[role="hint-warning"] {
+    color: $warning;
 }
 QLabel[role="section-header"] {
     font-weight: bold;

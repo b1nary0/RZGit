@@ -103,7 +103,9 @@ class SignalRecorder:
 
 
 def make_panel_context() -> PanelContext:
-    """A PanelContext with a fresh session (no repo open) and the light theme."""
+    """A PanelContext with a fresh session (no repo open), the light theme and
+    commit drafts kept in memory."""
+    from rzgitclient.core.commit_drafts import CommitDrafts
     from rzgitclient.core.repo_session import RepoSession
     from rzgitclient.core.selection import Selection
     from rzgitclient.ui.app_actions import AppActions
@@ -118,4 +120,5 @@ def make_panel_context() -> PanelContext:
         selection=selection,
         theme=ThemeManager(qt_app(), LIGHT_THEME),
         actions=AppActions(session, selection),
+        drafts=CommitDrafts(),
     )
