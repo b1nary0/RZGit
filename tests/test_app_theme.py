@@ -5,7 +5,7 @@ import unittest
 from PySide6.QtGui import QColor, QFont, QPalette
 
 from rzgitclient.ui.theme.app_theme import (DARK_CB_THEME, DARK_THEME, LIGHT_CB_THEME,
-                                            LIGHT_THEME, colour_blind_theme)
+                                            LIGHT_THEME, FontKind, colour_blind_theme)
 from rzgitclient.ui.theme.style_roles import Role, Surface
 from rzgitclient.ui.theme.theme_stylesheet import template_values
 from tests.colour_vision import VISIONS, contrast, delta_e, min_delta_e
@@ -73,9 +73,19 @@ class AppThemeTests(unittest.TestCase):
                 self.assertLess(contrast(plain, selected), 1.6, (theme.name, selected))
                 self.assertGreaterEqual(contrast(c.text, selected), 4.5, (theme.name, selected))
 
+    def test_every_kind_of_text_is_the_default_size_unless_overridden(self):
+        for theme in THEMES + (LIGHT_CB_THEME, DARK_CB_THEME):
+            self.assertEqual({theme.fonts.point_size(k) for k in FontKind}, {10}, theme.name)
+        fonts = dataclasses.replace(LIGHT_THEME.fonts, default_point_size=11, tab_point_size=7)
+        self.assertEqual(fonts.point_size(FontKind.TAB), 7)
+        self.assertEqual({fonts.point_size(k) for k in FontKind if k is not FontKind.TAB}, {11})
+        big = dataclasses.replace(LIGHT_THEME, fonts=fonts)
+        self.assertIn("font-size: 11pt;", big.stylesheet())  # the section header follows
+        self.assertEqual(big.mono_font().pointSizeF(), 11)
+
     def test_float_values_render_cleanly(self):
         # 8.0 must come out as "8pt", the same as the original hand-written QSS.
-        self.assertIn("font-size: 8pt;", LIGHT_THEME.stylesheet())
+        self.assertIn("font-size: 10pt;", LIGHT_THEME.stylesheet())  # not "10.0pt"
         self.assertIsNone(re.search(r"\d\.0(pt|px)", LIGHT_THEME.stylesheet()))
 
     def test_status_for_code(self):
@@ -111,7 +121,7 @@ class AppThemeTests(unittest.TestCase):
         )
         font = LIGHT_THEME.mono_font()
         self.assertEqual(font.styleHint(), QFont.StyleHint.Monospace)
-        self.assertEqual(font.pointSizeF(), LIGHT_THEME.fonts.ui_point_size)
+        self.assertEqual(font.pointSizeF(), LIGHT_THEME.fonts.point_size(FontKind.MONO))
 
 
 # The colour tokens a colour-blind variant changes (spec §7.1); every other is its base's.

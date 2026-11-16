@@ -1137,7 +1137,11 @@ class ThemeColors:   menubar_bg: str; toolbar_bg: str; tab_bg: str; header_bg: s
 class StatusColors:  modified, added, deleted, renamed, copied, type_changed, conflict, untracked: str
                      def for_code(self, code: str) -> str | None   # porcelain letter → colour; None if unknown
 @dataclass(frozen=True)
-class ThemeFonts:    ui_point_size: float = 9; mono_family: str = "monospace"; header_point_size: float = 8
+class ThemeFonts:    default_point_size: float = 10; mono_family: str = "monospace"
+                     ui_point_size, menu_point_size, status_bar_point_size, list_point_size,
+                     column_header_point_size, tab_point_size, tooltip_point_size,
+                     section_header_point_size, mono_point_size: float | None = None
+                     def point_size(self, kind: FontKind) -> float   # its own size, else the default
 @dataclass(frozen=True)
 class ThemeMetrics:  splitter_width: int = 1; scrollbar_width: int = 10; row_padding: int = 2; row_min_height: int = 18
 
@@ -1157,6 +1161,13 @@ DARK_CB_THEME = dataclasses.replace(DARK_THEME, ...)
 def colour_blind_theme(base: AppTheme) -> AppTheme   # LIGHT_THEME → LIGHT_CB_THEME, …
 ```
 
+- **Font sizes:** each kind of text (`FontKind`: `UI` for buttons, labels, fields and text
+  boxes; `MENU`, `STATUS_BAR`, `LIST` for item views, `COLUMN_HEADER`, `TAB`, `TOOLTIP`,
+  `SECTION_HEADER` and `MONO` for the diff and SHAs) has its own size field. `None` means
+  `default_point_size` (10 pt); a theme sets a field only to override that kind. No theme
+  overrides any yet, so the whole app is 10 pt (RZG-39). The family is the desktop's,
+  except `MONO` (`mono_family`). The stylesheet gets the resolved sizes
+  (`$section_header_point_size`), and `mono_font()` uses `MONO`'s.
 - **Two base themes:** `LIGHT_THEME` and `DARK_THEME`. Both set every token; neither derives
   from the other. `dark` tells Qt which colour scheme the theme is, so Fusion's own
   drawing (frames, arrows) and native dialogs match it.
@@ -1206,7 +1217,8 @@ per-row data, which Qt's stylesheet can't target, so panels set them from the th
 ### 7.3 ThemeManager
 
 `ThemeManager(QObject)` (`theme_manager.py`) holds `current` and is the **only** caller of
-`QApplication.setStyle`, `setPalette`, `setStyleSheet` and `QStyleHints.setColorScheme`. It
+`QApplication.setStyle`, `setPalette`, `setFont`, `setStyleSheet` and
+`QStyleHints.setColorScheme`. It
 applies its first theme when it's created. `set_theme(t)` applies a new theme and emits
 `theme_changed(t)`, but does nothing if `t` equals the current theme. The stylesheet
 repaints itself; panels refresh any colours they set in code in `apply_theme`.
@@ -1224,6 +1236,18 @@ what settings store). `set_mode(m)` picks the theme for it; `mode` is the curren
 mode picks the base theme and the flag picks its variant (`colour_blind_theme(base)`, §7.1).
 `set_colour_blind(on)` switches live, and `ThemeManager(app, mode=m, colour_blind=b)` starts
 with it.
+
+**Fonts:** the desktop gives some widget types their own font (Qt's per-class fonts: item
+views, menus, the status bar, labels, buttons, …). Qt fills those in lazily, the first time
+one is asked for, and drops them whenever the application font is set again, so before
+RZG-39 the lists were the desktop's size at startup and the theme's after any switch.
+`ThemeManager` therefore sets the application font (`UI`) and then an explicit font for
+every per-class key Qt's platform themes use, each at its kind's size, on every apply,
+after the stylesheet: setting a stylesheet makes Qt fill the desktop's per-class fonts in
+again (that left the Controls panel's tool buttons at the desktop's 9 pt).
+If the desktop's fonts change later (Qt sends the application an `ApplicationFontChange`
+or `ThemeChange`), it applies them again when they no longer match. Widgets that set their
+own font (the diff view, SHAs) take theirs from the theme in `apply_theme`.
 
 **Performance rule:** one stylesheet for the whole app, never per-widget `setStyleSheet`.
 Per-widget sheets are slow to apply and scatter the rules.

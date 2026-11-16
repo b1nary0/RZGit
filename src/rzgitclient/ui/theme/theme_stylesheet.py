@@ -169,7 +169,7 @@ QLabel[role="hint-warning"] {
 QLabel[role="section-header"] {
     background: $header_bg;
     font-weight: bold;
-    font-size: ${header_point_size}pt;
+    font-size: ${section_header_point_size}pt;
     padding: 7px 8px 4px 8px;
 }
 
@@ -300,10 +300,14 @@ def template_values(theme: AppTheme) -> dict[str, str]:
 
     Field names must be unique across the three groups (checked by a test).
     """
+    from rzgitclient.ui.theme.app_theme import FontKind  # app_theme imports this module
+
     values: dict[str, str] = {}
     for group in (theme.colors, theme.fonts, theme.metrics):
         for name, value in asdict(group).items():
             values[name] = format(value, "g") if isinstance(value, float) else str(value)
+    for kind in FontKind:  # the size each kind resolves to, not None
+        values[f"{kind.value}_point_size"] = format(theme.fonts.point_size(kind), "g")
     return values
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from PySide6.QtGui import QColor, QFont, QPalette
 
@@ -91,11 +92,40 @@ _STATUS_CODES = {
 }
 
 
+class FontKind(StrEnum):
+    """A kind of text with its own size; the value names its ThemeFonts field."""
+
+    UI = "ui"  # buttons, labels, fields, text boxes: the application font
+    MENU = "menu"
+    STATUS_BAR = "status_bar"
+    LIST = "list"  # item views: History, the file lists, Branches
+    COLUMN_HEADER = "column_header"
+    TAB = "tab"
+    TOOLTIP = "tooltip"
+    SECTION_HEADER = "section_header"
+    MONO = "mono"  # the diff, SHAs
+
+
 @dataclass(frozen=True)
 class ThemeFonts:
-    ui_point_size: float = 9
+    """Point sizes per kind of text: None is ``default_point_size``; a theme sets one
+    only to override that kind."""
+
+    default_point_size: float = 10
     mono_family: str = "monospace"
-    header_point_size: float = 8
+    ui_point_size: float | None = None
+    menu_point_size: float | None = None
+    status_bar_point_size: float | None = None
+    list_point_size: float | None = None
+    column_header_point_size: float | None = None
+    tab_point_size: float | None = None
+    tooltip_point_size: float | None = None
+    section_header_point_size: float | None = None
+    mono_point_size: float | None = None
+
+    def point_size(self, kind: FontKind) -> float:
+        size = getattr(self, f"{kind.value}_point_size")
+        return self.default_point_size if size is None else size
 
 
 @dataclass(frozen=True)
@@ -163,7 +193,7 @@ class AppTheme:
     def mono_font(self) -> QFont:
         font = QFont(self.fonts.mono_family)
         font.setStyleHint(QFont.StyleHint.Monospace)
-        font.setPointSizeF(self.fonts.ui_point_size)
+        font.setPointSizeF(self.fonts.point_size(FontKind.MONO))
         return font
 
 

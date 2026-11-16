@@ -1,18 +1,35 @@
 """Holds the current AppTheme and applies it to the application (spec §7.3).
 
 ThemeManager is the only code that calls QApplication.setStyle, setPalette,
-setStyleSheet or QStyleHints.setColorScheme.
+setFont, setStyleSheet or QStyleHints.setColorScheme.
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
-from rzgitclient.ui.theme.app_theme import (DARK_THEME, LIGHT_THEME, AppTheme,
+from rzgitclient.ui.theme.app_theme import (DARK_THEME, LIGHT_THEME, AppTheme, FontKind,
                                             colour_blind_theme)
+
+# The per-class font keys Qt's platform themes fill in (QApplication.font(className)),
+# by the kind of text each is. Each gets an explicit font, so the desktop's sizes for
+# them never show (spec §7.3, RZG-39).
+QT_FONT_CLASSES: dict[FontKind, tuple[str, ...]] = {
+    FontKind.UI: ("QLabel", "QPushButton", "QCheckBox", "QRadioButton", "QToolButton",
+                  "QComboBox", "QComboLineEdit", "QLineEdit", "QTextEdit", "QPlainTextEdit",
+                  "QGroupBox", "QMessageBox", "QDockWidgetTitle", "QMdiSubWindowTitleBar",
+                  "QSmallFont", "QMiniFont"),
+    FontKind.MENU: ("QMenuBar", "QMenu", "QMenuItem", "QComboMenuItem"),
+    FontKind.STATUS_BAR: ("QStatusBar",),
+    FontKind.LIST: ("QAbstractItemView", "QListView", "QTreeView", "QListBox"),
+    FontKind.COLUMN_HEADER: ("QHeaderView",),
+    FontKind.TAB: ("QTabBar",),
+    FontKind.TOOLTIP: ("QTipLabel",),
+}
 
 
 class ThemeMode(StrEnum):
@@ -38,6 +55,8 @@ class ThemeManager(QObject):
         # style (e.g. Breeze) would fight the custom look.
         app.setStyle("Fusion")
         self._hints.colorSchemeChanged.connect(self._on_color_scheme_changed)
+        # The desktop's fonts changed (or Qt filled its own in): put the theme's back.
+        app.fontChanged.connect(self._on_font_changed)
         self._mode = ThemeMode.DARK if theme.dark else ThemeMode.LIGHT
         self._colour_blind = colour_blind
         self._current = self._variant(theme)
@@ -92,6 +111,7 @@ class ThemeManager(QObject):
     def _on_color_scheme_changed(self, scheme: Qt.ColorScheme) -> None:
         if self._mode is ThemeMode.SYSTEM:
             self.set_theme(self._theme_for_scheme(scheme))
+        QTimer.singleShot(0, self._check_fonts)
 
     def _set_color_scheme(self, theme: AppTheme) -> None:
         # In SYSTEM mode the scheme stays unset, or the desktop's changes
@@ -103,7 +123,37 @@ class ThemeManager(QObject):
     def _apply(self, theme: AppTheme) -> None:
         self._set_color_scheme(theme)
         self._app.setPalette(theme.palette())
-        font = self._app.font()
-        font.setPointSizeF(theme.fonts.ui_point_size)
-        self._app.setFont(font)
         self._app.setStyleSheet(theme.stylesheet())
+        # Last: a new stylesheet makes Qt fill its per-class fonts in from the desktop again.
+        self._apply_fonts(theme)
+
+    def _font(self, theme: AppTheme, kind: FontKind) -> QFont:
+        """The application font's family at ``kind``'s size."""
+        font = QFont(self._app.font())
+        font.setPointSizeF(theme.fonts.point_size(kind))
+        return font
+
+    def _apply_fonts(self, theme: AppTheme | None = None) -> None:
+        """The UI size as the application font, then every per-class key at its kind's
+        size. Setting the application font drops Qt's per-class fonts, so they go after."""
+        theme = theme or self._current
+        self._app.setFont(self._font(theme, FontKind.UI))
+        for kind, classes in QT_FONT_CLASSES.items():
+            font = self._font(theme, kind)
+            for name in classes:
+                self._app.setFont(font, name)
+
+    def fonts_match(self) -> bool:
+        """Every per-class font, and the application's, has its kind's size."""
+        fonts = self._current.fonts
+        if self._app.font().pointSizeF() != fonts.point_size(FontKind.UI):
+            return False
+        return all(self._app.font(name).pointSizeF() == fonts.point_size(kind)
+                   for kind, classes in QT_FONT_CLASSES.items() for name in classes)
+
+    def _on_font_changed(self, _font: QFont) -> None:
+        QTimer.singleShot(0, self._check_fonts)  # after Qt has finished changing them
+
+    def _check_fonts(self) -> None:
+        if not self.fonts_match():
+            self._apply_fonts()
