@@ -64,6 +64,9 @@ QToolBar {
     padding: 3px 6px;
     spacing: 2px;
 }
+QWidget[surface="chrome"] {
+    background: $toolbar_bg;
+}
 QToolBar::separator {
     background: $border;
     width: 1px;

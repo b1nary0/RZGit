@@ -19,8 +19,9 @@ H, V = Orientation.HORIZONTAL, Orientation.VERTICAL
 # A user's layout: the same panels as the default, arranged differently.
 CUSTOM = SplitNode(
     V,
-    (PanelNode("history"), TabsNode((PanelNode("branches"), PanelNode("files")), current=1)),
-    sizes=(500, 200),
+    (PanelNode("controls"), PanelNode("history"),
+     TabsNode((PanelNode("branches"), PanelNode("files")), current=1)),
+    sizes=(30, 500, 200),
 )
 
 
@@ -61,13 +62,17 @@ class RestoreLayoutTests(unittest.TestCase):
                          LayoutState(rest, {"files": anchor}))
 
     def test_a_panel_new_in_this_version_goes_to_its_default_place(self):
-        # Saved by a version without the Files panel: the user's arrangement is kept.
+        # Saved by a version without the Files and Controls panels: the user's
+        # arrangement is kept, Files joins Branches, Controls goes across the top.
         older = SplitNode(H, (PanelNode("branches"), PanelNode("history")), sizes=(100, 500))
         restored = restore_layout(saved(older))
-        self.assertEqual(restored.root, SplitNode(H, (
-            SplitNode(V, (PanelNode("branches"), PanelNode("files")), sizes=(429, 571)),
-            PanelNode("history"),
-        ), sizes=(100, 500)))
+        self.assertEqual(restored.root, SplitNode(V, (
+            PanelNode("controls"),
+            SplitNode(H, (
+                SplitNode(V, (PanelNode("branches"), PanelNode("files")), sizes=(429, 571)),
+                PanelNode("history"),
+            ), sizes=(100, 500)),
+        )))
         self.assertEqual(restored.hidden, {})
 
     def test_version_1_files_load(self):
@@ -75,10 +80,10 @@ class RestoreLayoutTests(unittest.TestCase):
                          LayoutState(CUSTOM))
 
     def test_panel_this_version_no_longer_has_is_dropped(self):
-        newer = SplitNode(V, (*CUSTOM.children, PanelNode("retired")), sizes=(400, 200, 100))
+        newer = SplitNode(V, (*CUSTOM.children, PanelNode("retired")), sizes=(30, 400, 200, 100))
         retired_anchor = Anchor(("history",), V, True)
         restored = restore_layout(saved(newer, {"gone": retired_anchor}))
-        self.assertEqual(sorted(panel_ids(restored.root)), ["branches", "files", "history"])
+        self.assertEqual(sorted(panel_ids(restored.root)), ["branches", "controls", "files", "history"])
         self.assertIsNone(restored.root.sizes)  # children changed, so sizes no longer fit
         self.assertEqual(restored.hidden, {})
 

@@ -12,7 +12,8 @@ from rzgitclient.ui.widgets.section_header import SectionHeader
 class PanelFrame(QWidget):
     """Section header above the panel, on the panel's surface.
 
-    The header follows the panel's ``header`` text. The frame is layout chrome:
+    The header follows the panel's ``header`` text, and is hidden for a panel
+    with ``show_header = False``. The frame is layout chrome:
     the panel stays unaware of it (contract rule 5).
     """
 
@@ -22,6 +23,7 @@ class PanelFrame(QWidget):
         set_surface(self, panel.surface)
 
         self.header = SectionHeader(panel.header)
+        self.header.setVisible(panel.show_header)
         panel.header_changed.connect(self.header.set_title)
 
         layout = QVBoxLayout(self)

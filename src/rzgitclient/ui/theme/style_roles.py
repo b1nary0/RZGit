@@ -21,6 +21,7 @@ class Surface(StrEnum):
 
     SIDEBAR = "sidebar"
     CONTENT = "content"
+    CHROME = "chrome"  # the bar of controls across the top
 
 
 class Role(StrEnum):

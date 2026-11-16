@@ -48,13 +48,21 @@ class LayoutHostTests(unittest.TestCase):
     def root(self):
         return self.host.layout().itemAt(0).widget()
 
+    def body(self):
+        """What's below the Controls bar, which every layout gets (§6.6)."""
+        root = self.root()
+        self.assertIs(root.widget(0).panel, self.host.panels["controls"])
+        return root.widget(1)
+
     # ---- building -------------------------------------------------------
 
     def test_builds_the_default_layout(self):
         self.host.apply(DEFAULT_LAYOUT)
-        self.assertEqual(set(self.host.panels), {"branches", "files", "history"})
+        self.assertEqual(set(self.host.panels), {"controls", "branches", "files", "history"})
 
-        root = self.root()
+        top = self.root()
+        self.assertEqual(top.orientation(), Qt.Orientation.Vertical)
+        root = self.body()
         self.assertIsInstance(root, QSplitter)
         self.assertEqual(root.orientation(), Qt.Orientation.Horizontal)
         self.assertFalse(root.childrenCollapsible())
@@ -69,7 +77,7 @@ class LayoutHostTests(unittest.TestCase):
 
     def test_tabs_use_the_panel_header_and_follow_it(self):
         self.host.apply(TABS)
-        tabs = self.root()
+        tabs = self.body()
         self.assertIsInstance(tabs, QTabWidget)
         self.assertEqual([tabs.tabText(i) for i in range(2)], ["History", "Files"])
         self.assertEqual(tabs.currentIndex(), 1)
@@ -78,10 +86,10 @@ class LayoutHostTests(unittest.TestCase):
 
     def test_unknown_panels_are_dropped_and_empty_tree_shows_nothing(self):
         self.host.apply(SplitNode(H, (PanelNode("history"), PanelNode("nope"))))
-        self.assertEqual(set(self.host.panels), {"history"})
-        self.assertIsInstance(self.root(), PanelFrame)  # single-child split collapsed
+        self.assertEqual(set(self.host.panels), {"controls", "history"})
+        self.assertIsInstance(self.body(), PanelFrame)  # single-child split collapsed
 
-        self.host.apply(PanelNode("nope"))
+        self.host.apply(PanelNode("nope"))  # nothing left: not even the Controls bar
         self.assertEqual(dict(self.host.panels), {})
         self.assertIsNone(self.host.current_layout())
         self.assertEqual(self.host.layout().count(), 0)
@@ -147,28 +155,51 @@ class LayoutHostTests(unittest.TestCase):
         self.show()
         self.host.hide_panel("files")
         flush_deletes()
-        self.assertEqual(set(self.host.panels), {"branches", "history"})
+        self.assertEqual(set(self.host.panels), {"controls", "branches", "history"})
         self.assertEqual(set(self.host.hidden), {"files"})
         self.assertEqual(self.host.state().hidden, self.host.hidden)
 
         self.host.show_panel("files")
         self.assertEqual(self.host.hidden, {})
-        sidebar = self.root().widget(0)
+        sidebar = self.body().widget(0)
         self.assertEqual([sidebar.widget(i).panel.panel_id for i in range(2)], ["branches", "files"])
         self.assertEqual(len(changes), 3)  # apply, hide, show
 
     def test_the_last_panel_can_not_be_hidden(self):
         self.host.apply(PanelNode("history"))
+        self.assertFalse(self.host.can_hide("history"))  # Controls doesn't count
         self.host.hide_panel("history")
-        self.assertEqual(set(self.host.panels), {"history"})
+        self.assertEqual(set(self.host.panels), {"controls", "history"})
         self.host.hide_panel("nope")  # not shown: nothing happens
         self.assertEqual(self.host.hidden, {})
+
+    def test_an_always_shown_panel_can_not_be_hidden_or_left_out(self):
+        self.host.apply(DEFAULT_LAYOUT)
+        self.assertFalse(self.host.can_hide("controls"))
+        self.host.hide_panel("controls")
+        self.assertIn("controls", self.host.panels)
+        _, anchor = remove_panel(DEFAULT_LAYOUT, "controls")
+        self.host.apply_state(LayoutState(DEFAULT_LAYOUT.children[1], {"controls": anchor}))
+        self.assertIn("controls", self.host.panels)  # put back, at its default place
+        self.assertEqual(self.host.hidden, {})
+
+    def test_controls_bar_has_no_header_and_a_fixed_height(self):
+        self.host.apply(DEFAULT_LAYOUT)
+        self.show()
+        top = self.root()
+        bar = top.widget(0)
+        self.assertFalse(bar.header.isVisible())
+        self.assertEqual(bar.minimumHeight(), bar.maximumHeight())
+        self.assertFalse(top.handle(1).isEnabled())  # its divider can't be dragged
+        top.setSizes([300, 299])
+        self.assertEqual(top.sizes()[0], bar.maximumHeight())
+        self.assertTrue(self.body().widget(0).widget(0).header.isVisible())  # others keep theirs
 
     def test_a_panel_hidden_without_an_anchor_goes_to_its_default_place(self):
         self.host.apply(SplitNode(H, (PanelNode("branches"), PanelNode("history"))))
         self.host.show_panel("files")  # never hidden, e.g. new in this version
-        self.assertEqual(self.root().widget(0).orientation(), Qt.Orientation.Vertical)
-        self.assertEqual(set(self.host.panels), {"branches", "files", "history"})
+        self.assertEqual(self.body().widget(0).orientation(), Qt.Orientation.Vertical)
+        self.assertEqual(set(self.host.panels), {"controls", "branches", "files", "history"})
 
     def test_apply_keeps_hidden_only_for_panels_not_shown(self):
         _, anchor = remove_panel(DEFAULT_LAYOUT, "files")
@@ -185,12 +216,14 @@ class LayoutHostTests(unittest.TestCase):
         tree = SplitNode(H, (PanelNode("branches"), TABS), sizes=(200, 599))
         self.host.apply(tree)
         self.show()
-        splitter, tabs = self.root(), self.root().widget(1)
+        splitter = self.body()
+        tabs = splitter.widget(1)
         splitter.setSizes([300, 499])
         tabs.setCurrentIndex(0)
 
         read = self.host.current_layout()
-        self.assertEqual(read, SplitNode(
+        self.assertEqual(read.children[0], PanelNode("controls"))
+        self.assertEqual(read.children[1], SplitNode(
             H, (PanelNode("branches"), TabsNode(TABS.children, current=0)), sizes=(300, 499)
         ))
 
@@ -208,7 +241,8 @@ class LayoutHostTests(unittest.TestCase):
             if isinstance(n, SplitNode) else n
         )
         self.assertEqual(strip(read), strip(DEFAULT_LAYOUT))
-        self.assertEqual(sum(read.sizes) + 1, 800)  # the 1px divider takes the rest
+        self.assertEqual(sum(read.children[1].sizes) + 1, 800)  # the 1px divider takes the rest
+        self.assertEqual(sum(read.sizes) + 1, 600)
 
 
 if __name__ == "__main__":

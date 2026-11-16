@@ -37,5 +37,6 @@ class PanelsMenu(QMenu):
         shown = self._host.panels
         for panel_id, action in self._actions.items():
             action.setChecked(panel_id in shown)
-            # The last visible panel can't be hidden.
-            action.setEnabled(not (panel_id in shown and len(shown) == 1))
+            # Hidden panels can be shown; shown ones only if the host may hide them
+            # (not always shown, not the last one).
+            action.setEnabled(panel_id not in shown or self._host.can_hide(panel_id))

@@ -47,6 +47,9 @@ class Panel(QWidget):
     panel_id: ClassVar[str]  # stable, saved in layouts: "history"
     title: ClassVar[str]  # "History"
     surface: ClassVar[Surface] = Surface.CONTENT
+    show_header: ClassVar[bool] = True  # False: the frame draws no section header
+    fixed_height: ClassVar[bool] = False  # True: its pane in a vertical split can't be resized
+    always_shown: ClassVar[bool] = False  # True: the layout never leaves it out (§6.6)
 
     header_changed = Signal(str)
 

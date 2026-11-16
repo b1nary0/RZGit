@@ -72,7 +72,7 @@ src/rzgitclient/
     selection.py                Selection: what the user has selected (commit, file)
     app_settings.py             AppSettings: typed wrapper over QSettings (last_repo, layout)
   ui/
-    main_window.py              MainWindow: thin shell (menus, toolbar, status bar, LayoutHost)
+    main_window.py              MainWindow: thin shell (menus, status bar, LayoutHost)
     app_actions.py              AppActions: every QAction, defined once
     theme/
       app_theme.py              AppTheme, ThemeColors, StatusColors, ThemeFonts, ThemeMetrics, LIGHT_THEME
@@ -84,6 +84,7 @@ src/rzgitclient/
     panels/
       panel.py                  Panel, PanelContext
       panel_registry.py         PANEL_TYPES, panel_type(id)
+      controls_panel.py         ControlsPanel: Open, Refresh, current branch (replaces the toolbar)
       branches_panel.py         BranchesPanel
       history_panel.py          HistoryPanel
       history_model.py          HistoryModel: the commit table's Qt model, paged
@@ -240,6 +241,9 @@ class Panel(QWidget):
     panel_id: ClassVar[str]                        # stable, saved in layouts: "history"
     title: ClassVar[str]                           # "History"
     surface: ClassVar[Surface] = Surface.CONTENT   # SIDEBAR for branches/files
+    show_header: ClassVar[bool] = True             # False: the frame draws no section header
+    fixed_height: ClassVar[bool] = False           # True: its pane in a vertical split can't be resized
+    always_shown: ClassVar[bool] = False           # True: the layout never leaves it out (§6.6)
     header_changed = Signal(str)                   # emitted by set_header()
 
     def __init__(self, ctx: PanelContext, parent=None): ...   # final: panels don't override it
@@ -314,6 +318,7 @@ The first three are extracted from the original `main_window.py` with the same b
 
 | Panel | id | Surface | Shows | Writes |
 |---|---|---|---|---|
+| ControlsPanel | `controls` | chrome | Open, Refresh (`ctx.actions`), current branch | (later: fetch/pull/push, switch branch) |
 | BranchesPanel | `branches` | sidebar | branches, current in bold | (later: checkout) |
 | HistoryPanel | `history` | content | commit table | `selection.commit` |
 | FilesPanel | `files` | sidebar | working tree changes, staged/unstaged, status colours | `selection.file` |
@@ -396,9 +401,11 @@ class LayoutState: root: LayoutNode; hidden: Mapping[str, Anchor] = {}   # what'
   `{"neighbors": [...], "container": "horizontal" | "vertical" | "tabs", "before": bool,
   "share": 0.3}` (`share` optional, dropped if it isn't between 0 and 1).
 
-**Presets** (`layout_presets.py`, `PRESETS`) are named trees that show every panel:
+**Presets** (`layout_presets.py`, `PRESETS`) are named trees that show every panel. Each
+has the Controls panel across the top, above the arrangement described:
 - **Standard** (`DEFAULT_LAYOUT`): Branches above Files in a left sidebar, History on the
-  right: `Split(H, [Split(V, [branches, files], sizes=(300, 400)), history], sizes=(220, 880))`.
+  right: `Split(V, [controls, Split(H, [Split(V, [branches, files], sizes=(300, 400)),
+  history], sizes=(220, 880))])`.
 - **Sidebar Tabs:** Branches and Files as tabs on the left, each with the full height;
   History on the right.
 - **Stacked:** History across the top; Branches and Files side by side below it.
@@ -476,6 +483,15 @@ Edits are pure functions in `layout_model.py`, tested without Qt:
   none of the neighbours is shown, it uses `fallback` (the panel's anchor in
   `DEFAULT_LAYOUT`), and failing that the right-hand edge.
 
+**Panels that are always shown** (`always_shown`, the Controls panel): `LayoutHost.apply`
+inserts one at its `DEFAULT_LAYOUT` place whenever a tree lacks it, so no preset, saved
+layout or edit can lose it; `hide_panel` refuses it, and its View → Panels entry stays
+checked but disabled. "The last visible panel" counts only panels that can be hidden.
+
+**Fixed-height panes** (`fixed_height`): in a vertical split, the host fixes the pane to the
+height the panel asks for, and disables the dividers beside it (no resize cursor). Used
+by the Controls panel, so the bar can't be dragged taller.
+
 **Why anchors, not "the default place":** a panel hidden from a rearranged layout comes
 back where the user had it. The default place is only the fallback.
 
@@ -522,14 +538,14 @@ LIGHT_THEME = AppTheme(...)
 
 ### 7.2 Semantic roles
 
-`style_roles.py` defines `Surface` (SIDEBAR, CONTENT) and `Role` (SECTION_HEADER).
+`style_roles.py` defines `Surface` (SIDEBAR, CONTENT, CHROME) and `Role` (SECTION_HEADER).
 Widgets get them as Qt dynamic properties through `set_surface()` / `set_role()`, and the
 stylesheet targets those (`QWidget[surface="sidebar"]`). The theme decides what "sidebar"
 looks like; panels only say what they are.
 
-A surface or role is added when a widget first needs it (e.g. `Surface.CHROME` with the
-Controls panel), not ahead of time. A test checks that every value is used by the
-stylesheet, so a role can't be defined and forgotten.
+A surface or role is added when a widget first needs it (`Surface.CHROME` came with the
+Controls panel: the toolbar's background), not ahead of time. A test checks that every
+value is used by the stylesheet, so a role can't be defined and forgotten.
 
 Roles style **widgets**. Things inside a list (a muted author column, a monospace hash) are
 per-row data, which Qt's stylesheet can't target, so panels set them from the theme's tokens
@@ -550,16 +566,17 @@ Per-widget sheets are slow to apply and scatter the rules.
 
 - **`AppActions`** (`ui/app_actions.py`) defines every `QAction` once: text, icon, shortcut
   and enabled state (e.g. Refresh is disabled with no repo open, driven by `repo_changed`).
-  The menu bar, toolbar, context menus and a future Controls panel all show the same objects.
-- **`MainWindow`** is a thin shell: menus and toolbar built from `AppActions`, the status
+  The menu bar, context menus and the Controls panel all show the same objects.
+- **`MainWindow`** is a thin shell: menus built from `AppActions`, the status
   bar summary (from session signals: path · branch · commits · changed files), error dialogs (from `error_occurred`), and a
   `LayoutHost` as the central widget. The Open, Quit and Reset Layout handlers live here
   because they need dialogs or the window. Target: around 100 lines.
 - **Commit count text** (`commit_summary`): the exact `commit_count` with separators
   ("2,421 commits", "1 commit"). Until it arrives, or if it failed, the loaded count, with a
   plus while more history is unloaded ("500+ commits").
-- The toolbar stays a `QToolBar` for now. It becomes a **Controls panel** when there are real
-  controls to show (fetch/pull/push, the branch box).
+- **No toolbar:** its buttons are the **Controls panel** (§5.4), placed by the layout across
+  the top and styled like the toolbar was. Remote controls (fetch/pull/push) and switching
+  branches join it when those commands exist.
 
 ## 9. Performance stance
 

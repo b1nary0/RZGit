@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 
 H, V = Orientation.HORIZONTAL, Orientation.VERTICAL
 BRANCHES, FILES, HISTORY = PanelNode("branches"), PanelNode("files"), PanelNode("history")
+CONTROLS = PanelNode("controls")
 
 
 @dataclass(frozen=True)
@@ -34,17 +35,25 @@ class Preset:
     root: LayoutNode
 
 
+def _below_controls(root: LayoutNode) -> SplitNode:
+    """The Controls bar across the top (its height is fixed), ``root`` below it."""
+    return SplitNode(V, (CONTROLS, root))
+
+
 # Branches above Files in a left sidebar; History on the right.
-DEFAULT_LAYOUT = SplitNode(H, (SplitNode(V, (BRANCHES, FILES), sizes=(300, 400)), HISTORY),
-                           sizes=(220, 880))
+DEFAULT_LAYOUT = _below_controls(
+    SplitNode(H, (SplitNode(V, (BRANCHES, FILES), sizes=(300, 400)), HISTORY), sizes=(220, 880))
+)
 
 PRESETS = (
     Preset("Standard", DEFAULT_LAYOUT),
     # Branches and Files as tabs, each with the sidebar's full height.
-    Preset("Sidebar Tabs", SplitNode(H, (TabsNode((BRANCHES, FILES)), HISTORY), sizes=(220, 880))),
+    Preset("Sidebar Tabs", _below_controls(
+        SplitNode(H, (TabsNode((BRANCHES, FILES)), HISTORY), sizes=(220, 880)))),
     # History across the top; Branches and Files side by side below it.
-    Preset("Stacked", SplitNode(V, (HISTORY, SplitNode(H, (BRANCHES, FILES), sizes=(400, 700))),
-                                sizes=(450, 250))),
+    Preset("Stacked", _below_controls(
+        SplitNode(V, (HISTORY, SplitNode(H, (BRANCHES, FILES), sizes=(400, 700))),
+                  sizes=(450, 250)))),
 )
 
 

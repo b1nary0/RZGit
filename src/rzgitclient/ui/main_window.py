@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QSize
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QFileDialog, QLabel, QMainWindow, QMessageBox
 
@@ -41,12 +40,6 @@ class MainWindow(QMainWindow):
         actions = self.ctx.actions
         actions.open_repo.triggered.connect(self.choose_repo)
         actions.quit.triggered.connect(self.close)
-
-        toolbar = self.addToolBar("Main")
-        toolbar.setObjectName("main-toolbar")
-        toolbar.setMovable(False)
-        toolbar.setIconSize(QSize(16, 16))
-        toolbar.addActions([actions.open_repo, actions.refresh])
 
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addActions([actions.open_repo, actions.refresh])

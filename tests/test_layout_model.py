@@ -119,7 +119,7 @@ class SerialisationTests(unittest.TestCase):
 
 class NormalizeTests(unittest.TestCase):
     def test_valid_tree_is_unchanged(self):
-        known = {"branches", "files", "history"}
+        known = {"controls", "branches", "files", "history"}
         self.assertEqual(normalize(DEFAULT_LAYOUT, known), DEFAULT_LAYOUT)
 
     def test_drops_unknown_panels(self):

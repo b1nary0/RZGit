@@ -28,6 +28,7 @@ from rzgitclient.ui.panels.panel import Panel, PanelContext
 from rzgitclient.ui.panels.panel_registry import PANEL_TYPES, panel_type
 
 _KNOWN_IDS = frozenset(t.panel_id for t in PANEL_TYPES)
+_ALWAYS_SHOWN = tuple(t.panel_id for t in PANEL_TYPES if t.always_shown)
 _QT_ORIENTATION = {
     Orientation.HORIZONTAL: Qt.Orientation.Horizontal,
     Orientation.VERTICAL: Qt.Orientation.Vertical,
@@ -72,10 +73,15 @@ class LayoutHost(QWidget):
         root = self.current_layout()
         return LayoutState(root, self._hidden) if root is not None else None
 
+    def can_hide(self, panel_id: str) -> bool:
+        """Shown, not ``always_shown``, and not the last panel that could be hidden."""
+        hideable = [pid for pid in self._panels if pid not in _ALWAYS_SHOWN]
+        return panel_id in hideable and len(hideable) > 1
+
     def hide_panel(self, panel_id: str) -> None:
-        """Hide a shown panel, remembering where it sat. The last one stays."""
+        """Hide a shown panel, remembering where it sat (if ``can_hide``)."""
         root = self.current_layout()
-        if root is None or panel_id not in self._panels or len(self._panels) == 1:
+        if root is None or not self.can_hide(panel_id):
             return
         root, anchor = remove_panel(root, panel_id)
         assert root is not None and anchor is not None  # it wasn't the only panel
@@ -91,8 +97,15 @@ class LayoutHost(QWidget):
                                 default_anchor(panel_id)), hidden)
 
     def apply(self, node: LayoutNode, hidden: Mapping[str, Anchor] | None = None) -> None:
-        """Show ``node``. ``hidden`` (default: none) is kept for panels not in it."""
+        """Show ``node``. ``hidden`` (default: none) is kept for panels not in it.
+
+        A panel that is ``always_shown`` is added at its default place if
+        ``node`` lacks it (§6.6).
+        """
         tree = normalize(node, _KNOWN_IDS)
+        if tree is not None:
+            for panel_id in _ALWAYS_SHOWN:
+                tree = insert_panel(tree, panel_id, None, default_anchor(panel_id))
         wanted = set(panel_ids(tree))
         self._hidden = {
             pid: a for pid, a in (hidden or {}).items() if pid in _KNOWN_IDS and pid not in wanted
@@ -154,6 +167,8 @@ class LayoutHost(QWidget):
                     splitter.addWidget(self._build(child))
                 if node.sizes is not None:
                     splitter.setSizes(list(node.sizes))
+                if node.orientation is Orientation.VERTICAL:
+                    _fix_heights(splitter)
                 return splitter
             case TabsNode():
                 tabs = _PanelTabs()
@@ -163,6 +178,22 @@ class LayoutHost(QWidget):
                 tabs.setCurrentIndex(node.current)
                 return tabs
         raise TypeError(f"not a layout node: {node!r}")
+
+
+def _fix_heights(splitter: QSplitter) -> None:
+    """Fix the panes of ``fixed_height`` panels, and lock the dividers beside them."""
+    for i in range(splitter.count()):
+        frame = splitter.widget(i)
+        if not (isinstance(frame, PanelFrame) and frame.panel.fixed_height):
+            continue
+        frame.ensurePolished()
+        frame.setFixedHeight(frame.sizeHint().height())
+        splitter.setStretchFactor(i, 0)
+        for h in (i, i + 1):  # handle(i) is above widget i; handle(0) is never shown
+            if 0 < h < splitter.count():
+                handle = splitter.handle(h)
+                handle.setEnabled(False)
+                handle.setCursor(Qt.CursorShape.ArrowCursor)
 
 
 class _PanelTabs(QTabWidget):

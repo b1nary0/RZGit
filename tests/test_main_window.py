@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtWidgets import QToolBar, QToolButton
 
 from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.ui.layout.layout_model import SplitNode
@@ -48,8 +49,11 @@ class MainWindowTests(unittest.TestCase):
         window.settings.sync()
 
     def sizes(self, window):
-        root = window.layout_host.current_layout()
-        return root.sizes, root.children[0].sizes
+        body = window.layout_host.current_layout().children[1]  # below the Controls bar
+        return body.sizes, body.children[0].sizes
+
+    def body(self, window):
+        return window.layout_host.layout().itemAt(0).widget().widget(1)
 
     def test_first_start_uses_the_default_layout(self):
         window = self.start()
@@ -59,7 +63,7 @@ class MainWindowTests(unittest.TestCase):
         window = self.start()
         window.resize(700, 500)  # fits the 800x800 offscreen screen; larger is clamped
         self.app.processEvents()
-        root = window.layout_host.layout().itemAt(0).widget()
+        root = self.body(window)
         root.setSizes([250, 449])
         root.widget(0).setSizes([150, 200])
         before = self.sizes(window)
@@ -78,14 +82,13 @@ class MainWindowTests(unittest.TestCase):
     def test_reset_layout_restores_the_default_and_keeps_panels(self):
         window = self.start()
         history = window.layout_host.panels["history"]
-        root = window.layout_host.layout().itemAt(0).widget()
-        root.setSizes([500, 599])
+        self.body(window).setSizes([500, 599])
         window.ctx.actions.reset_layout.trigger()
         self.app.processEvents()
         self.assertIs(window.layout_host.panels["history"], history)
         read = window.layout_host.current_layout()
         self.assertEqual(strip_sizes(read), strip_sizes(DEFAULT_LAYOUT))
-        self.assertNotEqual(read.sizes[0], 500)
+        self.assertNotEqual(read.children[1].sizes[0], 500)
 
     def test_a_hidden_panel_stays_hidden_after_a_restart(self):
         window = self.start()
@@ -93,9 +96,16 @@ class MainWindowTests(unittest.TestCase):
         self.quit(window)
 
         again = self.start()
-        self.assertEqual(set(again.layout_host.panels), {"files", "history"})
+        self.assertEqual(set(again.layout_host.panels), {"controls", "files", "history"})
         again.layout_host.show_panel("branches")  # and comes back where it was
         self.assertEqual(strip_sizes(again.layout_host.current_layout()), strip_sizes(DEFAULT_LAYOUT))
+
+    def test_no_toolbar_the_controls_panel_has_its_buttons(self):
+        window = self.start()
+        self.assertEqual(window.findChildren(QToolBar), [])
+        buttons = window.layout_host.panels["controls"].findChildren(QToolButton)
+        actions = window.ctx.actions
+        self.assertEqual([b.defaultAction() for b in buttons], [actions.open_repo, actions.refresh])
 
     def test_view_menu_has_layout_panels_and_reset(self):
         window = self.start()
@@ -107,7 +117,7 @@ class MainWindowTests(unittest.TestCase):
         window = self.start()
         window.layout_host.hide_panel("files")
         window.ctx.actions.reset_layout.trigger()
-        self.assertEqual(set(window.layout_host.panels), {"branches", "files", "history"})
+        self.assertEqual(set(window.layout_host.panels), {"controls", "branches", "files", "history"})
         self.assertEqual(window.layout_host.hidden, {})
 
     def test_status_bar_counts_every_commit_not_just_the_loaded_page(self):
