@@ -4,7 +4,9 @@ from pathlib import Path
 from unittest import mock
 
 from rzgitclient.core import git_commands
+from rzgitclient.core.diff_patch import hunk_lines
 from rzgitclient.core.git_commands import CommandKind, GitCommand, run_command
+from rzgitclient.git.git_models import DiffSource
 from rzgitclient.git.repo import GitError, Repo
 from tests.support import commit_file, git, make_repo
 
@@ -83,6 +85,104 @@ class CommitCommandTests(unittest.TestCase):
         one, two = (GitCommand(CommandKind.COMMIT, message="Same") for _ in range(2))
         self.assertNotEqual(one, two)
         self.assertEqual(one, one)
+
+
+
+class LinesCommandTests(unittest.TestCase):
+    """Stage, Unstage and Discard Lines (spec §4.1); the patches themselves are
+    tested in test_diff_patch."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        commit_file(self.path, "a.txt", "a\nb\nc\n", "first")
+        self.repo = Repo(self.path)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def run_lines(self, kind, path, source, lines=None):
+        diff = self.repo.diff(path, source)
+        if lines is None:
+            lines = hunk_lines(diff, 0)
+        run_command(self.repo, GitCommand(kind, (path,), diff=diff, lines=frozenset(lines)))
+
+    def index(self, path):
+        return git(self.path, "show", f":{path}")
+
+    def status(self):
+        return {f.path: f.index + f.worktree for f in self.repo.status()}
+
+    def test_stage_and_unstage_a_hunk(self):
+        (self.path / "a.txt").write_text("a\nB\nc\n")
+        self.run_lines(CommandKind.STAGE_LINES, "a.txt", DiffSource.WORKTREE)
+        self.assertEqual(self.index("a.txt"), "a\nB\nc\n")
+        self.run_lines(CommandKind.UNSTAGE_LINES, "a.txt", DiffSource.INDEX)
+        self.assertEqual(self.index("a.txt"), "a\nb\nc\n")
+        self.assertEqual((self.path / "a.txt").read_text(), "a\nB\nc\n")
+
+    def test_discard_lines_changes_the_working_tree_only(self):
+        (self.path / "a.txt").write_text("a\nB\nc\n")
+        self.run_lines(CommandKind.DISCARD_LINES, "a.txt", DiffSource.WORKTREE)
+        self.assertEqual((self.path / "a.txt").read_text(), "a\nb\nc\n")
+
+    def test_lines_of_an_untracked_file_are_a_new_file_patch(self):
+        (self.path / "new.sh").write_text("one\ntwo\n")
+        (self.path / "new.sh").chmod(0o755)
+        diff = self.repo.diff("new.sh", DiffSource.UNTRACKED)
+        first = {(0, i) for i, line in enumerate(diff.hunks[0].lines) if line.text == "one"}
+        run_command(self.repo, GitCommand(CommandKind.STAGE_LINES, ("new.sh",), diff=diff,
+                                          lines=frozenset(first)))
+        self.assertEqual(self.index("new.sh"), "one\n")
+        self.assertEqual(git(self.path, "ls-files", "-s", "new.sh").split()[0], "100755")
+
+    def test_unstaging_a_new_files_last_lines_makes_it_untracked_again(self):
+        (self.path / "new.txt").write_text("one\ntwo\n")
+        diff = self.repo.diff("new.txt", DiffSource.UNTRACKED)
+        first = frozenset({(0, 0)})
+        run_command(self.repo, GitCommand(CommandKind.STAGE_LINES, ("new.txt",), diff=diff,
+                                          lines=first))
+        self.assertEqual(self.status()["new.txt"], "AM")
+        staged = self.repo.diff("new.txt", DiffSource.INDEX)
+        run_command(self.repo, GitCommand(CommandKind.UNSTAGE_LINES, ("new.txt",), diff=staged,
+                                          lines=hunk_lines(staged, 0)))
+        self.assertEqual(self.status()["new.txt"], "??")
+        self.assertEqual((self.path / "new.txt").read_text(), "one\ntwo\n")
+
+    def test_unstaging_some_lines_of_a_new_file_keeps_it_staged(self):
+        (self.path / "new.txt").write_text("one\ntwo\n")
+        diff = self.repo.diff("new.txt", DiffSource.UNTRACKED)
+        run_command(self.repo, GitCommand(CommandKind.STAGE_LINES, ("new.txt",), diff=diff,
+                                          lines=hunk_lines(diff, 0)))
+        staged = self.repo.diff("new.txt", DiffSource.INDEX)
+        run_command(self.repo, GitCommand(CommandKind.UNSTAGE_LINES, ("new.txt",), diff=staged,
+                                          lines=frozenset({(0, 1)})))
+        self.assertEqual(self.status()["new.txt"], "AM")
+        self.assertEqual(self.index("new.txt"), "one\n")
+
+    def test_unstaging_lines_never_untracks_a_file_head_has(self):
+        (self.path / "a.txt").write_text("")
+        git(self.path, "add", "a.txt")  # staged: every line removed
+        staged = self.repo.diff("a.txt", DiffSource.INDEX)
+        run_command(self.repo, GitCommand(CommandKind.UNSTAGE_LINES, ("a.txt",), diff=staged,
+                                          lines=frozenset({(0, 0)})))
+        self.assertIn("a.txt", git(self.path, "ls-files"))
+
+    def test_lines_of_an_untracked_file_cant_be_discarded(self):
+        (self.path / "new.txt").write_text("one\n")
+        with self.assertRaises(GitError):
+            self.run_lines(CommandKind.DISCARD_LINES, "new.txt", DiffSource.UNTRACKED)
+        self.assertTrue((self.path / "new.txt").exists())
+
+    def test_a_stale_diff_is_an_error_and_changes_nothing(self):
+        (self.path / "a.txt").write_text("a\nB\nc\n")
+        diff = self.repo.diff("a.txt", DiffSource.WORKTREE)
+        (self.path / "a.txt").write_text("A\nb\nc\n")
+        git(self.path, "add", "a.txt")
+        with self.assertRaises(GitError):
+            run_command(self.repo, GitCommand(CommandKind.STAGE_LINES, ("a.txt",), diff=diff,
+                                              lines=hunk_lines(diff, 0)))
+        self.assertEqual(self.index("a.txt"), "A\nb\nc\n")
 
 
 if __name__ == "__main__":

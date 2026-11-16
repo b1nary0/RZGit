@@ -17,6 +17,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QThreadPool, Signal
 
+from rzgitclient.core.diff_patch import Line
 from rzgitclient.core.diff_request import DiffRequest, load_diff
 from rzgitclient.core.git_commands import CommandKind, GitCommand, run_command
 from rzgitclient.core.selection import FileSelection
@@ -299,6 +300,23 @@ class RepoSession(QObject):
         """Throw away the unstaged changes to ``paths``; staged ones are kept.
         Untracked files are moved to the trash. Callers confirm first."""
         return self._command(GitCommand(CommandKind.DISCARD, tuple(paths)))
+
+    def stage_lines(self, diff: FileDiff, lines: Iterable[Line]) -> GitCommand | None:
+        """Stage the chosen ``(hunk, line)`` lines of ``diff``, the shown worktree diff."""
+        return self._lines(CommandKind.STAGE_LINES, diff, lines)
+
+    def unstage_lines(self, diff: FileDiff, lines: Iterable[Line]) -> GitCommand | None:
+        """Unstage the chosen lines of ``diff``, the shown index diff."""
+        return self._lines(CommandKind.UNSTAGE_LINES, diff, lines)
+
+    def discard_lines(self, diff: FileDiff, lines: Iterable[Line]) -> GitCommand | None:
+        """Throw away the chosen lines of ``diff`` from the working tree. No
+        undo: callers confirm first."""
+        return self._lines(CommandKind.DISCARD_LINES, diff, lines)
+
+    def _lines(self, kind: CommandKind, diff: FileDiff,
+               lines: Iterable[Line]) -> GitCommand | None:
+        return self._command(GitCommand(kind, (diff.path,), diff=diff, lines=frozenset(lines)))
 
     def commit(self, message: str) -> GitCommand | None:
         """Commit the staged changes with ``message``."""

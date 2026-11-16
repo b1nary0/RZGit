@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 
 REF_PARTS = Refresh.HEAD | Refresh.BRANCHES | Refresh.HISTORY | Refresh.COUNT
 _REF_FILES = frozenset({"HEAD", "packed-refs"})  # in the git dir or the common dir
+_WRITES_WORKTREE = frozenset({CommandKind.DISCARD, CommandKind.DISCARD_LINES})
 
 
 @dataclass(frozen=True)
@@ -230,7 +231,7 @@ class RepoWatcher(QObject):
         if self._repo is None:
             return
         in_flight = self._session.commands_in_flight
-        own_paths = {p for c in in_flight if c.kind is CommandKind.DISCARD for p in c.paths}
+        own_paths = {p for c in in_flight if c.kind in _WRITES_WORKTREE for p in c.paths}
         changed = False
         for event in events:
             if not event.name:

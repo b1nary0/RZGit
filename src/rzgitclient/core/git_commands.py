@@ -7,12 +7,14 @@ window can't make it act on the wrong file. No Qt objects besides QFile.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from enum import StrEnum
 
 from PySide6.QtCore import QFile
 
-from rzgitclient.git.git_models import FileStatus
+from rzgitclient.core.diff_patch import Line, build_patch
+from rzgitclient.git.git_models import FileDiff, FileStatus
 from rzgitclient.git.repo import GitError, Repo
 
 
@@ -23,6 +25,10 @@ class CommandKind(StrEnum):
     UNSTAGE_ALL = "unstage_all"
     DISCARD = "discard"  # unstaged changes; untracked files go to the trash
     COMMIT = "commit"  # the staged changes, with ``message``
+    # Chosen lines of ``diff`` (a hunk is all of its changed lines):
+    STAGE_LINES = "stage_lines"
+    UNSTAGE_LINES = "unstage_lines"
+    DISCARD_LINES = "discard_lines"  # from the working tree; no undo
 
 
 @dataclass(frozen=True, eq=False)
@@ -33,6 +39,8 @@ class GitCommand:
     kind: CommandKind
     paths: tuple[str, ...] = ()
     message: str = ""  # COMMIT's
+    diff: FileDiff | None = None  # the *_LINES commands': the diff the lines are from
+    lines: frozenset[Line] = frozenset()  # (hunk, line) indices into ``diff``
 
 
 def run_command(repo: Repo, command: GitCommand) -> None:
@@ -51,6 +59,8 @@ def run_command(repo: Repo, command: GitCommand) -> None:
             _discard(repo, paths)
         case CommandKind.COMMIT:
             repo.commit(command.message)
+        case CommandKind.STAGE_LINES | CommandKind.UNSTAGE_LINES | CommandKind.DISCARD_LINES:
+            _apply_lines(repo, command)
         case _:
             raise ValueError(f"not a command: {command.kind!r}")
 
@@ -74,3 +84,27 @@ def _discard(repo: Repo, paths: tuple[str, ...]) -> None:
             moved, _where = QFile.moveToTrash(str(repo.root / path))
             if not moved:
                 raise GitError(f"Couldn't move {path} to the trash, so it was kept.")
+
+
+def _apply_lines(repo: Repo, command: GitCommand) -> None:
+    """Stage, unstage or discard the chosen lines with a patch (spec §4.1)."""
+    diff = command.diff
+    if diff is None:
+        raise ValueError("a lines command needs the diff")
+    staging = command.kind is CommandKind.STAGE_LINES
+    new_file = False
+    mode = "100644"
+    if command.kind is not CommandKind.UNSTAGE_LINES:  # an untracked file: a new-file patch
+        new_file = any(f.path == diff.path and f.is_untracked for f in repo.status())
+    if new_file and not staging:
+        raise GitError(f"{diff.path} is a new file: discard it whole, to the trash.")
+    if new_file and os.access(repo.root / diff.path, os.X_OK):
+        mode = "100755"
+    patch = build_patch(diff, command.lines, reverse=not staging, new_file=new_file, mode=mode)
+    if patch is None:
+        return
+    repo.apply(patch, cached=command.kind is not CommandKind.DISCARD_LINES, reverse=not staging)
+    if command.kind is CommandKind.UNSTAGE_LINES and repo.staged_as_empty_new_file(diff.path):
+        # Its last staged lines are gone: it goes back to untracked, as it was,
+        # rather than staying staged as an empty new file.
+        repo.unstage([diff.path])

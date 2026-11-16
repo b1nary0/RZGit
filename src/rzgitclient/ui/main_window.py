@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QFileDialog, QLabel, QMainWindow, QMessageBox
 
 from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.selection import FileSource
+from rzgitclient.git.git_models import FileDiff
 from rzgitclient.git.repo import Repo
 from rzgitclient.ui.layout.layout_host import LayoutHost
 from rzgitclient.ui.layout.layout_menu import LayoutMenu
@@ -52,6 +53,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(actions.quit)
 
         actions.discard.triggered.connect(self.discard_selected)
+        actions.discard_lines_requested.connect(self.discard_lines)
         repo_menu = self.menuBar().addMenu("&Repository")
         repo_menu.addActions([actions.stage, actions.unstage, actions.discard])
         repo_menu.addSeparator()
@@ -104,6 +106,23 @@ class MainWindow(QMainWindow):
         paths = self.ctx.actions.selected(FileSource.WORKTREE)
         if paths and self.confirm_discard(paths):
             self.session.discard(paths)
+
+    def discard_lines(self, diff: FileDiff, lines: frozenset[tuple[int, int]]) -> None:
+        """Discard chosen lines of a diff from the working tree, once confirmed."""
+        if lines and self.confirm_discard_lines(diff.path, len(lines)):
+            self.session.discard_lines(diff, lines)
+
+    def confirm_discard_lines(self, path: str, count: int) -> bool:
+        lines = "1 changed line" if count == 1 else f"{count:,} changed lines"
+        box = QMessageBox(QMessageBox.Icon.Warning, "Discard Lines",
+                          f"Discard {lines} of {path}?", parent=self)
+        box.setInformativeText("They are removed from the file in the working tree. "
+                               "This can't be undone.")
+        discard = box.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        return box.clickedButton() is discard
 
     def confirm_discard(self, paths: tuple[str, ...]) -> bool:
         shown = "\n".join(paths[:_LISTED])

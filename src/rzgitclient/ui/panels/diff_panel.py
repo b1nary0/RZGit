@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QScrollBar,
     QSizePolicy,
@@ -16,8 +17,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from rzgitclient.core.diff_patch import Line, can_patch, hunk_lines
 from rzgitclient.core.selection import FileSelection, FileSource
-from rzgitclient.git.git_models import FileDiff
+from rzgitclient.git.git_models import FileDiff, LineKind
 from rzgitclient.ui.panels.diff_rows import split_rows, unified_rows
 from rzgitclient.ui.panels.diff_view import DiffView, Numbers
 from rzgitclient.ui.panels.panel import Panel
@@ -132,6 +134,7 @@ class DiffPanel(Panel):
             for side in (left, right):
                 split.addWidget(side)
                 side.apply_theme(self.ctx.theme.current)
+                self._connect(side)
             for get in (DiffView.verticalScrollBar, DiffView.horizontalScrollBar):
                 _sync(get(left), get(right))
             split.setStretchFactor(0, 1)
@@ -142,8 +145,16 @@ class DiffPanel(Panel):
 
     def _add_view(self, view: DiffView) -> DiffView:
         view.apply_theme(self.ctx.theme.current)
+        self._connect(view)
         self._stack.addWidget(view)
         return view
+
+    def _connect(self, view: DiffView) -> None:
+        view.hunk_clicked.connect(self._on_hunk_link)
+        view.lines_clicked.connect(self._apply)
+        view.customContextMenuRequested.connect(
+            lambda pos, view=view: self.menu_for(view, pos).exec(
+                view.viewport().mapToGlobal(pos)))
 
     # ---- behaviour -------------------------------------------------------
 
@@ -199,16 +210,91 @@ class DiffPanel(Panel):
         diff = self._diff
         if diff is None or not diff.hunks or self._shown != self._file:  # another is on its way
             return
+        verb, why = self._patching()
+        link = f"{verb} Hunk" if verb and not why else ""
         if self.ctx.actions.side_by_side_diff.isChecked():
             left_rows, right_rows = split_rows(diff)
             left, right = self._split_views()
-            left.set_rows(left_rows, keep_scroll)
-            right.set_rows(right_rows, keep_scroll)
+            for view, rows in ((left, left_rows), (right, right_rows)):
+                view.set_line_buttons(verb if link else "")
+                view.set_rows(rows, keep_scroll)
+                view.set_hunk_link(link, why or "")
             self._stack.setCurrentWidget(self._split)
         else:
             view = self._unified_view()
+            view.set_line_buttons(verb if link else "")
             view.set_rows(unified_rows(diff), keep_scroll)
+            view.set_hunk_link(link, why or "")
             self._stack.setCurrentWidget(view)
+
+    # ---- hunks and lines (spec §5.4) ---------------------------------------
+
+    def _patching(self) -> tuple[str | None, str | None]:
+        """("Stage" or "Unstage", or None for a commit's diff), and why the
+        shown diff's hunks and lines can't be, or None if they can."""
+        file, diff = self._shown, self._diff
+        if file is None or diff is None or file.source is FileSource.COMMIT:
+            return None, None
+        verb = "Stage" if file.source is FileSource.WORKTREE else "Unstage"
+        return verb, can_patch(diff)
+
+    def _can_discard(self) -> bool:
+        """Lines of the shown diff can be discarded: a tracked file's unstaged diff."""
+        file = self._shown
+        if file is None or file.source is not FileSource.WORKTREE:
+            return False
+        return not any(f.path == file.path and f.is_untracked for f in self.ctx.session.status)
+
+    def _apply(self, lines: frozenset[Line]) -> None:
+        diff, file = self._diff, self._shown
+        if diff is None or file is None or not lines:
+            return
+        if file.source is FileSource.WORKTREE:
+            self.ctx.session.stage_lines(diff, lines)
+        else:
+            self.ctx.session.unstage_lines(diff, lines)
+
+    def _discard(self, lines: frozenset[Line]) -> None:
+        if self._diff is not None:
+            self.ctx.actions.request_discard_lines(self._diff, lines)
+
+    def _on_hunk_link(self, hunk: int) -> None:
+        if self._diff is not None:
+            self._apply(hunk_lines(self._diff, hunk))
+
+    def menu_for(self, view: DiffView, pos: QPoint) -> QMenu:
+        """The right-click menu at ``pos`` (viewport coordinates) of ``view``."""
+        menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+        verb, why = self._patching()
+        diff = self._diff
+        if verb is not None and diff is not None:
+            row = view.row_at(pos)
+            hunk = row.hunk if row is not None else None
+            hunk_set = hunk_lines(diff, hunk) if hunk is not None else frozenset()
+            chosen = view.selected_lines()
+            if not chosen and row is not None and row.line is not None and row.hunk is not None:
+                if diff.hunks[row.hunk].lines[row.line].kind is not LineKind.CONTEXT:
+                    chosen = frozenset({(row.hunk, row.line)})
+            entries = [(f"{verb} Hunk", hunk_set, self._apply),
+                       (f"{verb} Selected Lines", chosen, self._apply)]
+            if self._can_discard():
+                entries += [("Discard Hunk…", hunk_set, self._discard),
+                            ("Discard Selected Lines…", chosen, self._discard)]
+            for text, lines, run in entries:
+                action = menu.addAction(text)
+                action.setEnabled(bool(lines) and why is None)
+                if why:
+                    action.setToolTip(why)
+                action.triggered.connect(lambda _=False, run=run, lines=lines: run(lines))
+            if why:
+                note = menu.addAction(why)
+                note.setEnabled(False)
+            menu.addSeparator()
+        copy = menu.addAction("Copy")
+        copy.setEnabled(bool(view.selection))
+        copy.triggered.connect(view.selection.copy)
+        return menu
 
     def _show_message(self, text: str, show_anyway: bool = False) -> None:
         self._message.setText(text)

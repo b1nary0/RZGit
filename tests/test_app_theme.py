@@ -55,6 +55,29 @@ class AppThemeTests(unittest.TestCase):
                 for name, value in dataclasses.asdict(group).items():
                     self.assertRegex(value, r"^#[0-9a-f]{6}$", f"{theme.name}.{name}")
 
+    def test_line_buttons_are_green_readable_and_outlined(self):
+        for theme in THEMES:
+            c = theme.colors
+            for fill in (c.diff_line_button, c.diff_line_button_hover):
+                colour = QColor(fill)
+                self.assertTrue(colour.green() > colour.red() and colour.green() > colour.blue(),
+                                (theme.name, fill))
+            self.assertGreaterEqual(contrast(c.diff_line_button_text, c.diff_line_button), 4.5,
+                                    theme.name)
+            for background in (c.content_bg, c.diff_added_bg, c.diff_removed_bg):
+                self.assertGreaterEqual(contrast(c.diff_line_button_border, background), 3,
+                                        (theme.name, background))
+        self.assertEqual(DARK_THEME.colors.diff_line_button_border, "#ffffff")
+
+    def test_selected_lines_are_a_stronger_shade_and_readable(self):
+        for theme in THEMES:
+            c = theme.colors
+            for plain, selected in ((c.diff_added_bg, c.diff_added_selected_bg),
+                                    (c.diff_removed_bg, c.diff_removed_selected_bg)):
+                self.assertGreaterEqual(contrast(plain, selected), 1.1, (theme.name, selected))
+                self.assertLess(contrast(plain, selected), 1.6, (theme.name, selected))
+                self.assertGreaterEqual(contrast(c.text, selected), 4.5, (theme.name, selected))
+
     def test_float_values_render_cleanly(self):
         # 8.0 must come out as "8pt", the same as the original hand-written QSS.
         self.assertIn("font-size: 8pt;", LIGHT_THEME.stylesheet())
@@ -111,7 +134,8 @@ class DarkThemeTests(unittest.TestCase):
         c = DARK_THEME.colors
         for name in ("menubar_bg", "toolbar_bg", "tab_bg", "header_bg", "sidebar_bg",
                      "content_bg", "button_bg", "tooltip_bg", "diff_added_bg",
-                     "diff_removed_bg", "diff_hunk_bg", "diff_filler_bg"):
+                     "diff_removed_bg", "diff_hunk_bg", "diff_filler_bg",
+                     "diff_added_selected_bg", "diff_removed_selected_bg"):
             self.assertLess(QColor(getattr(c, name)).lightness(), 80, name)
 
     def test_text_is_readable(self):
@@ -125,7 +149,8 @@ class DarkThemeTests(unittest.TestCase):
         self.assertGreaterEqual(contrast(c.accent_text, c.accent), 4.5)
         self.assertGreaterEqual(contrast(c.diff_hunk_text, c.diff_hunk_bg), 4.5)
         for background in (c.diff_added_bg, c.diff_removed_bg, c.diff_added_word,
-                           c.diff_removed_word):
+                           c.diff_removed_word, c.diff_added_selected_bg,
+                           c.diff_removed_selected_bg):
             self.assertGreaterEqual(contrast(c.text, background), 4.5, background)
 
     def test_status_colours_are_readable_and_distinct(self):

@@ -57,13 +57,15 @@ def run_git(
     return _run(cwd, args, ok_codes, text=True, input=input)
 
 
-def run_git_bytes(cwd: str | Path, *args: str, ok_codes: Collection[int] = (0,)) -> bytes:
-    """git's output exactly as written, e.g. a diff whose CRLF line ends matter."""
-    return _run(cwd, args, ok_codes, text=False)
+def run_git_bytes(cwd: str | Path, *args: str, ok_codes: Collection[int] = (0,),
+                  input: bytes | None = None) -> bytes:
+    """git's output exactly as written, e.g. a diff whose CRLF line ends matter.
+    ``input`` is written to git's stdin as it is."""
+    return _run(cwd, args, ok_codes, text=False, input=input)
 
 
 def _run(cwd: str | Path, args: tuple[str, ...], ok_codes: Collection[int], *, text: bool,
-         input: str | None = None):
+         input: str | bytes | None = None):
     # With no input, stdin is closed: git can never wait on the app's terminal.
     stdin = {"input": input} if input is not None else {"stdin": subprocess.DEVNULL}
     try:
@@ -266,6 +268,24 @@ class Repo:
         Only surrounding blank lines and trailing spaces are cleaned up, so a
         line starting with "#" is kept."""
         run_git(self.root, "commit", "-q", "--cleanup=whitespace", "-F", "-", input=message)
+
+    def apply(self, patch: str, *, cached: bool = False, reverse: bool = False) -> None:
+        """Apply ``patch`` (a ``core.diff_patch`` patch): to the index with
+        ``cached``, else to the working tree; backwards with ``reverse``. git
+        checks it all first, so a patch that doesn't fit changes nothing."""
+        args = ["apply", "--whitespace=nowarn"]
+        if cached:
+            args.append("--cached")
+        if reverse:
+            args.append("--reverse")
+        run_git_bytes(self.root, *args, "-", input=patch.encode("utf-8"))
+
+    def staged_as_empty_new_file(self, path: str) -> bool:
+        """The index holds ``path`` as a new file (not in HEAD) with nothing in it."""
+        status = self._literal("diff", "--cached", "--name-status", "-z", "--", path)
+        if not status.startswith("A\0"):
+            return False
+        return self.git("cat-file", "-s", f":{path}").strip() == "0"
 
     def _literal(self, *args: str) -> str:
         """Run git with paths that mean themselves: ":x" or "*.c" aren't patterns."""

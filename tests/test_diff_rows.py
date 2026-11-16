@@ -29,6 +29,14 @@ class UnifiedRowsTests(unittest.TestCase):
             DiffRow(K.NOTE, NO_NEWLINE),
         ))
 
+    def test_rows_know_their_hunk_and_line(self):
+        rows = unified_rows(DIFF)
+        self.assertEqual([(r.hunk, r.line) for r in rows],
+                         [(0, None), (0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (None, None)])
+        left, right = split_rows(DIFF)
+        self.assertEqual([r.line for r in left if r.kind is K.REMOVED], [1, 2])
+        self.assertEqual([r.line for r in right if r.kind is K.ADDED], [3, 5])
+
     def test_characters_that_would_split_a_row_are_shown_as_symbols(self):
         diff = FileDiff("f", (Hunk(HEADER, 1, 1, (DiffLine(A, None, 1, "a\rb c\r"),)),))
         self.assertEqual(unified_rows(diff)[1].text, "a␍b¶c␍")

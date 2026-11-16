@@ -71,6 +71,7 @@ src/rzgitclient/
   core/
     repo_session.py             RepoSession: the open repo, its data, git commands
     diff_request.py             DiffRequest, the size limit, load_diff (the worker side of diffs)
+    diff_patch.py               build_patch: a patch of chosen lines of a FileDiff (plain Python)
     git_commands.py             GitCommand, run_command (the worker side of commands: stage, commit, …)
     commit_drafts.py            CommitDrafts: the unfinished commit message of each repository
     selection.py                Selection: what the user has selected (commit, file)
@@ -100,7 +101,9 @@ src/rzgitclient/
       file_tree.py              FileTree: changed files grouped by folder (plain Python, no Qt)
       commit_files_panel.py     CommitFilesPanel: the files the selected commit changed
       diff_panel.py             DiffPanel
-      diff_view.py              DiffView: read-only text with a gutter of line numbers and +/− marks
+      diff_view.py              DiffView: read-only diff text, row backgrounds, hunk header links
+      diff_gutter.py            DiffGutter: line buttons, line numbers and +/− marks beside a DiffView
+      line_selection.py         LineSelection: which changed rows of a DiffView are selected
       diff_rows.py              DiffRow, unified_rows, split_rows (plain Python, no Qt)
       commit_panel.py           CommitPanel: the message box and Commit button
     layout/
@@ -159,6 +162,9 @@ class RepoSession(QObject):
     def stage_all(self) -> None
     def unstage_all(self) -> None
     def discard(self, paths) -> None      # unstaged changes; untracked files go to the trash
+    def stage_lines(self, diff, lines) -> GitCommand | None    # chosen lines of the shown diff
+    def unstage_lines(self, diff, lines) -> GitCommand | None
+    def discard_lines(self, diff, lines) -> GitCommand | None  # from the working tree; no undo
     def commit(self, message) -> GitCommand | None   # the staged changes; None with no repo
     commands_in_flight: tuple[GitCommand, ...]   # queued or running, until command_finished
 
@@ -270,6 +276,29 @@ class RepoSession(QObject):
   - **Discard** restores the worktree from the index (`git restore`), so staged work is
     kept. Untracked files are moved to the trash (`QFile.moveToTrash`), never deleted; if the
     trash can't be used, that is an error. The confirmation is the window's job (§8).
+  - **Lines and hunks** (`stage_lines`, `unstage_lines`, `discard_lines`): a command carries
+    the `FileDiff` the Diff panel shows and a set of `(hunk, line)` indices into it. A hunk
+    is all its changed lines. The worker builds a patch (`core/diff_patch.py`) and applies
+    it with `git apply` on stdin: `--cached` to stage, `--cached --reverse` to unstage,
+    `--reverse` on the working tree to discard. Each reloads `STATUS`, and the diff with it.
+    - **Which lines go in.** Staging applies the patch forwards, so an unselected `−` line
+      becomes context and an unselected `+` line is left out. Unstaging and discarding apply
+      it in reverse, so it's the other way round: an unselected `+` line becomes context,
+      an unselected `−` line is left out. Hunk headers are recounted; CRs and "No newline at
+      end of file" are kept exactly.
+    - **Where a chosen line lands:** in a changed block (git writes its removed lines, then
+      its added ones), the k-th removed line pairs with the k-th added one, and the patch
+      writes them together. So choosing `b → B` in `b, c → B, C` gives `B, c`, and choosing
+      only an added line puts it right after its partner, which stays.
+    - **New files:** for an untracked file (the worker reads the status, like Discard), the
+      patch is a new-file patch with the chosen lines, with the file's executable bit. Its
+      lines can't be discarded (whole-file Discard moves it to the trash). Unstaging lines
+      that leaves a new file empty in the index takes it out of the index: it is untracked
+      again, as it was, not staged as an empty file.
+    - **Safe by refusal:** git checks the patch's context against the file. If the file
+      changed since the diff was read, the patch doesn't apply, nothing changes, the error
+      shows, and the reload brings the new diff. A diff with text git couldn't read as UTF-8
+      (shown as `�`) is refused before git runs: writing it back would change the file.
   - Paths are passed with `--literal-pathspecs`, so a file named `:x` or `*.c` means itself.
   - **Results:** after a job, `command_finished(command, ok)` is sent for each of its
     commands, in order, after the parts and the error: `ok` is False for the one that
@@ -338,7 +367,8 @@ class RepoWatcher(QObject):
   or one every 2 s while it lasts. The session merges it into a waiting job too.
 - **The app's own commands** already reload what they change (§4.1). While
   `session.commands_in_flight` isn't empty, changes inside `.git` are counted as theirs
-  and dropped, and so are working tree changes to the paths of an in-flight Discard. On
+  and dropped, and so are working tree changes to the paths of an in-flight Discard or
+  Discard Lines. On
   `command_finished` the watcher reads the events already waiting, so a command's own
   changes are dropped even if they arrive after it. Any other working tree change still
   counts. A git command run outside the app in that same moment is missed; the focus
@@ -529,7 +559,7 @@ The first three are extracted from the original `main_window.py` with the same b
 | CommitFilesPanel | `commit_files` | sidebar | "Commit Files": the selected commit's changed files, in place of Unstaged Files, Staged Files and Commit; collapsed for Uncommitted changes | `selection.select()` |
 | FilesPanel | `files` | sidebar | "Unstaged Files": unstaged and untracked files, status colours | `selection.select()`; stages |
 | StagedPanel | `staged` | sidebar | "Staged Files": the index's changes; collapsed when empty | `selection.select()`; unstages |
-| DiffPanel | `diff` | content | the diff of `selection.file`, unified or side by side | (later: stage hunks) |
+| DiffPanel | `diff` | content | the diff of `selection.file`, unified or side by side | stages, unstages and discards hunks and lines |
 | CommitPanel | `commit` | sidebar | the commit message being written | commits the staged changes |
 
 **Unstaged Files** (FilesPanel) and **Staged Files** (StagedPanel, `staged_panel.py`)
@@ -633,10 +663,54 @@ than rebuilding them.
   hunk headers also get the hunk text colour. The gutter is drawn like Qt's code-editor
   example. Colours are `diff_*` tokens, the font is `theme.mono_font()`, and a trailing
   carriage return shows as `␍`.
+  - **The gutter** (`DiffGutter`, `diff_gutter.py`) sits in the view's left margin and
+    paints the visible rows only (the view's `visible_rows`). From the left: line buttons
+    (when on, on the row under the pointer and on selected rows), the number columns, then
+    the marks.
+  - **Line selection** (`LineSelection`, `line_selection.py`): the diff selects whole changed
+    lines (`+` or `−`), not text. A click on a changed line, in the text or the gutter,
+    selects just it; dragging selects the changed lines from there to the pointer
+    (scrolling when the pointer leaves the view); Shift-click selects from the last click;
+    Ctrl-click adds or removes one line. A click elsewhere, or Esc, clears it; Ctrl+A
+    selects every changed line. Context lines, hunk headers, filler and notes are never
+    selected. A selected line has a stronger background of its own colour
+    (`diff_added_selected_bg`, `diff_removed_selected_bg`, in the gutter too) and a 1 px
+    outline in its mark colour (`status.added`, `status.deleted`) around the text; a run of
+    selected lines of one kind shares one outline. Ctrl+C and Copy copy the selected lines'
+    text, joined by newlines (no marks). A new diff of the same file with the same rows
+    keeps the selection; any other clears it. Each view (side by side: each side) has its
+    own.
+  - **Line buttons:** with `set_line_buttons("Stage")` (or `"Unstage"`), every changed line
+    (`+` or `−`) has a small button with that label at the left edge of the gutter. It
+    shows while its row is under the pointer (in the text or the gutter; the view
+    tells the gutter, and works it out again after a scroll), and on every selected row for
+    as long as it is selected: square and green
+    (`diff_line_button`) with a thin outline (`diff_line_button_border`: white in the dark
+    theme, dark green in the light one), and another green with a hand when the pointer is on it.
+    Its column is kept while buttons are on, so nothing moves as the pointer does. A click on
+    a selected row's button sends `lines_clicked` with all the selected lines; on another
+    row's, with that one line. Off, the column takes no room. (RZG-23; to be iterated on.)
   - **Marks:** after the line numbers, the gutter shows `+` on added rows and `−` (U+2212,
     as wide as `+`) on removed rows, in `status.added` and `status.deleted`. They are
     painted, not part of the text, so copied text is code only, and they are drawn for the
     visible rows only, like the numbers. A line's kind never shows by colour alone.
+  - **Hunk links:** when the panel gives it a link text (`set_hunk_link`), every hunk header
+    shows it at the right edge of the view, in the accent colour, over the header's own
+    background. The pointer becomes a hand over it, and a click sends `hunk_clicked(hunk)`.
+    With no link text, the panel can give a tooltip for hunk headers instead.
+  - **Rows know their line:** each `DiffRow` holds the index of its hunk and of its line in
+    the `FileDiff`, so `selected_lines()` turns the line selection into `(hunk, line)`
+    pairs. Side by side, each view only holds its own side's lines.
+- **Hunks and lines (DiffPanel):** for a worktree or index diff, each hunk header links
+  **Stage Hunk** or **Unstage Hunk**, and each changed line's gutter button stages or
+  unstages that line, or all the selected lines if it is one of them (it never discards). Right-click offers the hunk under the pointer and the
+  selected lines (the clicked line when nothing is selected): Stage/Unstage Hunk,
+  Stage/Unstage Selected Lines and, for a tracked file's unstaged diff, Discard Hunk… and
+  Discard Selected Lines…, then Copy. Commit diffs have none of these. A staged rename, or a
+  diff with unreadable text, has no links or line buttons, and its menu entries are
+  disabled, saying why.
+  Discards go through `AppActions.request_discard_lines`: the window confirms (§8). The diff
+  that comes back keeps the scroll position.
 - **States:** "Select a file to see its diff", "No changes to show", "Binary file", "Large
   diff (N lines) [Show anyway]" and "Couldn't read this diff" are a muted message instead
   of the view (`Role.PLACEHOLDER`). If a diff takes more than 150 ms, "Loading…" is shown.
@@ -916,7 +990,7 @@ back where the user had it. The default place is only the fallback.
 @dataclass(frozen=True)
 class ThemeColors:   menubar_bg: str; toolbar_bg: str; tab_bg: str; header_bg: str; sidebar_bg: str; content_bg: str; border: str; tree_guide: str;
                      text: str; text_muted: str; hover: str; selection: str; content_selection: str;
-                     accent: str; button_*: str; scroll_*: str; diff_*: str (incl. diff_hunk_bg, diff_hunk_text); …
+                     accent: str; button_*: str; scroll_*: str; diff_*: str (incl. diff_hunk_bg, diff_hunk_text, diff_line_button*, diff_*_selected_bg); …
 @dataclass(frozen=True)
 class StatusColors:  modified, added, deleted, renamed, copied, type_changed, conflict, untracked: str
                      def for_code(self, code: str) -> str | None   # porcelain letter → colour; None if unknown
@@ -1020,6 +1094,9 @@ Per-widget sheets are slow to apply and scatter the rules.
   file panels' context menus. Stage and Unstage call `selection.follow()` first, so the
   moved rows are selected in the other panel (§4.2). Discard is connected by MainWindow, which asks for
   confirmation first (listing the files, and that untracked ones go to the trash).
+- **Discard lines:** the Diff panel calls `actions.request_discard_lines(diff, lines)`, which
+  sends `discard_lines_requested`. MainWindow asks first ("Discard 3 changed lines of
+  path?", can't be undone) and then calls `session.discard_lines`.
 - **Commit** (Ctrl+Enter, in the Repository menu) commits the staged changes with the
   Commit panel's message. It is enabled when a repository is open, something is staged
   and the panel reports its message ready (`set_commit_ready`); the panel connects
@@ -1063,8 +1140,9 @@ cheap to fix **later**, without paying for them now:
   builds, and every role it uses exists), `test_layout_model` (round-trip and `normalize`
   edge cases), `test_layout_host` (build, panel reuse, reading sizes back),
   `test_<name>_panel` (each panel renders a temp repo and the empty state),
-  `test_diff_request`, `test_diff_rows` and `test_diff_view` (the diff's worker side, its
-  rows, and the marks the gutter paints),
+  `test_diff_request`, `test_diff_rows`, `test_diff_view`, `test_diff_gutter` and `test_line_selection` (the diff's
+  worker side, its rows, the links, and the marks and line buttons the gutter paints),
+  `test_diff_patch` (patches applied by git to temp repos),
   `test_git_commands` (commands on temp repos), `test_commit_drafts`,
   `test_inotify_watcher` and `test_repo_watcher` (real file changes in temp repos), and
   `test_architecture` (§2 import rules, unique panel ids).

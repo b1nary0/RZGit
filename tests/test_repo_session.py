@@ -5,9 +5,11 @@ from pathlib import Path
 import threading
 from unittest import mock
 
+from rzgitclient.core.diff_patch import hunk_lines
+from rzgitclient.core.git_commands import CommandKind
 from rzgitclient.core.repo_session import Refresh, RepoSession
 from rzgitclient.core.selection import FileSelection, FileSource
-from rzgitclient.git.git_models import FileStatus
+from rzgitclient.git.git_models import DiffSource, FileStatus
 from rzgitclient.git.repo import GitError, Repo
 from tests.support import SignalRecorder, commit_file, git, make_repo, qt_app, wait_idle
 
@@ -687,6 +689,33 @@ class RepoSessionCommandTests(unittest.TestCase):
         self.session.stage(["b.txt"])
         wait_idle(self.session)
         self.assertEqual(self.codes(), {"a.txt": " M", "b.txt": "A "})
+
+    def test_stage_lines_reloads_the_status_and_the_diff(self):
+        target = FileSelection("a.txt", FileSource.WORKTREE)
+        self.session.request_diff(target)
+        wait_idle(self.session)
+        diff = self.session.diff
+        self.rec.clear()
+        command = self.session.stage_lines(diff, hunk_lines(diff, 0))
+        self.assertEqual(command.kind, CommandKind.STAGE_LINES)
+        self.assertEqual(command.paths, ("a.txt",))
+        wait_idle(self.session)
+        self.assertEqual(self.codes(), {"a.txt": "M ", "b.txt": "??"})
+        self.assertEqual(self.rec.names(), ["status_changed"])  # only what it changed
+        self.assertEqual(self.session.diff.hunks, ())  # nothing left unstaged
+
+    def test_unstage_and_discard_lines(self):
+        git(self.path, "add", "a.txt")
+        self.session.refresh()
+        wait_idle(self.session)
+        index = Repo(self.path).diff("a.txt", DiffSource.INDEX)
+        self.session.unstage_lines(index, hunk_lines(index, 0))
+        wait_idle(self.session)
+        self.assertEqual(self.codes(), {"a.txt": " M", "b.txt": "??"})
+        worktree = Repo(self.path).diff("a.txt", DiffSource.WORKTREE)
+        self.session.discard_lines(worktree, hunk_lines(worktree, 0))
+        wait_idle(self.session)
+        self.assertEqual(self.codes(), {"b.txt": "??"})
 
     def test_commands_are_in_flight_until_command_finished_has_gone_out(self):
         self.assertEqual(self.session.commands_in_flight, ())

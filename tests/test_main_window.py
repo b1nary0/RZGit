@@ -7,7 +7,10 @@ from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QToolBar, QToolButton
 
 from rzgitclient.core.app_settings import AppSettings
+from rzgitclient.core.diff_patch import hunk_lines
 from rzgitclient.core.selection import FileSelection, FileSource
+from rzgitclient.git.git_models import DiffSource
+from rzgitclient.git.repo import Repo
 from rzgitclient.ui.layout.layout_model import (
     LayoutState,
     Orientation,
@@ -282,6 +285,24 @@ class MainWindowTests(unittest.TestCase):
         window.ctx.actions.file_tree.setChecked(False)
         self.quit(window)
         self.assertFalse(self.start().ctx.actions.file_tree.isChecked())
+
+    def test_discard_lines_asks_first(self):
+        repo = make_repo(self.tmp / "repo")
+        commit_file(repo, "a.txt", "a\nb\n", "first")
+        (repo / "a.txt").write_text("a\nB\n")
+        window = self.start()
+        window.session.open(repo)
+        wait_idle(window.session)
+        diff = Repo(repo).diff("a.txt", DiffSource.WORKTREE)
+        with mock.patch.object(window, "confirm_discard_lines", return_value=False) as ask:
+            window.ctx.actions.request_discard_lines(diff, hunk_lines(diff, 0))
+            wait_idle(window.session)
+        ask.assert_called_once_with("a.txt", 2)
+        self.assertEqual((repo / "a.txt").read_text(), "a\nB\n")  # declined
+        with mock.patch.object(window, "confirm_discard_lines", return_value=True):
+            window.ctx.actions.request_discard_lines(diff, hunk_lines(diff, 0))
+            wait_idle(window.session)
+        self.assertEqual((repo / "a.txt").read_text(), "a\nb\n")
 
     def test_repository_menu_has_the_staging_and_commit_actions(self):
         window = self.start()

@@ -6,7 +6,7 @@ decide which rows there are.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from rzgitclient.git.git_models import DiffLine, FileDiff, LineKind
@@ -29,6 +29,10 @@ class DiffRow:
     text: str = ""
     old_no: int | None = None
     new_no: int | None = None
+    # Where it is in the FileDiff: a hunk header's hunk; a line's hunk and line.
+    # Position, not content, so rows still compare by what they show.
+    hunk: int | None = field(default=None, compare=False)
+    line: int | None = field(default=None, compare=False)
 
 
 _FILLER = DiffRow(RowKind.FILLER)
@@ -43,10 +47,10 @@ _VISIBLE = str.maketrans({"\r": "␍", " ": "␤", " ": "¶"})
 def unified_rows(diff: FileDiff) -> tuple[DiffRow, ...]:
     """One column: each line once, with its old and new numbers."""
     rows: list[DiffRow] = []
-    for hunk in diff.hunks:
-        rows.append(DiffRow(RowKind.HUNK, hunk.header))
-        for line in hunk.lines:
-            rows.extend(_rows(line))
+    for h, hunk in enumerate(diff.hunks):
+        rows.append(DiffRow(RowKind.HUNK, hunk.header, hunk=h))
+        for i, line in enumerate(hunk.lines):
+            rows.extend(_rows(line, h, i))
     return tuple(rows)
 
 
@@ -68,26 +72,27 @@ def split_rows(diff: FileDiff) -> tuple[tuple[DiffRow, ...], tuple[DiffRow, ...]
         removed.clear()
         added.clear()
 
-    for hunk in diff.hunks:
-        header = DiffRow(RowKind.HUNK, hunk.header)
+    for h, hunk in enumerate(diff.hunks):
+        header = DiffRow(RowKind.HUNK, hunk.header, hunk=h)
         left.append(header)
         right.append(header)
-        for line in hunk.lines:
+        for i, line in enumerate(hunk.lines):
             if line.kind is LineKind.REMOVED:
                 if added:  # removed after added: a new pair of runs
                     flush()
-                removed.extend(_rows(line))
+                removed.extend(_rows(line, h, i))
             elif line.kind is LineKind.ADDED:
-                added.extend(_rows(line))
+                added.extend(_rows(line, h, i))
             else:
                 flush()
-                rows = _rows(line)
+                rows = _rows(line, h, i)
                 left.extend(rows)
                 right.extend(rows)
         flush()
     return tuple(left), tuple(right)
 
 
-def _rows(line: DiffLine) -> list[DiffRow]:
-    row = DiffRow(_KINDS[line.kind], line.text.translate(_VISIBLE), line.old_no, line.new_no)
+def _rows(line: DiffLine, hunk: int, index: int) -> list[DiffRow]:
+    row = DiffRow(_KINDS[line.kind], line.text.translate(_VISIBLE), line.old_no, line.new_no,
+                  hunk, index)
     return [row, _NOTE] if line.no_newline else [row]

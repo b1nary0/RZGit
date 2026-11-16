@@ -6,11 +6,14 @@ objects, so text, icon, shortcut and enabled state are set in one place.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Slot
+from collections.abc import Iterable
+
+from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import FileSource, Selection
+from rzgitclient.git.git_models import FileDiff
 from rzgitclient.ui.theme.theme_manager import ThemeMode
 
 
@@ -19,6 +22,9 @@ class AppActions(QObject):
     Open dialog, closing the window, resetting the layout, confirming a
     discard) are connected by MainWindow; Commit by the Commit panel, which
     holds the message."""
+
+    # The Diff panel asks to discard lines; MainWindow confirms, then discards (spec §8).
+    discard_lines_requested = Signal(object, object)  # FileDiff, frozenset[(hunk, line)]
 
     def __init__(self, session: RepoSession, selection: Selection,
                  parent: QObject | None = None):
@@ -91,6 +97,12 @@ class AppActions(QObject):
             self._session.stage(paths)
         else:
             self._session.unstage(paths)
+
+    def request_discard_lines(self, diff: FileDiff, lines: Iterable[tuple[int, int]]) -> None:
+        """Ask for the chosen lines of ``diff`` to be discarded, once confirmed."""
+        chosen = frozenset(lines)
+        if chosen:
+            self.discard_lines_requested.emit(diff, chosen)
 
     def selected(self, source: FileSource) -> tuple[str, ...]:
         """Paths of the selected rows from ``source`` (Stage, Unstage, Discard)."""
