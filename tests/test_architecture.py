@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import re
 import unittest
 from pathlib import Path
 
@@ -178,6 +179,46 @@ class RuleTests(unittest.TestCase):
         )
         self.assertBreaks("rzgitclient.ui.panels.panel", "from ..layout.panel_frame import PanelFrame",
                           "ui layout is above ui panels")
+
+
+
+# ---- colours live in the theme (spec §7) -------------------------------------
+
+_HEX_COLOUR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+_QT_COLOURS = {"white", "black", "red", "green", "blue", "cyan", "magenta", "yellow",
+               "gray", "darkGray", "lightGray", "darkRed", "darkGreen", "darkBlue",
+               "darkCyan", "darkMagenta", "darkYellow", "GlobalColor"}
+
+
+def hard_coded_colours(source: str) -> list[str]:
+    """Colours written into ``source``: "#rrggbb" strings and Qt's named colours."""
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if _HEX_COLOUR.match(node.value):
+                found.append(node.value)
+        elif (isinstance(node, ast.Attribute) and node.attr in _QT_COLOURS
+              and isinstance(node.value, ast.Name) and node.value.id == "Qt"):
+            found.append(f"Qt.{node.attr}")
+    return found
+
+
+class ColourRuleTests(unittest.TestCase):
+    def test_no_colours_outside_the_theme(self):
+        theme = SRC / "ui" / "theme"
+        offenders = {
+            str(path.relative_to(SRC)): colours
+            for path in sorted(SRC.rglob("*.py"))
+            if theme not in path.parents
+            and (colours := hard_coded_colours(path.read_text()))
+        }
+        self.assertEqual(offenders, {})
+
+    def test_the_rule_fires(self):
+        self.assertEqual(hard_coded_colours('c = QColor("#ff0000")'), ["#ff0000"])
+        self.assertEqual(hard_coded_colours("c = Qt.white"), ["Qt.white"])
+        self.assertEqual(hard_coded_colours('c = Qt.GlobalColor.red'), ["Qt.GlobalColor"])
+        self.assertEqual(hard_coded_colours('s = "#1 item"; t = "#abc1"'), [])
 
 
 if __name__ == "__main__":

@@ -17,7 +17,19 @@ from rzgitclient.ui.layout.layout_model import (
 )
 from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
 from rzgitclient.ui.main_window import MainWindow, commit_summary
+from rzgitclient.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
+from rzgitclient.ui.theme.theme_manager import ThemeManager, ThemeMode
 from tests.support import commit_file, make_panel_context, make_repo, qt_app, wait_idle
+
+
+def bright_share(image, step=3):
+    """The share of pixels that are light: text is, a light background would be."""
+    total = bright = 0
+    for y in range(0, image.height(), step):
+        for x in range(0, image.width(), step):
+            total += 1
+            bright += image.pixelColor(x, y).lightness() > 160
+    return bright / max(total, 1)
 
 
 def strip_sizes(node):
@@ -119,7 +131,41 @@ class MainWindowTests(unittest.TestCase):
         view = next(a.menu() for a in window.menuBar().actions() if a.text() == "&View")
         self.assertEqual([a.text() for a in view.actions()],
                          ["&Layout", "&Panels", "", "Show Files as &Tree",
-                          "&Side by Side Diff", "", "&Reset Layout"])
+                          "&Side by Side Diff", "", "&Theme", "", "&Reset Layout"])
+
+    def test_the_theme_menu_switches_live_and_is_remembered(self):
+        self.addCleanup(ThemeManager, self.app, LIGHT_THEME)  # leave the shared app light
+        window = self.start()
+        actions = window.ctx.actions.theme_modes
+        view = next(a.menu() for a in window.menuBar().actions() if a.text() == "&View")
+        theme_menu = next(a.menu() for a in view.actions() if a.text() == "&Theme")
+        self.assertEqual(theme_menu.actions(), list(actions.values()))
+        self.assertTrue(actions[ThemeMode.LIGHT].isChecked())  # the context's theme
+        actions[ThemeMode.DARK].trigger()
+        self.assertIs(window.ctx.theme.current, DARK_THEME)
+        self.assertEqual(self.app.styleSheet(), DARK_THEME.stylesheet())
+        self.quit(window)
+        self.assertEqual(AppSettings(self.settings_path).theme_mode, "dark")
+
+    def test_every_panel_is_dark_in_the_dark_theme(self):
+        self.addCleanup(ThemeManager, self.app, LIGHT_THEME)
+        repo = make_repo(self.tmp / "repo")
+        commit_file(repo, "a.txt", "one\ntwo\n", "first")
+        (repo / "a.txt").write_text("one\nthree\n")
+        (repo / "new.txt").write_text("new\n")
+        window = self.start()
+        window.resize(1200, 800)
+        window.ctx.theme.set_mode(ThemeMode.DARK)  # live, after the panels were built
+        window.session.open(repo)
+        wait_idle(window.session)
+        shown = FileSelection("a.txt", FileSource.WORKTREE)
+        window.ctx.selection.select([shown], shown)  # the Diff panel shows it
+        wait_idle(window.session)
+        self.app.processEvents()
+        for name, panel in window.layout_host.panels.items():
+            if panel.isVisible() and panel.width() > 0 and panel.height() > 0:
+                self.assertLess(bright_share(panel.grab().toImage()), 0.08, name)
+        self.assertLess(bright_share(window.grab().toImage()), 0.08)
 
     def test_a_saved_layout_survives_a_restart(self):
         window = self.start()

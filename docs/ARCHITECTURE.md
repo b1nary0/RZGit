@@ -27,7 +27,8 @@ one names the sections below that it covers.
 **Non-goals (for the first phase)**
 - Changing behaviour. The refactor ends with the same window as before it.
 - A UI for editing layouts by drag and drop. The data model supports it; the UI comes later.
-- A dark theme or loading themes from files. The theme model makes both easy later.
+- Loading themes from files. The theme model makes it easy later. (A dark theme came
+  with RZG-32: §7.1, §7.3.)
 
 ## 2. Layering
 
@@ -923,13 +924,25 @@ class ThemeMetrics:  splitter_width: int = 1; scrollbar_width: int = 10; row_pad
 @dataclass(frozen=True)
 class AppTheme:
     name: str; colors: ThemeColors; status: StatusColors; fonts: ThemeFonts; metrics: ThemeMetrics
+    dark: bool = False   # the colour scheme Qt is told (§7.3)
     def stylesheet(self) -> str     # generated from the tokens by theme_stylesheet.py
     def palette(self) -> QPalette
     def mono_font(self) -> QFont
     def status_color(self, code: str) -> str   # status.for_code(code), falling back to colors.text
 
 LIGHT_THEME = AppTheme(...)
+DARK_THEME = AppTheme(..., dark=True)
 ```
+
+- **Two themes:** `LIGHT_THEME` and `DARK_THEME`. Both set every token; neither derives
+  from the other. `dark` tells Qt which colour scheme the theme is, so Fusion's own
+  drawing (frames, arrows) and native dialogs match it.
+- **Colours live only here.** No module outside `ui/theme/` writes a colour (a `"#rrggbb"`
+  string or a Qt named colour); `tests/test_architecture.py` checks it. Panels take theirs
+  from the theme's tokens, so a new theme needs no panel changes.
+- **The palette** is built from the tokens. A dark theme also sets the bevel roles
+  (`Light`, `Midlight`, `Mid`, `Dark`, `Shadow`) from its button colour, since Qt's
+  defaults for them are a light theme's.
 
 - **Typed fields instead of a dict.** A typo becomes an error at import time, and editors
   can autocomplete. Frozen, so a theme can't be half-changed.
@@ -962,10 +975,19 @@ per-row data, which Qt's stylesheet can't target, so panels set them from the th
 ### 7.3 ThemeManager
 
 `ThemeManager(QObject)` (`theme_manager.py`) holds `current` and is the **only** caller of
-`QApplication.setStyle`, `setPalette` and `setStyleSheet`. It applies its first theme when
-it's created. `set_theme(t)` applies a new theme and emits `theme_changed(t)`, but does
-nothing if `t` equals the current theme. The stylesheet repaints itself; panels refresh any colours
-they set in code in `apply_theme`.
+`QApplication.setStyle`, `setPalette`, `setStyleSheet` and `QStyleHints.setColorScheme`. It
+applies its first theme when it's created. `set_theme(t)` applies a new theme and emits
+`theme_changed(t)`, but does nothing if `t` equals the current theme. The stylesheet
+repaints itself; panels refresh any colours they set in code in `apply_theme`.
+
+**Theme mode:** `ThemeMode` is `LIGHT`, `DARK` or `SYSTEM` (a `StrEnum`, so its value is
+what settings store). `set_mode(m)` picks the theme for it; `mode` is the current one.
+- `LIGHT` and `DARK` set Qt's colour scheme to the theme's (`setColorScheme`).
+- `SYSTEM` clears that (`unsetColorScheme`), takes the desktop's scheme, and follows
+  `QStyleHints.colorSchemeChanged` while it stays the mode: dark gives `DARK_THEME`,
+  anything else `LIGHT_THEME`.
+- `ThemeManager(app, mode=m)` starts in a mode, so the first theme applied is already the
+  right one: the window never shows light first.
 
 **Performance rule:** one stylesheet for the whole app, never per-widget `setStyleSheet`.
 Per-widget sheets are slow to apply and scatter the rules.
@@ -982,6 +1004,11 @@ Per-widget sheets are slow to apply and scatter the rules.
   with the layout, so panels never touch settings. **Show Files as Tree** works the same
   way (`AppSettings.file_tree`, on by default): every `FileList` follows its `toggled`.
   Both are in the **View** menu.
+- **Theme** (View → Theme): **Light**, **Dark** and **System**, three checkable actions in
+  one exclusive group (`AppActions.theme_modes`, by `ThemeMode`). MainWindow checks the
+  current mode, calls `ctx.theme.set_mode` when one is triggered, and saves it on close
+  (`AppSettings.theme_mode`, `"system"` by default). app.py reads it before the window is
+  built. Switching is live.
 - **Staging actions:** Stage (Ctrl+S) and Unstage (Ctrl+U) act on the selected rows of
   that kind (`selection.files`), Discard Changes… (Ctrl+Backspace) on the selected unstaged
   rows, Stage All (Ctrl+Shift+S) and Unstage All (Ctrl+Shift+U) on the whole status. Each is

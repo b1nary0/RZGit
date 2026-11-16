@@ -7,10 +7,11 @@ objects, so text, icon, shortcut and enabled state are set in one place.
 from __future__ import annotations
 
 from PySide6.QtCore import QObject, Slot
-from PySide6.QtGui import QAction, QIcon, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import FileSource, Selection
+from rzgitclient.ui.theme.theme_manager import ThemeMode
 
 
 class AppActions(QObject):
@@ -38,6 +39,14 @@ class AppActions(QObject):
         self.file_tree = self._action("view-list-tree", "Show Files as &Tree")
         self.file_tree.setCheckable(True)
         self.file_tree.setChecked(True)
+        # View → Theme: one of three, checked by MainWindow (spec §8).
+        self._theme_group = QActionGroup(self)
+        self.theme_modes: dict[ThemeMode, QAction] = {}
+        for mode, text in ((ThemeMode.LIGHT, "&Light"), (ThemeMode.DARK, "&Dark"),
+                           (ThemeMode.SYSTEM, "&System")):
+            action = QAction(text, self._theme_group)
+            action.setCheckable(True)
+            self.theme_modes[mode] = action
 
         # Staging (spec §8): on the selected rows of their kind, or on everything.
         self.stage = self._action("list-add", "&Stage", "Ctrl+S")

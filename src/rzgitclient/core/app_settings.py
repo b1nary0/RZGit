@@ -21,6 +21,7 @@ _LAYOUT_PRESET = "layout_preset"
 _WINDOW_GEOMETRY = "window/geometry"
 _SIDE_BY_SIDE_DIFF = "diff/side_by_side"
 _FILE_TREE = "files/tree"
+_THEME_MODE = "theme/mode"
 _COMMIT_DRAFTS = "commit/drafts"
 _SAVED_LAYOUTS = "layouts/saved"
 
@@ -94,6 +95,17 @@ class AppSettings:
     @file_tree.setter
     def file_tree(self, on: bool) -> None:
         self._set(_FILE_TREE, bool(on))
+
+    @property
+    def theme_mode(self) -> str:
+        """The theme the user chose: "light", "dark" or "system" (default).
+        Anything else stored reads as "system"."""
+        value = self._settings.value(_THEME_MODE, "system", str)
+        return value if value in ("light", "dark", "system") else "system"
+
+    @theme_mode.setter
+    def theme_mode(self, mode: str) -> None:
+        self._set(_THEME_MODE, str(mode))
 
     @property
     def commit_drafts(self) -> dict[str, str]:

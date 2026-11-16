@@ -28,6 +28,7 @@ class MainWindow(QMainWindow):
         # Before the panels are built, so the Diff panel starts in the saved view.
         ctx.actions.side_by_side_diff.setChecked(settings.side_by_side_diff)
         ctx.actions.file_tree.setChecked(settings.file_tree)
+        ctx.actions.theme_modes[ctx.theme.mode].setChecked(True)
         self._build_ui()
         self._build_actions()
 
@@ -65,6 +66,11 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
         view_menu.addActions([actions.file_tree, actions.side_by_side_diff])
         view_menu.addSeparator()
+        theme_menu = view_menu.addMenu("&Theme")
+        for mode, action in actions.theme_modes.items():
+            theme_menu.addAction(action)
+            action.triggered.connect(lambda _checked=False, mode=mode: self.ctx.theme.set_mode(mode))
+        view_menu.addSeparator()
         view_menu.addAction(actions.reset_layout)
 
     def _build_ui(self) -> None:
@@ -90,6 +96,7 @@ class MainWindow(QMainWindow):
         self.settings.window_geometry = self.saveGeometry()
         self.settings.side_by_side_diff = self.ctx.actions.side_by_side_diff.isChecked()
         self.settings.file_tree = self.ctx.actions.file_tree.isChecked()
+        self.settings.theme_mode = self.ctx.theme.mode.value
         super().closeEvent(event)
 
     def discard_selected(self) -> None:

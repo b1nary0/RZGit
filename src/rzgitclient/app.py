@@ -14,8 +14,7 @@ from rzgitclient.core.selection import Selection
 from rzgitclient.ui.app_actions import AppActions
 from rzgitclient.ui.main_window import MainWindow
 from rzgitclient.ui.panels.panel import PanelContext
-from rzgitclient.ui.theme.app_theme import LIGHT_THEME
-from rzgitclient.ui.theme.theme_manager import ThemeManager
+from rzgitclient.ui.theme.theme_manager import ThemeManager, ThemeMode
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -25,7 +24,9 @@ def main(argv: list[str] | None = None) -> int:
     app.setOrganizationName("RZGitClient")
     app.setApplicationVersion(__version__)
     app.setDesktopFileName("rzgitclient")
-    theme = ThemeManager(app, LIGHT_THEME)
+    settings = AppSettings()
+    # The saved theme, before any widget exists: the window never shows another first.
+    theme = ThemeManager(app, mode=ThemeMode(settings.theme_mode))
     session = RepoSession()
     # The window follows the repository by itself (spec §4.3).
     watcher = RepoWatcher(session)
@@ -33,7 +34,6 @@ def main(argv: list[str] | None = None) -> int:
         lambda state: watcher.set_active(state == Qt.ApplicationState.ApplicationActive))
 
     selection = Selection(session)
-    settings = AppSettings()
     ctx = PanelContext(
         session=session,
         selection=selection,

@@ -108,6 +108,7 @@ class AppTheme:
     status: StatusColors
     fonts: ThemeFonts = field(default_factory=ThemeFonts)
     metrics: ThemeMetrics = field(default_factory=ThemeMetrics)
+    dark: bool = False  # the colour scheme Qt is told, so its own drawing matches (§7.3)
 
     def status_color(self, code: str) -> str:
         """Colour for a porcelain status letter, falling back to plain text."""
@@ -138,6 +139,18 @@ class AppTheme:
             p.setColor(r, QColor(value))
         for r in (role.Text, role.WindowText, role.ButtonText):
             p.setColor(QPalette.ColorGroup.Disabled, r, QColor(c.text_muted))
+        if self.dark:
+            # Qt's defaults for the bevel roles are a light theme's: Fusion would
+            # draw light frames and arrows. Shade them from the button colour.
+            button = QColor(c.button_bg)
+            for r, value in (
+                (role.Light, button.lighter(150)),
+                (role.Midlight, button.lighter(125)),
+                (role.Mid, button.darker(120)),
+                (role.Dark, button.darker(150)),
+                (role.Shadow, QColor(c.sidebar_bg).darker(200)),
+            ):
+                p.setColor(r, value)
         return p
 
     def mono_font(self) -> QFont:
@@ -196,5 +209,59 @@ LIGHT_THEME = AppTheme(
         type_changed="#4a7fc1",
         conflict="#d9822b",
         untracked="#3a9a9a",
+    ),
+)
+
+
+DARK_THEME = AppTheme(
+    name="Dark",
+    dark=True,
+    colors=ThemeColors(
+        menubar_bg="#24252b",  # the sidebar's: the menu bar blends into the window
+        menubar_text="#eaeaf2",
+        menubar_hover="#363840",
+        toolbar_bg="#24252b",
+        tab_bg="#363840",
+        header_bg="#363840",  # same as tab_bg, as in the light theme
+        sidebar_bg="#24252b",
+        content_bg="#2c2d34",
+        border="#41424d",
+        border_light="#36373f",
+        tree_guide="#41424d",
+        text="#eaeaf2",
+        text_muted="#aaabb1",
+        placeholder="#757783",
+        warning="#f0bf00",
+        hover="#303139",
+        content_hover="#34353d",
+        selection="#44454e",
+        content_selection="#44454e",
+        text_selection="#2f4a6e",
+        accent="#4ea7fc",
+        accent_text="#111216",  # dark on the light blue: white would be hard to read
+        button_bg="#363840",
+        button_hover="#41424d",
+        button_pressed="#4b4d59",
+        scroll_handle="#44454e",
+        scroll_handle_hover="#5b5d6a",
+        tooltip_bg="#363840",
+        diff_added_bg="#253a2f",
+        diff_added_word="#2f5c42",
+        diff_removed_bg="#43272b",
+        diff_removed_word="#6e333b",
+        diff_filler_bg="#27282e",
+        diff_gutter_text="#757783",
+        diff_hunk_bg="#2f3447",
+        diff_hunk_text="#93a6cc",
+    ),
+    status=StatusColors(
+        modified="#4ea7fc",
+        added="#4cb782",
+        deleted="#f27474",
+        renamed="#bb87fc",
+        copied="#bb87fc",
+        type_changed="#4ea7fc",
+        conflict="#f0bf00",
+        untracked="#2ebdc9",
     ),
 )

@@ -8,6 +8,7 @@ from PySide6.QtGui import QKeySequence
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import FileSelection, FileSource, Selection
 from rzgitclient.ui.app_actions import AppActions
+from rzgitclient.ui.theme.theme_manager import ThemeMode
 from tests.support import commit_file, git, make_repo, qt_app, wait_idle
 
 W, I = FileSource.WORKTREE, FileSource.INDEX
@@ -33,6 +34,14 @@ class AppActionsTests(unittest.TestCase):
         a = self.actions
         return {name for name in ("stage", "unstage", "discard", "stage_all", "unstage_all")
                 if getattr(a, name).isEnabled()}
+
+    def test_theme_modes_are_one_of_three(self):
+        modes = self.actions.theme_modes
+        self.assertEqual([a.text() for a in modes.values()], ["&Light", "&Dark", "&System"])
+        self.assertTrue(all(a.isCheckable() for a in modes.values()))
+        modes[ThemeMode.DARK].trigger()
+        modes[ThemeMode.SYSTEM].trigger()
+        self.assertEqual([m for m, a in modes.items() if a.isChecked()], [ThemeMode.SYSTEM])
 
     def test_refresh_enabled_only_with_a_repo(self):
         self.assertFalse(self.actions.refresh.isEnabled())

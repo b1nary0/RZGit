@@ -46,6 +46,15 @@ class AppSettingsTests(unittest.TestCase):
         self.settings.side_by_side_diff = True
         self.assertTrue(self.reopen().side_by_side_diff)
 
+    def test_theme_mode_defaults_to_system_and_survives_a_reopen(self):
+        self.assertEqual(self.settings.theme_mode, "system")
+        self.settings.theme_mode = "dark"
+        self.assertEqual(self.reopen().theme_mode, "dark")
+
+    def test_an_unknown_theme_mode_reads_as_system(self):
+        self.settings.theme_mode = "purple"
+        self.assertEqual(self.reopen().theme_mode, "system")
+
     def test_file_tree_defaults_to_on_and_survives_a_reopen(self):
         self.assertTrue(self.settings.file_tree)
         self.settings.file_tree = False
