@@ -100,7 +100,7 @@ src/rzgitclient/
       file_tree.py              FileTree: changed files grouped by folder (plain Python, no Qt)
       commit_files_panel.py     CommitFilesPanel: the files the selected commit changed
       diff_panel.py             DiffPanel
-      diff_view.py              DiffView: read-only text with a line-number gutter
+      diff_view.py              DiffView: read-only text with a gutter of line numbers and +/− marks
       diff_rows.py              DiffRow, unified_rows, split_rows (plain Python, no Qt)
       commit_panel.py           CommitPanel: the message box and Commit button
     layout/
@@ -633,6 +633,10 @@ than rebuilding them.
   hunk headers also get the hunk text colour. The gutter is drawn like Qt's code-editor
   example. Colours are `diff_*` tokens, the font is `theme.mono_font()`, and a trailing
   carriage return shows as `␍`.
+  - **Marks:** after the line numbers, the gutter shows `+` on added rows and `−` (U+2212,
+    as wide as `+`) on removed rows, in `status.added` and `status.deleted`. They are
+    painted, not part of the text, so copied text is code only, and they are drawn for the
+    visible rows only, like the numbers. A line's kind never shows by colour alone.
 - **States:** "Select a file to see its diff", "No changes to show", "Binary file", "Large
   diff (N lines) [Show anyway]" and "Couldn't read this diff" are a muted message instead
   of the view (`Role.PLACEHOLDER`). If a diff takes more than 150 ms, "Loading…" is shown.
@@ -1059,7 +1063,8 @@ cheap to fix **later**, without paying for them now:
   builds, and every role it uses exists), `test_layout_model` (round-trip and `normalize`
   edge cases), `test_layout_host` (build, panel reuse, reading sizes back),
   `test_<name>_panel` (each panel renders a temp repo and the empty state),
-  `test_diff_request` and `test_diff_rows` (the diff's worker side and its rows),
+  `test_diff_request`, `test_diff_rows` and `test_diff_view` (the diff's worker side, its
+  rows, and the marks the gutter paints),
   `test_git_commands` (commands on temp repos), `test_commit_drafts`,
   `test_inotify_watcher` and `test_repo_watcher` (real file changes in temp repos), and
   `test_architecture` (§2 import rules, unique panel ids).

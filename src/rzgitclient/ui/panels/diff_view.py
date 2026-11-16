@@ -1,4 +1,4 @@
-"""Read-only diff text with a line-number gutter (spec §5.4).
+"""Read-only diff text with a gutter of line numbers and +/− marks (spec §5.4).
 
 The text goes in with one ``setPlainText``: QPlainTextEdit lays out lazily,
 so a long diff costs little until it's scrolled to. Row backgrounds are
@@ -20,6 +20,8 @@ from rzgitclient.ui.theme.style_roles import Role, set_role
 
 _GUTTER_PADDING = 6  # px either side of a number column
 _TAB_WIDTH = 4  # in spaces
+# Painted in the gutter, not part of the text, so copied text is code only.
+MARKS = {RowKind.ADDED: "+", RowKind.REMOVED: "\u2212"}  # − is as wide as + in most fonts
 
 
 class Numbers(Enum):
@@ -38,6 +40,7 @@ class DiffView(QPlainTextEdit):
         self._backgrounds: dict[RowKind, QColor] = {}
         self._text_colors: dict[RowKind, QColor] = {}
         self._gutter_text = QColor()
+        self._mark_colors: dict[RowKind, QColor] = {}
         self._base = QColor()
         self._digits = 1
         set_role(self, Role.DIFF_VIEW)
@@ -78,6 +81,8 @@ class DiffView(QPlainTextEdit):
         self._text_colors = {RowKind.HUNK: QColor(c.diff_hunk_text),
                              RowKind.NOTE: QColor(c.text_muted)}
         self._gutter_text = QColor(c.diff_gutter_text)
+        self._mark_colors = {RowKind.ADDED: QColor(theme.status.added),
+                             RowKind.REMOVED: QColor(theme.status.deleted)}
         self._base = QColor(c.content_bg)
         font = theme.mono_font()
         self.setFont(font)
@@ -104,17 +109,24 @@ class DiffView(QPlainTextEdit):
         painter = QPainter(self._gutter)
         painter.fillRect(event.rect(), self._base)
         column = self._column_width()
-        painter.setPen(self._gutter_text)
+        marks_left = column * len(self._numbers)
         align = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        centre = Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
         for row, top, height in self._visible_rows(event.rect()):
             color = self._backgrounds.get(row.kind)
             if color is not None:
                 painter.fillRect(QRectF(0, top, self._gutter.width(), height), color)
+            painter.setPen(self._gutter_text)
             for i, side in enumerate(self._numbers):
                 number = row.old_no if side == "old" else row.new_no
                 if number is not None:
                     rect = QRect(i * column, int(top), column - _GUTTER_PADDING, int(height))
                     painter.drawText(rect, align, str(number))
+            mark = MARKS.get(row.kind)
+            if mark is not None:
+                painter.setPen(self._mark_colors[row.kind])
+                rect = QRect(marks_left, int(top), self._mark_width(), int(height))
+                painter.drawText(rect, centre, mark)
         painter.end()
 
     def _visible_rows(self, rect: QRect) -> Iterator[tuple[DiffRow, float, float]]:
@@ -133,8 +145,14 @@ class DiffView(QPlainTextEdit):
     def _column_width(self) -> int:
         return self.fontMetrics().horizontalAdvance("9") * self._digits + 2 * _GUTTER_PADDING
 
+    def _mark_width(self) -> int:
+        metrics = self.fontMetrics()
+        return max(metrics.horizontalAdvance(m) for m in MARKS.values())
+
     def gutter_width(self) -> int:
-        return self._column_width() * len(self._numbers)
+        """The number columns, then the mark column and a gap before the text."""
+        return (self._column_width() * len(self._numbers) + self._mark_width()
+                + _GUTTER_PADDING)
 
     def _update_margins(self) -> None:
         self.setViewportMargins(self.gutter_width(), 0, 0, 0)
@@ -177,7 +195,7 @@ class DiffView(QPlainTextEdit):
 
 
 class _Gutter(QWidget):
-    """The line numbers beside a DiffView (as in Qt's code-editor example)."""
+    """The line numbers and marks beside a DiffView (as in Qt's code-editor example)."""
 
     def __init__(self, view: DiffView):
         super().__init__(view)
