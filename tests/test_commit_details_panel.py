@@ -149,6 +149,39 @@ class CommitDetailsPanelTests(unittest.TestCase):
         self.assertEqual(self.panel._sha.toolTip(), self.second.sha)
         self.assertTrue(self.panel._copy.isVisible())
 
+    def test_three_segments_summary_body_and_details(self):
+        self.choose(self.second)
+        top, body, details = self.panel._content.segments
+        self.assertIs(top.header_label, self.panel._summary)
+        self.assertEqual(top.header.property("role"), "segment-header")
+        self.assertTrue(body.fill)
+        self.assertIs(body.content.layout().itemAt(0).widget(), self.panel._body)
+        self.assertEqual(details.header_label.text(), commit_details_panel.DETAILS)
+        self.assertTrue(self.panel._sha.isVisibleTo(details))
+
+    def test_a_long_body_scrolls_and_the_details_stay_in_view(self):
+        long = "Summary line\n\n" + "\n".join(f"Body line {i}" for i in range(80))
+        git(self.repo, "commit", "-q", "--allow-empty", "-m", long)
+        self.session.refresh()
+        wait_idle(self.session)
+        self.panel.resize(260, 320)
+        self.panel.show()
+        self.choose(self.session.history[0])
+        for _ in range(4):
+            QCoreApplication.processEvents()
+        stack = self.panel._content
+        _top, body, details = stack.segments
+        self.assertGreater(body.scroll_area.verticalScrollBar().maximum(), 0)
+        self.assertEqual(stack.verticalScrollBar().maximum(), 0)
+        bottom = details.mapTo(stack.viewport(), details.rect().bottomLeft()).y()
+        self.assertLessEqual(bottom, stack.viewport().height())
+        self.assertTrue(self.panel._author.isVisible())
+
+    def test_no_body_no_body_segment(self):
+        self.choose(self.third)  # "third": a summary only
+        _top, body, _details = self.panel._content.segments
+        self.assertFalse(body.isVisibleTo(self.panel))
+
     def test_the_theme_keeps_the_fonts(self):
         self.choose(self.third)
         self.panel.apply_theme(DARK_THEME)

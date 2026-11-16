@@ -2,7 +2,8 @@
 
 The panel asks the session for the commit's details when ``selection.commit``
 changes, and collapses while it is None (Uncommitted changes), like Commit
-Files, which it sits above.
+Files, which it sits above. Three segments: the summary pinned at the top, the
+body scrolling below it, and the details pinned under their own header.
 """
 
 from __future__ import annotations
@@ -13,12 +14,10 @@ from html import escape
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QMenu,
-    QScrollArea,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
@@ -28,9 +27,11 @@ from PySide6.QtWidgets import (
 from rzgitclient.git.git_models import Commit, CommitDetails
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
-from rzgitclient.ui.theme.style_roles import Role, Surface, set_role, set_surface
+from rzgitclient.ui.theme.style_roles import Role, Surface, set_role
+from rzgitclient.ui.widgets.panel_segment import PanelSegment, PanelSegments
 
 NO_COMMIT = "No commit selected"
+DETAILS = "Details"
 COPY = "Copy"
 COPY_SHA = "Copy SHA"
 _SELECTABLE = (Qt.TextInteractionFlag.TextSelectableByMouse
@@ -59,10 +60,11 @@ class CommitDetailsPanel(Panel):
     surface = Surface.SIDEBAR
 
     # Built when a commit is first selected: the panel starts collapsed.
-    _content: QScrollArea | None
+    _content: PanelSegments | None
     _placeholder: QLabel
     _summary: QLabel
     _body: QLabel
+    _body_segment: PanelSegment
     _sha: QLabel
     _copy: QToolButton
     _parents_box: QHBoxLayout
@@ -111,21 +113,22 @@ class CommitDetailsPanel(Panel):
     # ---- widgets ----------------------------------------------------------------
 
     def _build(self) -> None:
-        inner = QWidget()
-        set_surface(inner, Surface.SIDEBAR)
-        column = QVBoxLayout(inner)
-        column.setContentsMargins(8, 8, 8, 8)
-        column.setSpacing(6)
-        self._summary = self._label()
-        self._body = self._label()
-        column.addWidget(self._summary)
-        column.addWidget(self._body)
+        summary = PanelSegment(header="")
+        self._summary = summary.header_label  # type: ignore[assignment]
 
-        grid = QGridLayout()
+        self._body = self._label()
+        body = QWidget()
+        body_column = QVBoxLayout(body)
+        body_column.setContentsMargins(8, 6, 8, 6)
+        body_column.addWidget(self._body)
+        self._body_segment = PanelSegment(body, fill=True)
+
+        details = QWidget()
+        grid = QGridLayout(details)
+        grid.setContentsMargins(8, 6, 8, 8)
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(4)
         grid.setColumnStretch(1, 1)
-        column.addLayout(grid)
 
         self._sha = self._label(wrap=False)
         self._copy = QToolButton()
@@ -149,13 +152,9 @@ class CommitDetailsPanel(Panel):
         self._add_row(grid, "Author", self._author)
         self._committer = self._label()
         self._committer_name = self._add_row(grid, "Committer", self._committer)
-        column.addStretch(1)
 
-        self._content = QScrollArea()
-        self._content.setFrameShape(QFrame.Shape.NoFrame)
-        self._content.setWidgetResizable(True)
-        self._content.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._content.setWidget(inner)
+        self._content = PanelSegments(
+            (summary, self._body_segment, PanelSegment(details, header=DETAILS)))
         self.layout().addWidget(self._content)
         self.apply_theme(self.ctx.theme.current)
 
@@ -198,7 +197,7 @@ class CommitDetailsPanel(Panel):
         if details is None:  # on its way: what History already knows
             self._summary.setText(commit.subject)
             self._body.setText("")
-            self._body.hide()
+            self._body_segment.hide()
             self._sha.setText(commit.sha)
             self._sha.setToolTip(commit.sha)
             self._set_parents(())
@@ -209,7 +208,7 @@ class CommitDetailsPanel(Panel):
             return
         self._summary.setText(details.summary)
         self._body.setText(details.body)
-        self._body.setVisible(bool(details.body))
+        self._body_segment.setVisible(bool(details.body))
         self._sha.setText(details.sha)
         self._sha.setToolTip(details.sha)
         self._set_parents(details.parents)

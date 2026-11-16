@@ -172,6 +172,14 @@ QLabel[role="section-header"] {
     font-size: ${section_header_point_size}pt;
     padding: 7px 8px 4px 8px;
 }
+QWidget[role="segment-header"] {
+    background: $header_bg;
+}
+QWidget[role="segment-header"] QLabel {
+    color: $text;
+    font-weight: bold;
+    font-size: ${segment_header_point_size}pt;
+}
 
 /* ---- lists, trees & tables ------------------------------------------ */
 QListView, QTreeView, QTableView {

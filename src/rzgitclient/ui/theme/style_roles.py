@@ -28,6 +28,7 @@ class Role(StrEnum):
     """What a single widget is for."""
 
     SECTION_HEADER = "section-header"
+    SEGMENT_HEADER = "segment-header"  # the header strip of a segment inside a panel
     PLACEHOLDER = "placeholder"  # a muted "nothing to show" message
     DIFF_VIEW = "diff-view"  # the diff's text: no frame, rows reach the edges
     HINT = "hint"  # a small muted note, e.g. the commit subject's length

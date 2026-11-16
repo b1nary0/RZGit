@@ -103,6 +103,7 @@ class FontKind(StrEnum):
     TAB = "tab"
     TOOLTIP = "tooltip"
     SECTION_HEADER = "section_header"
+    SEGMENT_HEADER = "segment_header"  # a segment's strip inside a panel
     MONO = "mono"  # the diff, SHAs
 
 
@@ -121,6 +122,7 @@ class ThemeFonts:
     tab_point_size: float | None = None
     tooltip_point_size: float | None = None
     section_header_point_size: float | None = None
+    segment_header_point_size: float | None = None
     mono_point_size: float | None = None
 
     def point_size(self, kind: FontKind) -> float:

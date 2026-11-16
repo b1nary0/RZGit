@@ -89,6 +89,7 @@ src/rzgitclient/
       theme_manager.py          ThemeManager: current theme + theme_changed
     widgets/
       section_header.py         SectionHeader: shared widget used by frames and panels
+      panel_segment.py          PanelSegment, PanelSegments: a panel's own internal sections
     panels/
       panel.py                  Panel, PanelContext
       panel_registry.py         PANEL_TYPES, panel_type(id)
@@ -603,6 +604,24 @@ Every panel follows these rules:
    monospace hashes). It re-applies those in `apply_theme`.
 7. **One instance per `panel_id`.** A panel lives in exactly one place in the layout.
 
+**Segments inside a panel** (RZG-38): a panel that shows distinct parts can stack them as
+segments (`ui/widgets/panel_segment.py`) instead of laying out its own headers and scroll
+areas.
+- `PanelSegment(content, header=None, fill=False)`: an optional header strip above the
+  content. The header is text (a wrapping, selectable label) or a widget, styled by
+  `Role.SEGMENT_HEADER`: the header background, bold, normal case, at
+  `FontKind.SEGMENT_HEADER`'s size. That's unlike the frame's own title bar (small
+  capitals), so a segment never looks like another panel. `header_label` returns the
+  label of a text header.
+- A **pinned** segment (`fill=False`) is always its content's natural height. A **fill**
+  segment puts its content in a frameless scroll area on the panel's own surface: never
+  taller than the content, so a short one leaves no gap, and it scrolls when it's longer
+  than the room left. It shrinks to `min_lines` lines (1) at the least.
+- `PanelSegments(segments)` stacks them top to bottom; spare space goes after the last
+  one. It is itself in a scroll area that scrolls only when the panel is shorter than the
+  pinned segments plus the fill segments' minimums, so nothing is ever cut off.
+- Contents never scroll sideways: they get the segment's width.
+
 ### 5.3 Registry
 
 `panels/panel_registry.py` has an explicit `PANEL_TYPES = (ControlsPanel, BranchesPanel,
@@ -666,7 +685,10 @@ itself while it is None, like Commit Files: it sits directly above Commit Files 
 preset, so the swap gives the two the working tree's space, in equal shares. It builds its
 widgets the first time a commit is selected; uncollapsed with no commit (a layout where it
 can't collapse), it shows the placeholder "No commit selected".
-- **Content**, in a scroll area: the summary in bold and the body below it, then a grid
+- **Content**, in three segments (RZG-38): the **summary** as the header of a pinned
+  segment at the top (wrapping, selectable); the **body**, a fill segment, so it scrolls
+  by itself and the rest stays in view; and **Details**, a pinned segment at the bottom
+  with its own header strip. A commit with no body has no body segment. Details is a grid
   of muted labels (`Role.HINT`) and values: **SHA** (the full sha, monospace, with a small
   **Copy** button), **Parents** (short shas, monospace), **Refs** (one muted line, as git
   writes them; the row is left out when there are none), **Author** (name, email and
@@ -1140,7 +1162,8 @@ class StatusColors:  modified, added, deleted, renamed, copied, type_changed, co
 class ThemeFonts:    default_point_size: float = 10; mono_family: str = "monospace"
                      ui_point_size, menu_point_size, status_bar_point_size, list_point_size,
                      column_header_point_size, tab_point_size, tooltip_point_size,
-                     section_header_point_size, mono_point_size: float | None = None
+                     section_header_point_size, segment_header_point_size,
+                     mono_point_size: float | None = None
                      def point_size(self, kind: FontKind) -> float   # its own size, else the default
 @dataclass(frozen=True)
 class ThemeMetrics:  splitter_width: int = 1; scrollbar_width: int = 10; row_padding: int = 2; row_min_height: int = 18
@@ -1163,7 +1186,7 @@ def colour_blind_theme(base: AppTheme) -> AppTheme   # LIGHT_THEME → LIGHT_CB_
 
 - **Font sizes:** each kind of text (`FontKind`: `UI` for buttons, labels, fields and text
   boxes; `MENU`, `STATUS_BAR`, `LIST` for item views, `COLUMN_HEADER`, `TAB`, `TOOLTIP`,
-  `SECTION_HEADER` and `MONO` for the diff and SHAs) has its own size field. `None` means
+  `SECTION_HEADER`, `SEGMENT_HEADER` and `MONO` for the diff and SHAs) has its own size field. `None` means
   `default_point_size` (10 pt); a theme sets a field only to override that kind. No theme
   overrides any yet, so the whole app is 10 pt (RZG-39). The family is the desktop's,
   except `MONO` (`mono_family`). The stylesheet gets the resolved sizes
@@ -1200,6 +1223,7 @@ def colour_blind_theme(base: AppTheme) -> AppTheme   # LIGHT_THEME → LIGHT_CB_
 ### 7.2 Semantic roles
 
 `style_roles.py` defines `Surface` (SIDEBAR, CONTENT, CHROME) and `Role` (SECTION_HEADER,
+SEGMENT_HEADER for the header strip of a segment inside a panel (§5.2),
 PLACEHOLDER for a muted "nothing to show" message, DIFF_VIEW for the borderless diff text,
 HINT and HINT_WARNING for a small muted note and the same past a limit).
 Widgets get them as Qt dynamic properties through `set_surface()` / `set_role()`, and the
