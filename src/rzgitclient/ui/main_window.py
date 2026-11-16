@@ -9,7 +9,7 @@ from rzgitclient.git.repo import Repo
 from rzgitclient.ui.layout.layout_host import LayoutHost
 from rzgitclient.ui.layout.layout_menu import LayoutMenu
 from rzgitclient.ui.layout.layout_model import to_dict
-from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT, restore_layout
+from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT, matching_preset, restore_layout
 from rzgitclient.ui.layout.panels_menu import PanelsMenu
 from rzgitclient.ui.panels.panel import PanelContext
 
@@ -68,7 +68,8 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         self.layout_host = LayoutHost(self.ctx)
-        self.layout_host.apply_state(restore_layout(self.settings.layout))
+        settings = self.settings
+        self.layout_host.apply_state(restore_layout(settings.layout, settings.layout_preset))
         self.setCentralWidget(self.layout_host)
         self.statusBar().showMessage("No repository open")
         # Beside the summary, not replacing it.
@@ -84,6 +85,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         state = self.layout_host.state()
         self.settings.layout = to_dict(state) if state is not None else None
+        self.settings.layout_preset = matching_preset(state) if state is not None else None
         self.settings.window_geometry = self.saveGeometry()
         self.settings.side_by_side_diff = self.ctx.actions.side_by_side_diff.isChecked()
         super().closeEvent(event)

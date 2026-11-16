@@ -81,6 +81,13 @@ class AppSettingsTests(unittest.TestCase):
         self.settings._settings.setValue("commit/drafts", '{"/a": 3, "/b": "ok"}')
         self.assertEqual(self.settings.commit_drafts, {"/b": "ok"})
 
+    def test_layout_preset_survives_a_reopen(self):
+        self.assertIsNone(self.settings.layout_preset)
+        self.settings.layout_preset = "Standard"
+        self.assertEqual(self.reopen().layout_preset, "Standard")
+        self.settings.layout_preset = None
+        self.assertIsNone(self.reopen().layout_preset)
+
     def test_saved_layouts_survive_a_reopen_in_order(self):
         self.assertEqual(self.settings.saved_layouts, [])
         layouts = [("Wide Diff", {"version": 2, "root": {}}), ("Review", {"version": 2})]

@@ -8,7 +8,13 @@ from PySide6.QtWidgets import QToolBar, QToolButton
 
 from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.selection import FileSelection, FileSource
-from rzgitclient.ui.layout.layout_model import SplitNode
+from rzgitclient.ui.layout.layout_model import (
+    LayoutState,
+    Orientation,
+    PanelNode,
+    SplitNode,
+    to_dict,
+)
 from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
 from rzgitclient.ui.main_window import MainWindow, commit_summary
 from tests.support import commit_file, make_panel_context, make_repo, qt_app, wait_idle
@@ -187,6 +193,31 @@ class MainWindowTests(unittest.TestCase):
         self.app.processEvents()
         sidebar = again.layout_host.panels["branches"].parentWidget().parentWidget()
         self.assertEqual(sidebar.sizes(), working)
+
+    def test_a_built_in_layout_follows_the_code_and_a_custom_one_stays(self):
+        window = self.start()
+        self.quit(window)
+        settings = AppSettings(self.settings_path)
+        self.assertEqual(settings.layout_preset, "Standard")
+        # As if an older version had saved Standard with History and Diff side by side.
+        old = SplitNode(Orientation.VERTICAL, (PanelNode("controls"), SplitNode(
+            Orientation.HORIZONTAL, (PanelNode("branches"), PanelNode("history"),
+                                     PanelNode("diff")))))
+        settings.layout = to_dict(LayoutState(old))
+        settings.sync()
+        again = self.start()
+        self.assertEqual(strip_sizes(again.layout_host.current_layout()), strip_sizes(DEFAULT_LAYOUT))
+        self.quit(again)
+
+        settings = AppSettings(self.settings_path)
+        settings.layout, settings.layout_preset = to_dict(LayoutState(old)), None  # custom
+        settings.sync()
+        third = self.start()
+        self.assertEqual(
+            [type(c).__name__ for c in third.layout_host.current_layout().children[1].children],
+            ["SplitNode", "PanelNode", "PanelNode"])  # still History beside Diff
+        self.quit(third)
+        self.assertIsNone(AppSettings(self.settings_path).layout_preset)
 
     def test_side_by_side_diff_is_remembered(self):
         window = self.start()

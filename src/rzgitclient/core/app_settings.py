@@ -17,6 +17,7 @@ log = logging.getLogger(__name__)
 
 _LAST_REPO = "last_repo"
 _LAYOUT = "layout"
+_LAYOUT_PRESET = "layout_preset"
 _WINDOW_GEOMETRY = "window/geometry"
 _SIDE_BY_SIDE_DIFF = "diff/side_by_side"
 _COMMIT_DRAFTS = "commit/drafts"
@@ -55,6 +56,16 @@ class AppSettings:
     @layout.setter
     def layout(self, data: dict[str, Any] | None) -> None:
         self._set(_LAYOUT, None if data is None else json.dumps(data))
+
+    @property
+    def layout_preset(self) -> str | None:
+        """The title of the built-in preset the saved layout is, or None for a
+        custom layout (spec §6.3)."""
+        return self._settings.value(_LAYOUT_PRESET, "", str) or None
+
+    @layout_preset.setter
+    def layout_preset(self, title: str | None) -> None:
+        self._set(_LAYOUT_PRESET, title)
 
     @property
     def window_geometry(self) -> QByteArray | None:

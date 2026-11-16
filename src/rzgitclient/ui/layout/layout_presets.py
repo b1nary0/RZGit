@@ -104,13 +104,42 @@ def default_anchor(panel_id: str, shown: Collection[str] | None = None) -> Ancho
     return anchor_of(reference, panel_id) if reference is not None else None
 
 
-def restore_layout(saved: Any) -> LayoutState:
-    """The layout to start with, given what ``AppSettings.layout`` returned.
+def matching_preset(state: LayoutState) -> str | None:
+    """The title of the preset ``state`` is, sizes, current tabs and hidden
+    panels aside; None for a custom layout (spec §6.3)."""
+    shape = _shape(state.root)
+    for preset in PRESETS:
+        root = _without_panels(preset.root, state.hidden)[0]
+        if root is not None and _shape(root) == shape:
+            return preset.title
+    return None
 
-    Falls back to ``DEFAULT_LAYOUT`` when nothing is saved, the data is
-    malformed (logged) or nothing known is left. Panels the user hid stay
-    hidden; a panel neither shown nor hidden is new in this version and goes
-    to its place in the default layout.
+
+def _without_panels(root: LayoutNode, panel_ids_: Collection[str]
+                    ) -> tuple[LayoutNode | None, dict[str, Anchor]]:
+    """``root`` without the panels ``panel_ids_``, and where each sat."""
+    anchors: dict[str, Anchor] = {}
+    for pid in panel_ids_:
+        if root is None:
+            break
+        if pid in panel_ids(root):
+            root, anchor = remove_panel(root, pid)
+            if anchor is not None:
+                anchors[pid] = anchor
+    return root, anchors
+
+
+def restore_layout(saved: Any, preset: str | None = None) -> LayoutState:
+    """The layout to start with, given what ``AppSettings.layout`` and
+    ``AppSettings.layout_preset`` returned.
+
+    A built-in preset follows the code: when ``preset`` names a preset whose
+    arrangement isn't the saved one any more, that preset is used, with the
+    same panels hidden. Otherwise the saved layout is used. Falls back to
+    ``DEFAULT_LAYOUT`` when nothing is saved, the data is malformed (logged)
+    or nothing known is left. Panels the user hid stay hidden; a panel
+    neither shown nor hidden is new in this version and goes to its place in
+    the default layout.
     """
     if saved is None:
         return LayoutState(DEFAULT_LAYOUT)
@@ -120,6 +149,14 @@ def restore_layout(saved: Any) -> LayoutState:
         log.warning("Saved layout is malformed (%s); using the default", exc)
         return LayoutState(DEFAULT_LAYOUT)
     known = panel_ids(DEFAULT_LAYOUT)
+    current = next((p for p in PRESETS if p.title == preset), None)
+    if current is not None:
+        hidden_ids = [pid for pid in state.hidden if pid in known]
+        root, anchors = _without_panels(current.root, hidden_ids)
+        saved_root = normalize(state.root, known)
+        if root is not None and (saved_root is None or _shape(root) != _shape(saved_root)):
+            log.info("The %s layout changed since it was saved; using the new one", preset)
+            return LayoutState(root, anchors)
     root = normalize(state.root, known)  # drops panels this version no longer has
     if root is None:
         log.info("Saved layout has none of this version's panels; using the default")

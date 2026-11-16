@@ -16,6 +16,7 @@ from rzgitclient.ui.layout.layout_presets import (
     DEFAULT_LAYOUT,
     PRESETS,
     layout_name_problem,
+    matching_preset,
     restore_layout,
 )
 from rzgitclient.ui.panels.panel_registry import PANEL_TYPES
@@ -142,6 +143,69 @@ class RestoreLayoutTests(unittest.TestCase):
 
     def test_nothing_known_left_gives_the_default(self):
         self.assertEqual(restore_layout(saved(PanelNode("retired"))), LayoutState(DEFAULT_LAYOUT))
+
+
+class BuiltInLayoutTests(unittest.TestCase):
+    """Built-in layouts follow the code; custom ones stay (spec §6.3)."""
+
+    # Standard as an older version had it: Diff below History, no Commit Files.
+    OLD_STANDARD = SplitNode(V, (PanelNode("controls"), SplitNode(H, (
+        SplitNode(V, (PanelNode("branches"), PanelNode("files"), PanelNode("staged"),
+                      PanelNode("commit")), sizes=(200, 220, 120, 160)),
+        SplitNode(V, (PanelNode("history"), PanelNode("diff")), sizes=(400, 300)),
+    ), sizes=(250, 850))))
+
+    def resized(self, node):
+        """``node`` with every split's sizes changed, as a user's drags would."""
+        if isinstance(node, SplitNode):
+            sizes = tuple(s + 7 * i for i, s in enumerate(node.sizes)) if node.sizes else None
+            return SplitNode(node.orientation, tuple(self.resized(c) for c in node.children), sizes)
+        return node
+
+    def test_each_preset_matches_itself_resized_or_with_another_tab_current(self):
+        for preset in PRESETS:
+            with self.subTest(preset.title):
+                self.assertEqual(matching_preset(LayoutState(self.resized(preset.root))),
+                                 preset.title)
+        body = DEFAULT_LAYOUT.children[1]
+        diff_current = TabsNode(body.children[1].children, current=1)
+        other_tab = SplitNode(V, (PanelNode("controls"), SplitNode(
+            H, (body.children[0], diff_current), body.sizes)))
+        self.assertEqual(matching_preset(LayoutState(other_tab)), "Standard")
+
+    def test_a_preset_with_panels_hidden_still_matches(self):
+        root, anchor = remove_panel(DEFAULT_LAYOUT, "branches")
+        self.assertEqual(matching_preset(LayoutState(root, {"branches": anchor})), "Standard")
+
+    def test_a_rearranged_layout_is_custom(self):
+        self.assertIsNone(matching_preset(LayoutState(CUSTOM)))
+        moved = remove_panel(DEFAULT_LAYOUT, "branches")[0]  # removed, but not hidden
+        self.assertIsNone(matching_preset(LayoutState(moved)))
+
+    def test_an_unchanged_preset_keeps_the_user_s_sizes(self):
+        mine = self.resized(DEFAULT_LAYOUT)
+        self.assertEqual(restore_layout(saved(mine), "Standard"), LayoutState(mine))
+
+    def test_a_preset_changed_in_code_is_used_instead(self):
+        self.assertEqual(restore_layout(saved(self.OLD_STANDARD), "Standard"),
+                         LayoutState(DEFAULT_LAYOUT))
+
+    def test_the_new_preset_keeps_the_hidden_panels_hidden(self):
+        old, anchor = remove_panel(self.OLD_STANDARD, "branches")
+        restored = restore_layout(saved(old, {"branches": anchor}), "Standard")
+        new_root, new_anchor = remove_panel(DEFAULT_LAYOUT, "branches")
+        self.assertEqual(restored, LayoutState(new_root, {"branches": new_anchor}))
+
+    def test_a_custom_layout_stays_as_it_is(self):
+        restored = restore_layout(saved(self.OLD_STANDARD), None)
+        self.assertEqual(panel_ids(restored.root)[:7],
+                         ["controls", "branches", "files", "staged", "commit", "commit_files",
+                          "history"])
+        self.assertIn(SplitNode(V, (PanelNode("history"), PanelNode("diff")), sizes=(400, 300)),
+                      restored.root.children[1].children)  # Diff still below History
+
+    def test_an_unknown_preset_name_is_a_custom_layout(self):
+        self.assertEqual(restore_layout(saved(CUSTOM), "Gone"), LayoutState(CUSTOM))
 
 
 class LayoutNameTests(unittest.TestCase):

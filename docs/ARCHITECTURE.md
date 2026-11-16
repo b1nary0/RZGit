@@ -699,15 +699,24 @@ and Commit Files are directly below Unstaged Files (`files`), in that order:
 ### 6.3 Persistence
 
 `AppSettings` (`core/app_settings.py`) is the only code that touches `QSettings`. It has
-typed accessors (`last_repo`, `layout`, `window_geometry`, `side_by_side_diff`,
-`commit_drafts`, `saved_layouts`) and takes a file path for tests. `app.py` creates it and passes it to
+typed accessors (`last_repo`, `layout`, `layout_preset`, `window_geometry`,
+`side_by_side_diff`, `commit_drafts`, `saved_layouts`) and takes a file path for tests. `app.py` creates it and passes it to
 `MainWindow`; panels don't get it. The one thing a panel saves, the commit draft, goes
 through `CommitDrafts` (§5.4), which holds only that.
 
 On close, the window saves the host's `state()` (as JSON, so the format is ours) and its
 geometry: size and maximized state, plus position where the platform allows it (not on
-Wayland). On start, `restore_layout(saved)` in `layout_presets.py` (plain Python, no Qt)
-returns the `LayoutState` to apply:
+Wayland). With the layout it saves `layout_preset`: the title of the preset the layout
+is, if it is one (`matching_preset(state)`: the preset whose shape, without sizes or
+current tabs and with the saved hidden panels taken out, is the layout's), else None.
+
+**Built-in layouts follow the code; custom ones stay.** On start,
+`restore_layout(saved, preset)` in `layout_presets.py` (plain Python, no Qt) returns the
+`LayoutState` to apply. When `preset` names a current preset whose shape (hidden panels
+taken out) is no longer the saved layout's, the preset changed in code since: that
+preset is applied instead, with the same panels hidden (anchored in the new tree) and the
+preset's sizes. Otherwise, and for a custom layout (`preset` None: rearranged, or a saved
+named layout), the saved layout is used:
 - nothing saved, malformed data, or `normalize` leaves nothing → `DEFAULT_LAYOUT`, with a
   logged warning for malformed data (no dialog);
 - a panel the user hid stays hidden (anchors of panels this version no longer has are
