@@ -90,9 +90,11 @@ src/rzgitclient/
       files_panel.py            FilesPanel
     layout/
       layout_model.py           PanelNode / SplitNode / TabsNode, (de)serialisation, normalize
-      layout_presets.py         DEFAULT_LAYOUT
+      layout_presets.py         PRESETS, DEFAULT_LAYOUT, restore_layout
       layout_host.py            LayoutHost
       panel_frame.py            PanelFrame: section header + panel
+      layout_menu.py            LayoutMenu: View → Layout (presets)
+      panels_menu.py            PanelsMenu: View → Panels (show and hide)
 tests/
   support.py                    temp-repo builder, shared offscreen QApplication
   test_<module>.py              one file per module, named after it (test_layout_model.py, …)
@@ -360,9 +362,15 @@ class SplitNode:  orientation: Orientation; children: tuple[LayoutNode, ...]; si
 @dataclass(frozen=True)
 class TabsNode:   children: tuple[PanelNode, ...]; current: int = 0
 LayoutNode = PanelNode | SplitNode | TabsNode
+
+@dataclass(frozen=True)
+class Anchor:      neighbors: tuple[str, ...]; orientation: Orientation | None; before: bool; share: float | None = None
+@dataclass(frozen=True)
+class LayoutState: root: LayoutNode; hidden: Mapping[str, Anchor] = {}   # what's saved
 ```
 
-- `to_dict` / `from_dict` use `{"version": 1, "root": …}`, so the saved format can be migrated.
+- `to_dict` / `from_dict` turn a `LayoutState` into `{"version": 2, "root": …, "hidden":
+  {…}}` and back, so the saved format can be migrated. Version 1 (no `hidden`) still loads.
 - `normalize(node, known_ids)` drops unknown or duplicate panel ids, removes empty
   containers and collapses single-child splits. A saved layout from an older version can
   never crash the app. It just loses what no longer exists.
@@ -378,11 +386,16 @@ LayoutNode = PanelNode | SplitNode | TabsNode
   clamped only if that panel itself is gone.
 - JSON nodes: `{"type": "panel", "panel_id": …}`, `{"type": "split", "orientation":
   "horizontal" | "vertical", "sizes": [...], "children": [...]}` (`sizes` optional) and
-  `{"type": "tabs", "current": n, "children": [...]}`.
+  `{"type": "tabs", "current": n, "children": [...]}`. A hidden panel's anchor:
+  `{"neighbors": [...], "container": "horizontal" | "vertical" | "tabs", "before": bool,
+  "share": 0.3}` (`share` optional, dropped if it isn't between 0 and 1).
 
-The default preset (`layout_presets.py`) puts Branches above Files in a left sidebar, with
-History on the right:
-`Split(H, [Split(V, [branches, files], sizes=(300, 400)), history], sizes=(220, 880))`.
+**Presets** (`layout_presets.py`, `PRESETS`) are named trees that show every panel:
+- **Standard** (`DEFAULT_LAYOUT`): Branches above Files in a left sidebar, History on the
+  right: `Split(H, [Split(V, [branches, files], sizes=(300, 400)), history], sizes=(220, 880))`.
+- **Sidebar Tabs:** Branches and Files as tabs on the left, each with the full height;
+  History on the right.
+- **Stacked:** History across the top; Branches and Files side by side below it.
 
 ### 6.2 LayoutHost
 
@@ -391,6 +404,9 @@ History on the right:
   instances** by id: they're re-parented, so lists, scroll positions and selection survive.
   It creates missing panels through the registry and deletes panels no longer in the tree.
 - `current_layout() -> LayoutNode` reads splitter sizes and the current tab back into a tree.
+- It also holds the **hidden panels** and their anchors (§6.6): `apply_state(state)`,
+  `state() -> LayoutState`, `hide_panel(id)`, `show_panel(id)`, and `layout_changed` after
+  every change, which the menus follow.
 - In a split, each panel is wrapped in a `PanelFrame` (`layout/panel_frame.py`): a section
   header plus the panel, with the panel's `surface` set as a style property. In tabs, the
   tab label is the panel's `header` instead, and follows `header_changed`.
@@ -406,25 +422,27 @@ History on the right:
 typed accessors (`last_repo`, `layout`, `window_geometry`) and takes a file path for tests.
 `app.py` creates it and passes it to `MainWindow`; panels don't get it.
 
-On close, the window saves `current_layout()` (as JSON, so the format is ours) and its
+On close, the window saves the host's `state()` (as JSON, so the format is ours) and its
 geometry: size and maximized state, plus position where the platform allows it (not on
 Wayland). On start, `restore_layout(saved)` in `layout_presets.py` (plain Python, no Qt)
-returns the layout to apply:
+returns the `LayoutState` to apply:
 - nothing saved, malformed data, or `normalize` leaves nothing → `DEFAULT_LAYOUT`, with a
   logged warning for malformed data (no dialog);
-- the saved layout's panels differ from the default's → `DEFAULT_LAYOUT`. Users can't remove
-  panels yet, so a difference means a newer version added one. The sizes reset once in that
-  release. This rule changes when panels can be removed (layout editing).
+- a panel the user hid stays hidden (anchors of panels this version no longer has are
+  dropped);
+- a panel that is neither shown nor hidden is new in this version: it's inserted at its
+  place in `DEFAULT_LAYOUT` (§6.6), and the rest of the user's layout is kept.
 
-A **View → Reset Layout** action applies `DEFAULT_LAYOUT` at once.
+**View → Reset Layout** applies `DEFAULT_LAYOUT` at once, showing every panel.
 
 ### 6.4 Customisation levels
 
 The data model supports all of these now; the UI comes in stages:
 1. Code-defined default (first phase)
 2. Sizes and tabs remembered between runs (first phase)
-3. Switching between preset layouts (later)
-4. Editing: move, add and remove panels from a menu or by drag and drop (later)
+3. Switching between preset layouts: **View → Layout** (§6.1)
+4. Editing: hide and show panels from **View → Panels** (§6.6). Named user layouts and
+   moving panels by drag and drop come later (RZG-16).
 
 ### 6.5 Why not QDockWidget
 
@@ -432,6 +450,28 @@ Docks bring floating windows, dock title bars and a fixed "dock areas around a c
 widget" shape. That fights the flat, borderless look and limits nesting. Docks also save
 state as an opaque byte blob, which we can't validate or migrate. A small tree of splitters
 and tabs gives full control over the look, is plain data we can test, and is about 150 lines.
+
+### 6.6 Hiding and showing panels
+
+**View → Panels** has a checkable entry per registered panel (`panels_menu.py`). The
+last visible panel can't be hidden. A hidden panel is deleted like any panel that leaves
+the tree, and a new one is created when it's shown again (it renders the current state, §5.2).
+
+Edits are pure functions in `layout_model.py`, tested without Qt:
+- `remove_panel(root, id) -> (root, Anchor)`: the panel's share of space goes to its
+  neighbours, and a split left with one child collapses into it. The **anchor** records
+  where it sat: the panels of the node beside it (the next one, or the previous one if it
+  was last), whether they were side by side, stacked or tabs, which side it was on, and
+  its share of the space the two had.
+- `insert_panel(root, id, anchor, fallback)`: finds the smallest node holding the anchor's
+  neighbours that are still shown, and puts the panel on the recorded side of it, taking
+  its share of that node's space. If that node sits in a split of the same orientation,
+  the panel joins that split; otherwise the node is wrapped in a new split (or tabs). If
+  none of the neighbours is shown, it uses `fallback` (the panel's anchor in
+  `DEFAULT_LAYOUT`), and failing that the right-hand edge.
+
+**Why anchors, not "the default place":** a panel hidden from a rearranged layout comes
+back where the user had it. The default place is only the fallback.
 
 ## 7. AppTheme
 

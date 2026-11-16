@@ -5,12 +5,14 @@ No Qt here: ``LayoutHost`` turns a tree into widgets. An edit returns a new tree
 
 from __future__ import annotations
 
-from collections.abc import Collection
-from dataclasses import dataclass
+import dataclasses
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2  # 1: no "hidden"
 
 
 class LayoutError(ValueError):
@@ -41,6 +43,27 @@ class TabsNode:
 
 
 LayoutNode = PanelNode | SplitNode | TabsNode
+
+
+@dataclass(frozen=True)
+class Anchor:
+    """Where a hidden panel sat, so it can come back there (spec §6.6)."""
+
+    neighbors: tuple[str, ...]  # the panels of the node it sat beside
+    orientation: Orientation | None  # the split it was in; None: a tab beside them
+    before: bool  # left of / above / the tab before them
+    share: float | None = None  # its part of the space the two had
+
+
+@dataclass(frozen=True)
+class LayoutState:
+    """What's saved: the shown tree, and the hidden panels with their anchors."""
+
+    root: LayoutNode
+    hidden: Mapping[str, Anchor] = field(default_factory=lambda: MappingProxyType({}))
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "hidden", MappingProxyType(dict(self.hidden)))
 
 
 def panel_ids(node: LayoutNode | None) -> list[str]:
@@ -107,12 +130,171 @@ def _valid_sizes(sizes: Any, count: int) -> tuple[int, ...] | None:
     return None
 
 
+# ---- editing (spec §6.6) -----------------------------------------------------
+
+_Path = tuple[int, ...]  # child indexes from the root
+
+
+def anchor_of(root: LayoutNode, panel_id: str) -> Anchor | None:
+    """Where ``panel_id`` sits in ``root``; None if it's the root or not there."""
+    path = _path(root, panel_id)
+    if not path:
+        return None
+    parent, i = _at(root, path[:-1]), path[-1]
+    assert isinstance(parent, (SplitNode, TabsNode))
+    j = i + 1 if i + 1 < len(parent.children) else i - 1  # the next node, else the previous
+    share = None
+    if isinstance(parent, SplitNode) and parent.sizes is not None:
+        mine, theirs = parent.sizes[i], parent.sizes[j]
+        if mine > 0 and theirs > 0:
+            share = round(mine / (mine + theirs), 4)
+    orientation = parent.orientation if isinstance(parent, SplitNode) else None
+    return Anchor(tuple(panel_ids(parent.children[j])), orientation, j > i, share)
+
+
+def remove_panel(root: LayoutNode, panel_id: str) -> tuple[LayoutNode | None, Anchor | None]:
+    """``root`` without ``panel_id``, and where it sat.
+
+    Its share of space goes to its neighbours; a split left with one child
+    collapses into it. Returns ``(None, None)`` if it was the only panel.
+    """
+    return _without(root, panel_id), anchor_of(root, panel_id)
+
+
+def _without(node: LayoutNode, panel_id: str) -> LayoutNode | None:
+    match node:
+        case PanelNode():
+            return None if node.panel_id == panel_id else node
+        case SplitNode():
+            kept = [(k, i) for i, c in enumerate(node.children)
+                    if (k := _without(c, panel_id)) is not None]
+            if len(kept) <= 1:
+                return kept[0][0] if kept else None
+            sizes = tuple(node.sizes[i] for _, i in kept) if node.sizes is not None else None
+            return SplitNode(node.orientation, tuple(k for k, _ in kept), sizes)
+        case TabsNode():
+            ids = [t.panel_id for t in node.children]
+            if panel_id not in ids:
+                return node
+            gone = ids.index(panel_id)
+            tabs = node.children[:gone] + node.children[gone + 1:]
+            if not tabs:
+                return None
+            current = node.current - 1 if gone < node.current else node.current
+            return TabsNode(tabs, min(current, len(tabs) - 1))
+    raise TypeError(f"not a layout node: {node!r}")
+
+
+def insert_panel(
+    root: LayoutNode | None, panel_id: str, anchor: Anchor | None, fallback: Anchor | None = None
+) -> LayoutNode:
+    """``root`` with ``panel_id`` placed by ``anchor`` (spec §6.6).
+
+    Uses ``fallback`` if none of the anchor's neighbours is shown, and the
+    right-hand edge if neither fits. A panel already shown is left where it is.
+    """
+    if root is None:
+        return PanelNode(panel_id)
+    shown = panel_ids(root)
+    if panel_id in shown:
+        return root
+    for a in (anchor, fallback):
+        if a is not None and (present := [n for n in a.neighbors if n in shown]):
+            return _insert(root, panel_id, a, present)
+    return _insert(root, panel_id, Anchor(tuple(shown), Orientation.HORIZONTAL, False), shown)
+
+
+def _insert(root: LayoutNode, panel_id: str, anchor: Anchor, present: list[str]) -> LayoutNode:
+    new = PanelNode(panel_id)
+    path = _common_prefix([_path(root, n) or () for n in present])
+    node = _at(root, path)
+    parent = _at(root, path[:-1]) if path else None
+
+    if anchor.orientation is None:  # a tab beside the neighbour
+        if isinstance(node, PanelNode) and isinstance(parent, TabsNode):
+            i = path[-1] + (0 if anchor.before else 1)
+            tabs = parent.children[:i] + (new,) + parent.children[i:]
+            return _replace(root, path[:-1], TabsNode(tabs, i))
+        if isinstance(node, PanelNode):
+            pair = (new, node) if anchor.before else (node, new)
+            return _replace(root, path, TabsNode(pair, pair.index(new)))
+        if isinstance(node, TabsNode):
+            tabs = (new, *node.children) if anchor.before else (*node.children, new)
+            return _replace(root, path, TabsNode(tabs, tabs.index(new)))
+        # Its neighbours are now spread over a split: go beside them instead.
+        anchor = Anchor(anchor.neighbors, Orientation.HORIZONTAL, anchor.before, anchor.share)
+    orientation = anchor.orientation
+    assert orientation is not None
+
+    if isinstance(parent, TabsNode):  # a tab can't be split: go beside the whole group
+        path, node = path[:-1], parent
+        parent = _at(root, path[:-1]) if path else None
+    share = anchor.share if anchor.share is not None else 0.5
+    if isinstance(parent, SplitNode) and parent.orientation == orientation:
+        i = path[-1]
+        at = i if anchor.before else i + 1
+        children = parent.children[:at] + (new,) + parent.children[at:]
+        sizes = None
+        if parent.sizes is not None:
+            mine = round(parent.sizes[i] * share)
+            rest = list(parent.sizes)
+            rest[i] -= mine
+            sizes = tuple(rest[:at] + [mine] + rest[at:])
+        return _replace(root, path[:-1], SplitNode(orientation, children, sizes))
+    mine = round(1000 * share)
+    if anchor.before:
+        children, sizes = (new, node), (mine, 1000 - mine)
+    else:
+        children, sizes = (node, new), (1000 - mine, mine)
+    split = SplitNode(orientation, children, sizes if anchor.share is not None else None)
+    return _replace(root, path, split)
+
+
+def _path(node: LayoutNode, panel_id: str) -> _Path | None:
+    if isinstance(node, PanelNode):
+        return () if node.panel_id == panel_id else None
+    for i, child in enumerate(node.children):
+        if (rest := _path(child, panel_id)) is not None:
+            return (i, *rest)
+    return None
+
+
+def _at(node: LayoutNode, path: _Path) -> LayoutNode:
+    for i in path:
+        assert isinstance(node, (SplitNode, TabsNode))
+        node = node.children[i]
+    return node
+
+
+def _replace(node: LayoutNode, path: _Path, new: LayoutNode) -> LayoutNode:
+    if not path:
+        return new
+    assert isinstance(node, (SplitNode, TabsNode))
+    children = list(node.children)
+    children[path[0]] = _replace(children[path[0]], path[1:], new)
+    return dataclasses.replace(node, children=tuple(children))  # type: ignore[arg-type]
+
+
+def _common_prefix(paths: list[_Path]) -> _Path:
+    prefix = paths[0]
+    for path in paths[1:]:
+        n = 0
+        while n < min(len(prefix), len(path)) and prefix[n] == path[n]:
+            n += 1
+        prefix = prefix[:n]
+    return prefix
+
+
 # ---- serialisation ----------------------------------------------------------
 
 
-def to_dict(root: LayoutNode) -> dict[str, Any]:
-    """JSON-ready form: ``{"version": 1, "root": {...}}``."""
-    return {"version": FORMAT_VERSION, "root": _node_to_dict(root)}
+def to_dict(state: LayoutState) -> dict[str, Any]:
+    """JSON-ready form: ``{"version": 2, "root": {...}, "hidden": {...}}``."""
+    return {
+        "version": FORMAT_VERSION,
+        "root": _node_to_dict(state.root),
+        "hidden": {pid: _anchor_to_dict(a) for pid, a in sorted(state.hidden.items())},
+    }
 
 
 def _node_to_dict(node: LayoutNode) -> dict[str, Any]:
@@ -137,17 +319,57 @@ def _node_to_dict(node: LayoutNode) -> dict[str, Any]:
     raise TypeError(f"not a layout node: {node!r}")
 
 
-def from_dict(data: Any) -> LayoutNode:
-    """Parse ``to_dict`` output. Raises ``LayoutError`` on structural errors.
+def _anchor_to_dict(anchor: Anchor) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "neighbors": list(anchor.neighbors),
+        "container": str(anchor.orientation) if anchor.orientation else _TABS,
+        "before": anchor.before,
+    }
+    if anchor.share is not None:
+        data["share"] = anchor.share
+    return data
 
-    ``sizes`` that don't fit their children are dropped, not rejected. The
-    result is not normalized: callers run ``normalize`` with the known ids.
+
+_TABS = "tabs"
+
+
+def from_dict(data: Any) -> LayoutState:
+    """Parse ``to_dict`` output (or version 1). Raises ``LayoutError`` on structural errors.
+
+    ``sizes`` and ``share`` that don't fit are dropped, not rejected. The result
+    is not normalized: callers run ``normalize`` with the known ids.
     """
     if not isinstance(data, dict):
         raise LayoutError("layout is not an object")
-    if data.get("version") != FORMAT_VERSION:
-        raise LayoutError(f"unsupported layout version: {data.get('version')!r}")
-    return _node_from_dict(_field(data, "root", dict))
+    version = data.get("version")
+    if version not in (1, FORMAT_VERSION):
+        raise LayoutError(f"unsupported layout version: {version!r}")
+    root = _node_from_dict(_field(data, "root", dict))
+    if version == 1:
+        return LayoutState(root)
+    hidden = _field(data, "hidden", dict)
+    if not all(isinstance(v, dict) for v in hidden.values()):
+        raise LayoutError("hidden panels' anchors must be objects")
+    return LayoutState(root, {pid: _anchor_from_dict(a) for pid, a in hidden.items()})
+
+
+def _anchor_from_dict(data: dict[str, Any]) -> Anchor:
+    neighbors = _field(data, "neighbors", list)
+    if not neighbors or not all(isinstance(n, str) for n in neighbors):
+        raise LayoutError("an anchor's neighbors must be panel ids")
+    container = _field(data, "container", str)
+    if container == _TABS:
+        orientation = None
+    else:
+        try:
+            orientation = Orientation(container)
+        except ValueError as exc:
+            raise LayoutError(f"unknown anchor container: {container!r}") from exc
+    before = _field(data, "before", bool)
+    share = data.get("share")
+    if not (type(share) in (int, float) and 0 < share < 1):
+        share = None
+    return Anchor(tuple(neighbors), orientation, before, share)
 
 
 def _node_from_dict(data: dict[str, Any]) -> LayoutNode:

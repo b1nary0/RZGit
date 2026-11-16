@@ -6,18 +6,23 @@ import dataclasses
 from collections.abc import Mapping
 from types import MappingProxyType
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import QSplitter, QTabWidget, QVBoxLayout, QWidget
 
 from rzgitclient.ui.layout.layout_model import (
+    Anchor,
     LayoutNode,
+    LayoutState,
     Orientation,
     PanelNode,
     SplitNode,
     TabsNode,
+    insert_panel,
     normalize,
     panel_ids,
+    remove_panel,
 )
+from rzgitclient.ui.layout.layout_presets import default_anchor
 from rzgitclient.ui.layout.panel_frame import PanelFrame
 from rzgitclient.ui.panels.panel import Panel, PanelContext
 from rzgitclient.ui.panels.panel_registry import PANEL_TYPES, panel_type
@@ -34,13 +39,17 @@ class LayoutHost(QWidget):
 
     ``apply`` rebuilds the containers (splitters, tabs, frames) but keeps the
     panel instances, so their lists, scroll positions and selection survive.
+    It also remembers where hidden panels sat, so they come back there (§6.6).
     """
+
+    layout_changed = Signal()  # after every apply
 
     def __init__(self, ctx: PanelContext, parent: QWidget | None = None):
         super().__init__(parent)
         self._ctx = ctx
         self._panels: dict[str, Panel] = {}
         self._tree: LayoutNode | None = None
+        self._hidden: dict[str, Anchor] = {}
         self._containers: list[QSplitter | QTabWidget] = []  # in pre-order of _tree
         self._root: QWidget | None = None
         self._layout = QVBoxLayout(self)
@@ -50,9 +59,44 @@ class LayoutHost(QWidget):
     def panels(self) -> Mapping[str, Panel]:
         return MappingProxyType(self._panels)
 
-    def apply(self, node: LayoutNode) -> None:
+    @property
+    def hidden(self) -> Mapping[str, Anchor]:
+        """Hidden panels, and where each sat."""
+        return MappingProxyType(self._hidden)
+
+    def apply_state(self, state: LayoutState) -> None:
+        self.apply(state.root, state.hidden)
+
+    def state(self) -> LayoutState | None:
+        """What to save: ``current_layout()`` plus the hidden panels."""
+        root = self.current_layout()
+        return LayoutState(root, self._hidden) if root is not None else None
+
+    def hide_panel(self, panel_id: str) -> None:
+        """Hide a shown panel, remembering where it sat. The last one stays."""
+        root = self.current_layout()
+        if root is None or panel_id not in self._panels or len(self._panels) == 1:
+            return
+        root, anchor = remove_panel(root, panel_id)
+        assert root is not None and anchor is not None  # it wasn't the only panel
+        self.apply(root, {**self._hidden, panel_id: anchor})
+
+    def show_panel(self, panel_id: str) -> None:
+        """Show a panel where it sat when hidden, else at its default place."""
+        if panel_id in self._panels or panel_id not in _KNOWN_IDS:
+            return
+        hidden = dict(self._hidden)
+        anchor = hidden.pop(panel_id, None)
+        self.apply(insert_panel(self.current_layout(), panel_id, anchor,
+                                default_anchor(panel_id)), hidden)
+
+    def apply(self, node: LayoutNode, hidden: Mapping[str, Anchor] | None = None) -> None:
+        """Show ``node``. ``hidden`` (default: none) is kept for panels not in it."""
         tree = normalize(node, _KNOWN_IDS)
         wanted = set(panel_ids(tree))
+        self._hidden = {
+            pid: a for pid, a in (hidden or {}).items() if pid in _KNOWN_IDS and pid not in wanted
+        }
 
         # Take every panel out of the old containers before they are deleted.
         for panel_id, panel in list(self._panels.items()):
@@ -68,6 +112,7 @@ class LayoutHost(QWidget):
         self._root = self._build(tree) if tree is not None else None
         if self._root is not None:
             self._layout.addWidget(self._root)
+        self.layout_changed.emit()
 
     def current_layout(self) -> LayoutNode | None:
         """The applied tree with the splitter sizes and current tabs as they are now."""

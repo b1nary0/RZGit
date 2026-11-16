@@ -6,7 +6,14 @@ from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtWidgets import QSplitter, QTabWidget
 
 from rzgitclient.ui.layout.layout_host import LayoutHost
-from rzgitclient.ui.layout.layout_model import Orientation, PanelNode, SplitNode, TabsNode
+from rzgitclient.ui.layout.layout_model import (
+    LayoutState,
+    Orientation,
+    PanelNode,
+    SplitNode,
+    TabsNode,
+    remove_panel,
+)
 from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
 from rzgitclient.ui.layout.panel_frame import PanelFrame
 from tests.support import commit_file, make_panel_context, make_repo, qt_app, wait_idle
@@ -130,6 +137,47 @@ class LayoutHostTests(unittest.TestCase):
         frame = files.parentWidget()
         self.assertIsInstance(frame, PanelFrame)
         self.assertEqual(frame.header.text(), "FILES (2)")
+
+    # ---- hiding and showing (§6.6) ---------------------------------------
+
+    def test_hide_and_show_a_panel_where_it_was(self):
+        changes = []
+        self.host.layout_changed.connect(lambda: changes.append(1))
+        self.host.apply(DEFAULT_LAYOUT)
+        self.show()
+        self.host.hide_panel("files")
+        flush_deletes()
+        self.assertEqual(set(self.host.panels), {"branches", "history"})
+        self.assertEqual(set(self.host.hidden), {"files"})
+        self.assertEqual(self.host.state().hidden, self.host.hidden)
+
+        self.host.show_panel("files")
+        self.assertEqual(self.host.hidden, {})
+        sidebar = self.root().widget(0)
+        self.assertEqual([sidebar.widget(i).panel.panel_id for i in range(2)], ["branches", "files"])
+        self.assertEqual(len(changes), 3)  # apply, hide, show
+
+    def test_the_last_panel_can_not_be_hidden(self):
+        self.host.apply(PanelNode("history"))
+        self.host.hide_panel("history")
+        self.assertEqual(set(self.host.panels), {"history"})
+        self.host.hide_panel("nope")  # not shown: nothing happens
+        self.assertEqual(self.host.hidden, {})
+
+    def test_a_panel_hidden_without_an_anchor_goes_to_its_default_place(self):
+        self.host.apply(SplitNode(H, (PanelNode("branches"), PanelNode("history"))))
+        self.host.show_panel("files")  # never hidden, e.g. new in this version
+        self.assertEqual(self.root().widget(0).orientation(), Qt.Orientation.Vertical)
+        self.assertEqual(set(self.host.panels), {"branches", "files", "history"})
+
+    def test_apply_keeps_hidden_only_for_panels_not_shown(self):
+        _, anchor = remove_panel(DEFAULT_LAYOUT, "files")
+        self.host.apply(DEFAULT_LAYOUT, {"files": anchor, "nope": anchor})
+        self.assertEqual(self.host.hidden, {})  # files is shown; nope isn't a panel
+        self.host.apply_state(LayoutState(PanelNode("history"), {"files": anchor}))
+        self.assertEqual(set(self.host.hidden), {"files"})
+        self.host.apply(PanelNode("history"))  # a preset or reset forgets hidden panels
+        self.assertEqual(self.host.hidden, {})
 
     # ---- reading back ---------------------------------------------------
 

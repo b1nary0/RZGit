@@ -3,53 +3,79 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from rzgitclient.ui.layout.layout_model import (
+    Anchor,
     LayoutError,
     LayoutNode,
+    LayoutState,
     Orientation,
     PanelNode,
     SplitNode,
+    TabsNode,
+    anchor_of,
     from_dict,
+    insert_panel,
     normalize,
     panel_ids,
 )
 
 log = logging.getLogger(__name__)
 
+H, V = Orientation.HORIZONTAL, Orientation.VERTICAL
+BRANCHES, FILES, HISTORY = PanelNode("branches"), PanelNode("files"), PanelNode("history")
+
+
+@dataclass(frozen=True)
+class Preset:
+    title: str  # shown in View → Layout
+    root: LayoutNode
+
+
 # Branches above Files in a left sidebar; History on the right.
-DEFAULT_LAYOUT = SplitNode(
-    Orientation.HORIZONTAL,
-    (
-        SplitNode(
-            Orientation.VERTICAL,
-            (PanelNode("branches"), PanelNode("files")),
-            sizes=(300, 400),
-        ),
-        PanelNode("history"),
-    ),
-    sizes=(220, 880),
+DEFAULT_LAYOUT = SplitNode(H, (SplitNode(V, (BRANCHES, FILES), sizes=(300, 400)), HISTORY),
+                           sizes=(220, 880))
+
+PRESETS = (
+    Preset("Standard", DEFAULT_LAYOUT),
+    # Branches and Files as tabs, each with the sidebar's full height.
+    Preset("Sidebar Tabs", SplitNode(H, (TabsNode((BRANCHES, FILES)), HISTORY), sizes=(220, 880))),
+    # History across the top; Branches and Files side by side below it.
+    Preset("Stacked", SplitNode(V, (HISTORY, SplitNode(H, (BRANCHES, FILES), sizes=(400, 700))),
+                                sizes=(450, 250))),
 )
 
 
-def restore_layout(saved: Any) -> LayoutNode:
+def default_anchor(panel_id: str) -> Anchor | None:
+    """Where ``panel_id`` sits in ``DEFAULT_LAYOUT``: the fallback place to show it."""
+    return anchor_of(DEFAULT_LAYOUT, panel_id)
+
+
+def restore_layout(saved: Any) -> LayoutState:
     """The layout to start with, given what ``AppSettings.layout`` returned.
 
     Falls back to ``DEFAULT_LAYOUT`` when nothing is saved, the data is
-    malformed (logged), or its panels differ from the default's. Users can't
-    remove panels yet, so a difference means a newer version added one.
+    malformed (logged) or nothing known is left. Panels the user hid stay
+    hidden; a panel neither shown nor hidden is new in this version and goes
+    to its place in the default layout.
     """
     if saved is None:
-        return DEFAULT_LAYOUT
+        return LayoutState(DEFAULT_LAYOUT)
     try:
-        tree = from_dict(saved)
+        state = from_dict(saved)
     except LayoutError as exc:
         log.warning("Saved layout is malformed (%s); using the default", exc)
-        return DEFAULT_LAYOUT
+        return LayoutState(DEFAULT_LAYOUT)
     known = panel_ids(DEFAULT_LAYOUT)
-    tree = normalize(tree, known)  # drops panels this version no longer has
-    if tree is None or sorted(panel_ids(tree)) != sorted(known):
-        log.info("Saved layout doesn't have this version's panels; using the default")
-        return DEFAULT_LAYOUT
-    return tree
+    root = normalize(state.root, known)  # drops panels this version no longer has
+    if root is None:
+        log.info("Saved layout has none of this version's panels; using the default")
+        return LayoutState(DEFAULT_LAYOUT)
+    shown = set(panel_ids(root))
+    hidden = {pid: a for pid, a in state.hidden.items() if pid in known and pid not in shown}
+    for pid in known:
+        if pid not in shown and pid not in hidden:  # added in a newer version
+            root = insert_panel(root, pid, default_anchor(pid))
+    return LayoutState(root, hidden)

@@ -86,6 +86,29 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(strip_sizes(read), strip_sizes(DEFAULT_LAYOUT))
         self.assertNotEqual(read.sizes[0], 500)
 
+    def test_a_hidden_panel_stays_hidden_after_a_restart(self):
+        window = self.start()
+        window.layout_host.hide_panel("branches")
+        self.quit(window)
+
+        again = self.start()
+        self.assertEqual(set(again.layout_host.panels), {"files", "history"})
+        again.layout_host.show_panel("branches")  # and comes back where it was
+        self.assertEqual(strip_sizes(again.layout_host.current_layout()), strip_sizes(DEFAULT_LAYOUT))
+
+    def test_view_menu_has_layout_panels_and_reset(self):
+        window = self.start()
+        view = next(a.menu() for a in window.menuBar().actions() if a.text() == "&View")
+        self.assertEqual([a.text() for a in view.actions()],
+                         ["&Layout", "&Panels", "", "&Reset Layout"])
+
+    def test_reset_layout_shows_hidden_panels(self):
+        window = self.start()
+        window.layout_host.hide_panel("files")
+        window.ctx.actions.reset_layout.trigger()
+        self.assertEqual(set(window.layout_host.panels), {"branches", "files", "history"})
+        self.assertEqual(window.layout_host.hidden, {})
+
     def test_opened_repo_is_remembered(self):
         repo = make_repo(self.tmp / "repo")
         commit_file(repo, "a.txt", "1", "first")

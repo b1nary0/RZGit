@@ -4,13 +4,18 @@ import sys
 import unittest
 
 from rzgitclient.ui.layout.layout_model import (
+    Anchor,
     LayoutError,
+    LayoutState,
     Orientation,
     PanelNode,
     SplitNode,
     TabsNode,
+    anchor_of,
     from_dict,
+    insert_panel,
     normalize,
+    remove_panel,
     to_dict,
 )
 from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
@@ -20,8 +25,12 @@ A, B, C = PanelNode("a"), PanelNode("b"), PanelNode("c")
 KNOWN = {"a", "b", "c"}
 
 
-def root(node: dict) -> dict:
-    return {"version": 1, "root": node}
+def root(node: dict, hidden: dict | None = None) -> dict:
+    return {"version": 2, "root": node, "hidden": hidden or {}}
+
+
+def tree_of(data: dict):
+    return from_dict(data).root
 
 
 def panel(pid: str) -> dict:
@@ -38,11 +47,30 @@ class SerialisationTests(unittest.TestCase):
         )
         for tree in trees:
             with self.subTest(tree=tree):
-                data = json.loads(json.dumps(to_dict(tree)))
-                self.assertEqual(from_dict(data), tree)
+                state = LayoutState(tree, {"c": Anchor(("a", "b"), V, True, 0.25),
+                                           "d": Anchor(("a",), None, False)})
+                data = json.loads(json.dumps(to_dict(state)))
+                self.assertEqual(from_dict(data), state)
+
+    def test_version_1_loads_with_nothing_hidden(self):
+        self.assertEqual(from_dict({"version": 1, "root": panel("a")}), LayoutState(A))
+
+    def test_anchor_shape(self):
+        data = to_dict(LayoutState(A, {"b": Anchor(("a",), None, True),
+                                       "c": Anchor(("a", "b"), H, False, 0.5)}))
+        self.assertEqual(data["hidden"], {
+            "b": {"neighbors": ["a"], "container": "tabs", "before": True},
+            "c": {"neighbors": ["a", "b"], "container": "horizontal", "before": False, "share": 0.5},
+        })
+
+    def test_bad_share_is_dropped_not_rejected(self):
+        for share in (0, 1, 1.5, -0.2, "0.5", True, None):
+            with self.subTest(share=share):
+                anchor = {"neighbors": ["a"], "container": "vertical", "before": True, "share": share}
+                self.assertEqual(from_dict(root(panel("a"), {"b": anchor})).hidden["b"].share, None)
 
     def test_shape(self):
-        data = to_dict(SplitNode(H, (A, TabsNode((B,))), sizes=(1, 2)))
+        data = to_dict(LayoutState(SplitNode(H, (A, TabsNode((B,))), sizes=(1, 2))))
         self.assertEqual(data, root({
             "type": "split", "orientation": "horizontal", "sizes": [1, 2],
             "children": [panel("a"), {"type": "tabs", "current": 0, "children": [panel("b")]}],
@@ -52,8 +80,16 @@ class SerialisationTests(unittest.TestCase):
         bad = {
             "not an object": [],
             "missing version": {"root": panel("a")},
-            "wrong version": {"version": 2, "root": panel("a")},
+            "wrong version": {"version": 3, "root": panel("a"), "hidden": {}},
             "missing root": {"version": 1},
+            "missing hidden": {"version": 2, "root": panel("a")},
+            "anchor not an object": root(panel("a"), {"b": "a"}),
+            "anchor without neighbors": root(panel("a"), {"b": {
+                "neighbors": [], "container": "tabs", "before": True}}),
+            "unknown anchor container": root(panel("a"), {"b": {
+                "neighbors": ["a"], "container": "grid", "before": True}}),
+            "mistyped before": root(panel("a"), {"b": {
+                "neighbors": ["a"], "container": "tabs", "before": 1}}),
             "unknown node type": root({"type": "grid"}),
             "missing panel id": root({"type": "panel"}),
             "mistyped panel id": root({"type": "panel", "panel_id": 3}),
@@ -74,10 +110,10 @@ class SerialisationTests(unittest.TestCase):
             with self.subTest(sizes=sizes):
                 data = root({"type": "split", "orientation": "vertical",
                              "sizes": sizes, "children": [panel("a"), panel("b")]})
-                self.assertEqual(from_dict(data), SplitNode(V, (A, B)))
+                self.assertEqual(tree_of(data), SplitNode(V, (A, B)))
 
     def test_current_defaults_to_zero(self):
-        self.assertEqual(from_dict(root({"type": "tabs", "children": [panel("a")]})),
+        self.assertEqual(tree_of(root({"type": "tabs", "children": [panel("a")]})),
                          TabsNode((A,)))
 
 
@@ -134,6 +170,79 @@ class NormalizeTests(unittest.TestCase):
         for tree, expected in cases.items():
             with self.subTest(tree=tree):
                 self.assertEqual(normalize(tree, KNOWN).current, expected)
+
+
+D = PanelNode("d")
+
+
+class EditTests(unittest.TestCase):
+    """remove_panel / insert_panel (spec §6.6)."""
+
+    def round_trip(self, tree, pid):
+        rest, anchor = remove_panel(tree, pid)
+        return rest, anchor, insert_panel(rest, pid, anchor)
+
+    def test_anchor_is_the_next_node_or_the_previous_one(self):
+        tree = SplitNode(H, (A, SplitNode(V, (B, C)), D), sizes=(100, 300, 100))
+        self.assertEqual(anchor_of(tree, "a"), Anchor(("b", "c"), H, True, 0.25))
+        self.assertEqual(anchor_of(tree, "d"), Anchor(("b", "c"), H, False, 0.25))
+        self.assertEqual(anchor_of(tree, "b"), Anchor(("c",), V, True))  # no sizes, no share
+        self.assertIsNone(anchor_of(A, "a"))  # the root has nowhere to come back to
+        self.assertIsNone(anchor_of(tree, "nope"))
+
+    def test_every_panel_of_the_default_comes_back_where_it_was(self):
+        for pid in ("branches", "files", "history"):
+            with self.subTest(pid):
+                rest, _, back = self.round_trip(DEFAULT_LAYOUT, pid)
+                self.assertNotIn(pid, str(rest))
+                strip = lambda n: (SplitNode(n.orientation, tuple(strip(c) for c in n.children))  # noqa: E731
+                                   if isinstance(n, SplitNode) else n)
+                self.assertEqual(strip(back), strip(DEFAULT_LAYOUT))
+
+    def test_removing_gives_its_space_to_the_rest_and_collapses(self):
+        tree = SplitNode(H, (A, SplitNode(V, (B, C), sizes=(1, 3))), sizes=(100, 300))
+        self.assertEqual(remove_panel(tree, "b")[0], SplitNode(H, (A, C), sizes=(100, 300)))
+        three = SplitNode(H, (A, B, C), sizes=(1, 2, 3))
+        self.assertEqual(remove_panel(three, "b")[0], SplitNode(H, (A, C), sizes=(1, 3)))
+        self.assertEqual(remove_panel(A, "a"), (None, None))
+
+    def test_coming_back_takes_its_share(self):
+        three = SplitNode(H, (A, B, C), sizes=(100, 300, 600))
+        rest, anchor, back = self.round_trip(three, "b")
+        self.assertEqual(anchor, Anchor(("c",), H, True, 0.3333))
+        self.assertEqual(back, SplitNode(H, (A, B, C), sizes=(100, 200, 400)))  # joins the split
+
+    def test_tabs(self):
+        tabs = SplitNode(H, (TabsNode((A, B, C), current=2), D))
+        rest, anchor, back = self.round_trip(tabs, "b")
+        self.assertEqual(anchor, Anchor(("c",), None, True))
+        self.assertEqual(rest, SplitNode(H, (TabsNode((A, C), current=1), D)))
+        self.assertEqual(back, SplitNode(H, (TabsNode((A, B, C), current=1), D)))  # shown: current
+        # Its tab neighbour is now alone outside tabs: they become tabs again.
+        self.assertEqual(insert_panel(SplitNode(H, (C, D)), "b", anchor),
+                         SplitNode(H, (TabsNode((B, C), current=0), D)))
+
+    def test_a_tab_can_not_be_split_so_it_goes_beside_the_group(self):
+        tree = SplitNode(V, (TabsNode((A, B)), C))
+        self.assertEqual(insert_panel(tree, "d", Anchor(("a",), H, False)),
+                         SplitNode(V, (SplitNode(H, (TabsNode((A, B)), D)), C)))
+
+    def test_neighbours_partly_gone_use_the_ones_left(self):
+        tree = SplitNode(V, (SplitNode(H, (A, B)), C))
+        self.assertEqual(insert_panel(tree, "d", Anchor(("b", "gone"), V, True)),
+                         SplitNode(V, (SplitNode(H, (A, SplitNode(V, (D, B)))), C)))
+
+    def test_fallback_then_the_right_edge(self):
+        tree = SplitNode(V, (A, B), sizes=(1, 1))
+        gone = Anchor(("x",), V, True)
+        self.assertEqual(insert_panel(tree, "d", gone, Anchor(("a",), V, True)),
+                         SplitNode(V, (D, A, B), sizes=(0, 1, 1)))  # half of a's 1 rounds to 0
+        self.assertEqual(insert_panel(tree, "d", gone, None), SplitNode(H, (tree, D)))
+        self.assertEqual(insert_panel(None, "d", gone), D)
+
+    def test_a_shown_panel_is_left_alone(self):
+        tree = SplitNode(H, (A, B))
+        self.assertIs(insert_panel(tree, "a", Anchor(("b",), V, False)), tree)
 
 
 class LayeringTests(unittest.TestCase):

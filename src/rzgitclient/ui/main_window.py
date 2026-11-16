@@ -7,8 +7,10 @@ from PySide6.QtWidgets import QFileDialog, QLabel, QMainWindow, QMessageBox
 from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.git.repo import Repo
 from rzgitclient.ui.layout.layout_host import LayoutHost
+from rzgitclient.ui.layout.layout_menu import LayoutMenu
 from rzgitclient.ui.layout.layout_model import to_dict
 from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT, restore_layout
+from rzgitclient.ui.layout.panels_menu import PanelsMenu
 from rzgitclient.ui.panels.panel import PanelContext
 
 
@@ -23,8 +25,8 @@ class MainWindow(QMainWindow):
         self.resize(1100, 700)
         if (geometry := settings.window_geometry) is not None:
             self.restoreGeometry(geometry)
-        self._build_actions()
         self._build_ui()
+        self._build_actions()
 
         session.repo_changed.connect(self._on_repo_changed)
         for signal in (session.head_changed, session.history_changed, session.status_changed):
@@ -52,11 +54,14 @@ class MainWindow(QMainWindow):
 
         actions.reset_layout.triggered.connect(self.reset_layout)
         view_menu = self.menuBar().addMenu("&View")
+        view_menu.addMenu(LayoutMenu(self.layout_host, view_menu))
+        view_menu.addMenu(PanelsMenu(self.layout_host, view_menu))
+        view_menu.addSeparator()
         view_menu.addAction(actions.reset_layout)
 
     def _build_ui(self) -> None:
         self.layout_host = LayoutHost(self.ctx)
-        self.layout_host.apply(restore_layout(self.settings.layout))
+        self.layout_host.apply_state(restore_layout(self.settings.layout))
         self.setCentralWidget(self.layout_host)
         self.statusBar().showMessage("No repository open")
         # Beside the summary, not replacing it.
@@ -70,8 +75,8 @@ class MainWindow(QMainWindow):
         self.layout_host.apply(DEFAULT_LAYOUT)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        layout = self.layout_host.current_layout()
-        self.settings.layout = to_dict(layout) if layout is not None else None
+        state = self.layout_host.state()
+        self.settings.layout = to_dict(state) if state is not None else None
         self.settings.window_geometry = self.saveGeometry()
         super().closeEvent(event)
 
