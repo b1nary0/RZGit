@@ -20,6 +20,7 @@ _LAYOUT = "layout"
 _WINDOW_GEOMETRY = "window/geometry"
 _SIDE_BY_SIDE_DIFF = "diff/side_by_side"
 _COMMIT_DRAFTS = "commit/drafts"
+_SAVED_LAYOUTS = "layouts/saved"
 
 
 class AppSettings:
@@ -89,6 +90,34 @@ class AppSettings:
     @commit_drafts.setter
     def commit_drafts(self, drafts: dict[str, str]) -> None:
         self._set(_COMMIT_DRAFTS, json.dumps(drafts) if drafts else None)
+
+    @property
+    def saved_layouts(self) -> list[tuple[str, dict[str, Any]]]:
+        """The user's named layouts, in the order saved, as ``(name, layout dict)``
+        (spec §6.3). Entries that aren't a name and an object are dropped (logged)."""
+        raw = self._settings.value(_SAVED_LAYOUTS, "", str)
+        try:
+            data = json.loads(raw) if raw else []
+        except ValueError as exc:
+            log.warning("Saved layouts aren't valid JSON (%s); ignoring them", exc)
+            return []
+        if not isinstance(data, list):
+            log.warning("Saved layouts aren't a list; ignoring them")
+            return []
+        result = []
+        for entry in data:
+            name = entry.get("name") if isinstance(entry, dict) else None
+            layout = entry.get("layout") if isinstance(entry, dict) else None
+            if isinstance(name, str) and name and isinstance(layout, dict):
+                result.append((name, layout))
+            else:
+                log.warning("Dropping a malformed saved layout: %.80r", entry)
+        return result
+
+    @saved_layouts.setter
+    def saved_layouts(self, layouts: list[tuple[str, dict[str, Any]]]) -> None:
+        self._set(_SAVED_LAYOUTS, json.dumps(
+            [{"name": n, "layout": l} for n, l in layouts]) if layouts else None)
 
     def sync(self) -> None:
         """Write pending changes to disk now (Qt also does this on exit)."""

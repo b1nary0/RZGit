@@ -103,7 +103,8 @@ src/rzgitclient/
       layout_presets.py         PRESETS, DEFAULT_LAYOUT, restore_layout
       layout_host.py            LayoutHost
       panel_frame.py            PanelFrame: section header + panel
-      layout_menu.py            LayoutMenu: View → Layout (presets)
+      layout_menu.py            LayoutMenu: View → Layout (presets, saved layouts)
+      manage_layouts_dialog.py  ManageLayoutsDialog: rename and delete saved layouts
       panels_menu.py            PanelsMenu: View → Panels (show and hide)
 tests/
   support.py                    temp-repo builder, shared offscreen QApplication
@@ -615,7 +616,7 @@ Commit are directly below Unstaged Files (`files`), in that order:
 
 `AppSettings` (`core/app_settings.py`) is the only code that touches `QSettings`. It has
 typed accessors (`last_repo`, `layout`, `window_geometry`, `side_by_side_diff`,
-`commit_drafts`) and takes a file path for tests. `app.py` creates it and passes it to
+`commit_drafts`, `saved_layouts`) and takes a file path for tests. `app.py` creates it and passes it to
 `MainWindow`; panels don't get it. The one thing a panel saves, the commit draft, goes
 through `CommitDrafts` (§5.4), which holds only that.
 
@@ -640,14 +641,34 @@ returns the `LayoutState` to apply:
 
 **View → Reset Layout** applies `DEFAULT_LAYOUT` at once, showing every panel.
 
+**Saved layouts** (named user layouts) are app-wide, not per repository:
+`AppSettings.saved_layouts` is a list of `(name, layout)` pairs, stored as JSON, where each
+layout is in the same format as the current one (`to_dict` of a `LayoutState`, so hidden
+panels are kept). Entries that aren't a name and an object are dropped with a logged
+warning. Opening a saved layout goes through `restore_layout`, exactly like a start: panels
+this version no longer has are dropped, new ones go to their default place, and the
+panels it hid stay hidden. Each change is written at once, not on close.
+- **Names** are trimmed. Empty names and the names of the built-in presets are refused,
+  ignoring case (`layout_name_problem` in `layout_presets.py`); presets can't be
+  overwritten, renamed or deleted.
+- **View → Layout** lists the presets, a separator, the saved layouts in the order they
+  were saved, a separator, then **Save Layout As…** and **Manage Layouts…**.
+- **Save Layout As…** asks for a name and saves `LayoutHost.state()`. A name already used
+  by a saved layout (ignoring case) asks before replacing it; the replaced layout keeps
+  its place in the list.
+- **Manage Layouts…** opens `ManageLayoutsDialog`: the saved layouts in a list, with
+  **Rename…** (the same name rules; a name another saved layout has is refused, not
+  replaced) and **Delete** (asks first). The menu is rebuilt when the dialog closes.
+
 ### 6.4 Customisation levels
 
 The data model supports all of these now; the UI comes in stages:
 1. Code-defined default (first phase)
 2. Sizes and tabs remembered between runs (first phase)
 3. Switching between preset layouts: **View → Layout** (§6.1)
-4. Editing: hide and show panels from **View → Panels** (§6.6). Named user layouts and
-   moving panels by drag and drop come later (RZG-16).
+4. Editing: hide and show panels from **View → Panels** (§6.6), and save the current
+   layout under a name (§6.3, saved layouts). Moving panels by drag and drop comes later
+   (RZG-24).
 
 ### 6.5 Why not QDockWidget
 

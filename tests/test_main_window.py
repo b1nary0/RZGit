@@ -114,6 +114,22 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual([a.text() for a in view.actions()],
                          ["&Layout", "&Panels", "", "&Side by Side Diff", "", "&Reset Layout"])
 
+    def test_a_saved_layout_survives_a_restart(self):
+        window = self.start()
+        window.layout_host.hide_panel("branches")
+        layout_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "&View"
+                           ).actions()[0].menu()
+        self.assertTrue(layout_menu.save("Review"))
+        window.ctx.actions.reset_layout.trigger()
+        self.quit(window)
+
+        again = self.start()
+        layout_menu = next(a.menu() for a in again.menuBar().actions() if a.text() == "&View"
+                           ).actions()[0].menu()
+        self.assertEqual(again.layout_host.hidden, {})
+        next(a for a in layout_menu.actions() if a.text() == "Review").trigger()
+        self.assertEqual(set(again.layout_host.hidden), {"branches"})
+
     def test_side_by_side_diff_is_remembered(self):
         window = self.start()
         self.assertFalse(window.ctx.actions.side_by_side_diff.isChecked())

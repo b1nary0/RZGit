@@ -81,6 +81,29 @@ class AppSettingsTests(unittest.TestCase):
         self.settings._settings.setValue("commit/drafts", '{"/a": 3, "/b": "ok"}')
         self.assertEqual(self.settings.commit_drafts, {"/b": "ok"})
 
+    def test_saved_layouts_survive_a_reopen_in_order(self):
+        self.assertEqual(self.settings.saved_layouts, [])
+        layouts = [("Wide Diff", {"version": 2, "root": {}}), ("Review", {"version": 2})]
+        self.settings.saved_layouts = layouts
+        self.assertEqual(self.reopen().saved_layouts, layouts)
+        self.settings.saved_layouts = []
+        self.assertEqual(self.reopen().saved_layouts, [])
+
+    def test_saved_layouts_that_are_not_valid_are_dropped_with_a_warning(self):
+        self.settings._settings.setValue("layouts/saved", "[not json")
+        with self.assertLogs("rzgitclient.core.app_settings", "WARNING"):
+            self.assertEqual(self.settings.saved_layouts, [])
+        self.settings._settings.setValue("layouts/saved", '{"name": "x"}')
+        with self.assertLogs("rzgitclient.core.app_settings", "WARNING"):
+            self.assertEqual(self.settings.saved_layouts, [])
+        self.settings._settings.setValue(
+            "layouts/saved",
+            '[{"name": "ok", "layout": {}}, {"name": "", "layout": {}}, '
+            '{"name": "x", "layout": [1]}, 3, {"layout": {}}]')
+        with self.assertLogs("rzgitclient.core.app_settings", "WARNING") as logs:
+            self.assertEqual(self.settings.saved_layouts, [("ok", {})])
+        self.assertEqual(len(logs.records), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

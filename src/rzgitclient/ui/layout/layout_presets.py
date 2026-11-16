@@ -69,6 +69,19 @@ PRESETS = (
 )
 
 
+def layout_name_problem(name: str, taken: Collection[str] = ()) -> str | None:
+    """Why ``name`` (already trimmed) can't name a saved layout, or ``None`` if it can:
+    it's empty, a built-in preset's name, or in ``taken`` (all ignoring case; spec §6.3)."""
+    if not name:
+        return "Enter a name for the layout."
+    folded = name.casefold()
+    if any(p.title.casefold() == folded for p in PRESETS):
+        return f"“{name}” is a built-in layout. Choose another name."
+    if any(t.casefold() == folded for t in taken):
+        return f"A saved layout is already called “{name}”. Choose another name."
+    return None
+
+
 def default_anchor(panel_id: str, shown: Collection[str] | None = None) -> Anchor | None:
     """Where ``panel_id`` sits in ``DEFAULT_LAYOUT``: the fallback place to show it.
 

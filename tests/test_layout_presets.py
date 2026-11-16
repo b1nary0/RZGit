@@ -12,7 +12,12 @@ from rzgitclient.ui.layout.layout_model import (
     remove_panel,
     to_dict,
 )
-from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT, PRESETS, restore_layout
+from rzgitclient.ui.layout.layout_presets import (
+    DEFAULT_LAYOUT,
+    PRESETS,
+    layout_name_problem,
+    restore_layout,
+)
 from rzgitclient.ui.panels.panel_registry import PANEL_TYPES
 
 H, V = Orientation.HORIZONTAL, Orientation.VERTICAL
@@ -135,6 +140,17 @@ class RestoreLayoutTests(unittest.TestCase):
 
     def test_nothing_known_left_gives_the_default(self):
         self.assertEqual(restore_layout(saved(PanelNode("retired"))), LayoutState(DEFAULT_LAYOUT))
+
+
+class LayoutNameTests(unittest.TestCase):
+    def test_a_new_name_is_fine(self):
+        self.assertIsNone(layout_name_problem("Wide Diff", ["Review"]))
+
+    def test_empty_builtin_and_taken_names_are_refused_ignoring_case(self):
+        self.assertIn("Enter a name", layout_name_problem(""))
+        self.assertIn("built-in", layout_name_problem("standard"))
+        self.assertIn("built-in", layout_name_problem(PRESETS[1].title.upper()))
+        self.assertIn("already called", layout_name_problem("REVIEW", ["Review"]))
 
 
 if __name__ == "__main__":

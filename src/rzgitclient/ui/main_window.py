@@ -59,7 +59,7 @@ class MainWindow(QMainWindow):
 
         actions.reset_layout.triggered.connect(self.reset_layout)
         view_menu = self.menuBar().addMenu("&View")
-        view_menu.addMenu(LayoutMenu(self.layout_host, view_menu))
+        view_menu.addMenu(LayoutMenu(self.layout_host, self.settings, view_menu))
         view_menu.addMenu(PanelsMenu(self.layout_host, view_menu))
         view_menu.addSeparator()
         view_menu.addAction(actions.side_by_side_diff)
