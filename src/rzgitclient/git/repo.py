@@ -26,6 +26,12 @@ from rzgitclient.git.git_models import (
 )
 
 
+def canonical_path(path: str | Path) -> Path:
+    """The one path the app stores and compares for a folder: ``~`` expanded and
+    symlinks resolved (spec §6.3). The folder doesn't have to exist."""
+    return Path(path).expanduser().resolve()
+
+
 class GitError(Exception):
     """Raised when a git command fails, or can't be run at all.
 
@@ -76,6 +82,8 @@ def _run(cwd: str | Path, args: tuple[str, ...], ok_codes: Collection[int], *, t
             env=_git_env(),
             capture_output=True,
             text=text,
+            # git writes paths and messages as UTF-8, whatever the platform's locale.
+            encoding="utf-8" if text else None,
             **stdin,
         )
     except OSError as exc:  # missing cwd, git not installed, …
@@ -97,7 +105,7 @@ class Repo:
         if not path.is_dir():
             raise GitError(f"Not a directory: {path}")
         top = run_git(path, "rev-parse", "--show-toplevel").strip()
-        self.root = Path(top)
+        self.root = canonical_path(top)
 
     def git(self, *args: str) -> str:
         return run_git(self.root, *args)

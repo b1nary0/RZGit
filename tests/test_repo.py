@@ -4,8 +4,45 @@ import unittest
 from pathlib import Path
 
 from rzgitclient.git.git_models import DiffLine, DiffSource, FileStatus, LineKind
-from rzgitclient.git.repo import GitError, Repo, parse_diff
+from rzgitclient.git.repo import GitError, Repo, canonical_path, parse_diff
 from tests.support import commit_file, git, make_repo
+
+
+class CanonicalPathTests(unittest.TestCase):
+    """One path per folder, whichever way it was reached (spec §6.3, RZG-29)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name).resolve()
+
+    def test_symlinks_are_resolved(self):
+        real = self.tmp / "real"
+        real.mkdir()
+        (self.tmp / "link").symlink_to(real)
+        self.assertEqual(canonical_path(self.tmp / "link"), real)
+        self.assertEqual(canonical_path(str(self.tmp / "link" / ".." / "real")), real)
+
+    def test_home_and_relative_paths_become_absolute(self):
+        self.assertEqual(canonical_path("~"), Path.home().resolve())
+        self.assertEqual(canonical_path("."), Path.cwd().resolve())
+
+    def test_a_missing_folder_still_has_one(self):
+        self.assertEqual(canonical_path(self.tmp / "gone" / "x"), self.tmp / "gone" / "x")
+
+    def test_a_repo_reached_through_a_link_has_its_real_root(self):
+        real = make_repo(self.tmp / "repo")
+        (self.tmp / "link").symlink_to(real)
+        self.assertEqual(Repo(self.tmp / "link").root, real)
+        self.assertEqual(Repo(self.tmp / "link").root, Repo(real).root)
+
+    def test_a_non_ascii_folder_name(self):
+        real = make_repo(self.tmp / "café 日本")
+        commit_file(real, "a.txt", "1", "first")
+        repo = Repo(real)
+        self.assertEqual(repo.root, real)
+        self.assertEqual(repo.name, "café 日本")
+        self.assertEqual(len(repo.log()), 1)
 
 
 class RepoTests(unittest.TestCase):

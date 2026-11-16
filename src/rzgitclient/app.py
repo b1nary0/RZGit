@@ -46,11 +46,12 @@ def main(argv: list[str] | None = None) -> int:
     window = MainWindow(ctx, settings)
     window.show()
 
-    # Open a repo from the command line, else the last one used.
+    # Open a repo from the command line (its errors shown), else the last one used.
     args = [a for a in argv[1:] if not a.startswith("-")]
-    target = args[0] if args else settings.last_repo
-    if target:
-        session.open(target)
+    if args:
+        session.open(args[0])
+    else:
+        window.open_last_repo()
 
     code = app.exec()
     watcher.shutdown()

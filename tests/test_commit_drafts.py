@@ -27,6 +27,29 @@ class CommitDraftsTests(unittest.TestCase):
         self.assertEqual(drafts.get("/repos/two"), "Fix two")
         self.assertEqual(drafts.get("/repos/three"), "")
 
+    def test_old_keys_are_migrated_when_loaded(self):
+        tmp = Path(self._tmp.name).resolve()
+        real, other = tmp / "repo", tmp / "other"
+        real.mkdir()
+        other.mkdir()
+        (tmp / "link").symlink_to(real)
+        (tmp / "link2").symlink_to(other)
+        settings = AppSettings(self.path)
+        settings.commit_drafts = {
+            str(tmp / "link"): "Old key",  # meets the canonical key below: that one wins
+            str(real): "Canonical key",
+            str(tmp / "link2"): "Only under a link",
+            str(tmp / "gone"): "Folder gone",  # kept: its drive may be back
+        }
+        drafts = CommitDrafts(settings)
+        self.assertEqual(drafts.get(real), "Canonical key")
+        self.assertEqual(drafts.get(other), "Only under a link")
+        self.assertEqual(drafts.get(tmp / "gone"), "Folder gone")
+        settings.sync()
+        self.assertEqual(AppSettings(self.path).commit_drafts,  # saved once, migrated
+                         {str(real): "Canonical key", str(other): "Only under a link",
+                          str(tmp / "gone"): "Folder gone"})
+
     def test_every_path_to_a_repository_finds_its_draft(self):
         real = Path(self._tmp.name) / "repo"
         real.mkdir()

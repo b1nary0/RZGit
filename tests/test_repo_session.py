@@ -60,6 +60,14 @@ class RepoSessionTests(unittest.TestCase):
             self.assertIsInstance(value, tuple)
         self.assertIs(self.rec.values("history_changed")[0], s.history)
 
+    def test_a_quiet_open_does_not_report(self):
+        self.open_and_clear()
+        repo = self.session.repo
+        self.assertFalse(self.session.open(self.tmp / "gone", report=False))
+        wait_idle(self.session)
+        self.assertEqual(self.rec.names(), [])
+        self.assertIs(self.session.repo, repo)
+
     def test_failed_open_keeps_current_repo(self):
         self.open_and_clear()
         repo = self.session.repo

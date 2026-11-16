@@ -13,6 +13,8 @@ from typing import Any
 
 from PySide6.QtCore import QByteArray, QSettings
 
+from rzgitclient.git.repo import canonical_path
+
 log = logging.getLogger(__name__)
 
 _LAST_REPO = "last_repo"
@@ -36,11 +38,12 @@ class AppSettings:
 
     @property
     def last_repo(self) -> str | None:
+        """The repository open when the app last closed; saved as its canonical path."""
         return self._settings.value(_LAST_REPO, "", str) or None
 
     @last_repo.setter
-    def last_repo(self, path: str | None) -> None:
-        self._set(_LAST_REPO, path)
+    def last_repo(self, path: str | Path | None) -> None:
+        self._set(_LAST_REPO, str(canonical_path(path)) if path else None)
 
     @property
     def layout(self) -> dict[str, Any] | None:

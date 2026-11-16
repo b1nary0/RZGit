@@ -41,6 +41,15 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(bytes(again.window_geometry), b"\x01\x02geometry")
         self.assertTrue(self.path.exists())  # really the given file
 
+    def test_last_repo_is_saved_as_its_canonical_path(self):
+        real = Path(self._tmp.name).resolve() / "repo"
+        real.mkdir()
+        (real.parent / "link").symlink_to(real)
+        self.settings.last_repo = real.parent / "link"
+        self.assertEqual(self.reopen().last_repo, str(real))
+        self.settings.last_repo = None
+        self.assertIsNone(self.reopen().last_repo)
+
     def test_side_by_side_diff_defaults_to_off_and_survives_a_reopen(self):
         self.assertFalse(self.settings.side_by_side_diff)
         self.settings.side_by_side_diff = True

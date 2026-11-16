@@ -67,7 +67,7 @@ src/rzgitclient/
   app.py                        composition root
   git/
     git_models.py               Commit, Branch, FileStatus, FileDiff, Hunk, DiffLine
-    repo.py                     Repo: runs git, returns models
+    repo.py                     Repo: runs git, returns models; canonical_path
   core/
     repo_session.py             RepoSession: the open repo, its data, git commands
     diff_request.py             DiffRequest, the size limit, load_diff (the worker side of diffs)
@@ -819,8 +819,10 @@ RZG-26).
   draft.
   `CommitDrafts` writes through `AppSettings` (`commit/drafts`, JSON keyed by the
   repository root); tests give it none, and it keeps drafts in memory. The key is the
-  root with symlinks resolved (`Path.resolve()`), so every path to one repository finds
-  the same draft (on macOS, `/var/...` and `/private/var/...` are one folder).
+  root's `canonical_path` (§6.3), so every path to one repository finds the same draft
+  (on macOS, `/var/...` and `/private/var/...` are one folder). Keys saved before that
+  are re-keyed when the drafts are loaded; where two meet, the one already canonical
+  wins. A draft whose folder is gone is kept (it may be on a drive not mounted now).
 - **Amend** (RZG-27): an **Amend** checkbox beside the button shows the `amend` action
   (§8), checked both ways. Turning it on puts the last commit's message in the fields
   (`refresh(LAST_COMMIT)`; at once if `session.last_commit` is already HEAD's), and the
@@ -964,6 +966,19 @@ typed accessors (`last_repo`, `layout`, `layout_preset`, `window_geometry`,
 `side_by_side_diff`, `commit_drafts`, `saved_layouts`) and takes a file path for tests. `app.py` creates it and passes it to
 `MainWindow`; panels don't get it. The one thing a panel saves, the commit draft, goes
 through `CommitDrafts` (§5.4), which holds only that.
+
+**Stored folder paths** (RZG-29) are canonical: `canonical_path(path)` (`git/repo.py`)
+expands `~` and resolves symlinks. `Repo.root` is git's `--show-toplevel` made canonical,
+and `last_repo` and the draft keys go through the same function, so every caller agrees on
+one path per folder. There is no case-folding: git's top level has the case stored on
+disk (macOS, Windows), and folding would be wrong on a case-sensitive volume. git's text
+output is read as UTF-8 on every platform, so non-ASCII folder names work.
+
+**The last repository** is reopened at startup by `MainWindow.open_last_repo()`, quietly:
+if it was moved, deleted or is no longer a repository, the window starts with none, the
+status bar says "Last repository not found: <path>", and the setting is kept (the drive
+may be back next time). `RepoSession.open(path, report=False)` is the quiet open. A path
+given on the command line is opened as usual and shows its error.
 
 On close, the window saves the host's `state()` (as JSON, so the format is ours) and its
 geometry: size and maximized state, plus position where the platform allows it (not on

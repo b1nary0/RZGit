@@ -7,6 +7,7 @@ from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QToolBar, QToolButton
 
 from rzgitclient.core.app_settings import AppSettings
+from rzgitclient.core.commit_drafts import CommitDrafts
 from rzgitclient.core.diff_patch import hunk_lines
 from rzgitclient.core.selection import FileSelection, FileSource
 from rzgitclient.git.git_models import DiffSource
@@ -76,6 +77,46 @@ class MainWindowTests(unittest.TestCase):
 
     def body(self, window):
         return window.layout_host.layout().itemAt(0).widget().widget(1)
+
+    def test_the_last_repository_is_reopened(self):
+        repo = make_repo(self.tmp / "repo")
+        AppSettings(self.settings_path).last_repo = repo
+        window = self.start()
+        window.open_last_repo()
+        self.assertEqual(window.session.repo.root, repo.resolve())
+
+    def test_a_last_repository_that_is_gone_is_skipped_quietly(self):
+        (self.tmp / "plain").mkdir()
+        for missing in (self.tmp / "moved", self.tmp / "plain"):  # gone; no longer a repo
+            settings = AppSettings(self.settings_path)
+            settings.last_repo = missing
+            settings.sync()
+            window = self.start()
+            errors = []
+            window.session.error_occurred.connect(errors.append)
+            with mock.patch("rzgitclient.ui.main_window.QMessageBox") as box:
+                window.open_last_repo()
+            self.assertIsNone(window.session.repo)
+            self.assertEqual(errors, [])
+            box.warning.assert_not_called()
+            self.assertEqual(window.statusBar().currentMessage(),
+                             f"Last repository not found: {missing}")
+            self.quit(window)
+            self.assertEqual(AppSettings(self.settings_path).last_repo, str(missing))  # kept
+
+    def test_a_non_ascii_repository_keeps_its_draft_and_is_reopened(self):
+        repo = make_repo(self.tmp / "café 日本")
+        commit_file(repo, "a.txt", "1\n", "first")
+        window = self.start()
+        self.assertTrue(window.session.open(repo))
+        wait_idle(window.session)
+        CommitDrafts(AppSettings(self.settings_path)).set(window.session.repo.root, "Fix é 日本")
+        self.quit(window)
+        again = self.start()
+        again.open_last_repo()
+        self.assertEqual(again.session.repo.root, repo.resolve())
+        self.assertEqual(again.windowTitle(), "café 日本 — RZGitClient")
+        self.assertEqual(CommitDrafts(AppSettings(self.settings_path)).get(repo), "Fix é 日本")
 
     def test_first_start_uses_the_default_layout(self):
         window = self.start()

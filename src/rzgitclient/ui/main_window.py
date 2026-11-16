@@ -164,6 +164,13 @@ class MainWindow(QMainWindow):
         box.exec()
         return box.clickedButton() is discard
 
+    def open_last_repo(self) -> None:
+        """Reopen the last repository, quietly: if it's gone, say so in the status bar
+        and keep the setting (its drive may be back next time; spec §6.3)."""
+        path = self.settings.last_repo
+        if path and not self.session.open(path, report=False):
+            self.statusBar().showMessage(f"Last repository not found: {path}")
+
     def choose_repo(self) -> None:
         repo = self.session.repo
         start = str(repo.root) if repo else ""
