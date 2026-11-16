@@ -20,6 +20,7 @@ _LAYOUT = "layout"
 _LAYOUT_PRESET = "layout_preset"
 _WINDOW_GEOMETRY = "window/geometry"
 _SIDE_BY_SIDE_DIFF = "diff/side_by_side"
+_FILE_TREE = "files/tree"
 _COMMIT_DRAFTS = "commit/drafts"
 _SAVED_LAYOUTS = "layouts/saved"
 
@@ -84,6 +85,15 @@ class AppSettings:
     @side_by_side_diff.setter
     def side_by_side_diff(self, on: bool) -> None:
         self._set(_SIDE_BY_SIDE_DIFF, bool(on))
+
+    @property
+    def file_tree(self) -> bool:
+        """Whether the file panels show a folder tree (default) or flat paths."""
+        return self._settings.value(_FILE_TREE, True, bool)
+
+    @file_tree.setter
+    def file_tree(self, on: bool) -> None:
+        self._set(_FILE_TREE, bool(on))
 
     @property
     def commit_drafts(self) -> dict[str, str]:

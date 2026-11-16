@@ -46,6 +46,11 @@ class AppSettingsTests(unittest.TestCase):
         self.settings.side_by_side_diff = True
         self.assertTrue(self.reopen().side_by_side_diff)
 
+    def test_file_tree_defaults_to_on_and_survives_a_reopen(self):
+        self.assertTrue(self.settings.file_tree)
+        self.settings.file_tree = False
+        self.assertFalse(self.reopen().file_tree)
+
     def test_none_removes_a_value(self):
         self.settings.last_repo = "/repos/one"
         self.settings.layout = {"version": 1}

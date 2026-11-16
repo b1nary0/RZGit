@@ -94,6 +94,7 @@ src/rzgitclient/
       files_panel.py            FilesPanel: "Unstaged Files"
       staged_panel.py           StagedPanel: "Staged Files"
       file_list.py              FileList: one source's changed files, the body of both
+      file_tree.py              FileTree: changed files grouped by folder (plain Python, no Qt)
       commit_files_panel.py     CommitFilesPanel: the files the selected commit changed
       diff_panel.py             DiffPanel
       diff_view.py              DiffView: read-only text with a line-number gutter
@@ -476,6 +477,26 @@ commit is selected; Commit keeps its draft while collapsed.
 - **Selecting:** extended selection (Ctrl and Shift) within a panel. One panel holds the
   selection at a time: selecting in one clears the other, since each shows only the rows
   of `selection.files` that are its own.
+- **Folder tree** (RZG-25): with **Show Files as Tree** on (§8, the default), each
+  `FileList` shows its files under their folders, as in VS Code: a file row is the file's
+  name and status letter, a rename shows both names (`old.py → new.py`, or the old path when the
+  folder changed), and a chain of folders that each hold one folder is one row
+  (`src/rzgitclient/ui`). Folders come first, then files, each by name. With it off, the
+  list is flat, one full path per row, as before. The tree is built by `file_tree.py`,
+  plain Python tested without Qt.
+  - **Expanded by default.** A folder the user collapses stays collapsed, by its path,
+    through refreshes, staging and toggling, while the app runs (not saved). Opening
+    another repository forgets them.
+  - **Folder rows can be selected.** Selecting a folder selects every file under it, so
+    Stage, Unstage, Discard, Enter and the context menu act on all of them. Double-click
+    on a folder folds it, as usual. Diff shows the current row only if it is a file.
+  - Headers count files, not folders.
+  - **Easy to read, as in VS Code:** a file's name is in the normal text colour, and its
+    status is one letter in the status colour at the right edge (M, A, D, R, C, T; U for
+    untracked, so a conflict is `!`). The full word is in the row's tooltip, after the
+    path. Folder names are muted, so the files stand out. Each folder level has a faint
+    indent guide (`tree_guide`), drawn under the folder's arrow, and the indent is small
+    (10 px) so deep trees keep their names. Flat mode colours and letters the same way.
 - **Staging:** the context menu shows that panel's actions (§8): Stage, Discard and Stage
   All in Unstaged Files; Unstage and Unstage All in Staged Files. Double-click, or Enter,
   moves the selected rows to the other panel.
@@ -814,7 +835,7 @@ back where the user had it. The default place is only the fallback.
 
 ```python
 @dataclass(frozen=True)
-class ThemeColors:   menubar_bg: str; toolbar_bg: str; tab_bg: str; header_bg: str; sidebar_bg: str; content_bg: str; border: str;
+class ThemeColors:   menubar_bg: str; toolbar_bg: str; tab_bg: str; header_bg: str; sidebar_bg: str; content_bg: str; border: str; tree_guide: str;
                      text: str; text_muted: str; hover: str; selection: str; content_selection: str;
                      accent: str; button_*: str; scroll_*: str; diff_*: str (incl. diff_hunk_bg, diff_hunk_text); …
 @dataclass(frozen=True)
@@ -882,7 +903,9 @@ Per-widget sheets are slow to apply and scatter the rules.
   The menu bar, context menus and the Controls panel all show the same objects.
   **Side by Side Diff** is checkable: the Diff panel follows its `toggled`. MainWindow sets
   it from `AppSettings.side_by_side_diff` before the panels are built, and saves it on close
-  with the layout, so panels never touch settings.
+  with the layout, so panels never touch settings. **Show Files as Tree** works the same
+  way (`AppSettings.file_tree`, on by default): every `FileList` follows its `toggled`.
+  Both are in the **View** menu.
 - **Staging actions:** Stage (Ctrl+S) and Unstage (Ctrl+U) act on the selected rows of
   that kind (`selection.files`), Discard Changes… (Ctrl+Backspace) on the selected unstaged
   rows, Stage All (Ctrl+Shift+S) and Unstage All (Ctrl+Shift+U) on the whole status. Each is

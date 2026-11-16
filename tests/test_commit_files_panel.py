@@ -60,7 +60,7 @@ class CommitFilesPanelTests(unittest.TestCase):
         self.assertFalse(self.panel.collapsed)
         self.assertEqual(self.panel.header, f"Files in {self.third.short_sha} (2)")
         self.assertEqual(sorted(self.rows()),
-                         [("a.txt", "Modified"), ("old.txt → new.txt", "Renamed")])
+                         [("a.txt", "M"), ("old.txt → new.txt", "R")])
 
     def test_back_to_uncommitted_changes_collapses_it(self):
         self.choose(self.third)

@@ -35,6 +35,9 @@ class AppActions(QObject):
         self.reset_layout = self._action("view-restore", "&Reset Layout")
         self.side_by_side_diff = self._action("view-split-left-right", "&Side by Side Diff")
         self.side_by_side_diff.setCheckable(True)
+        self.file_tree = self._action("view-list-tree", "Show Files as &Tree")
+        self.file_tree.setCheckable(True)
+        self.file_tree.setChecked(True)
 
         # Staging (spec §8): on the selected rows of their kind, or on everything.
         self.stage = self._action("list-add", "&Stage", "Ctrl+S")

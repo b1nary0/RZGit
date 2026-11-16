@@ -118,7 +118,8 @@ class MainWindowTests(unittest.TestCase):
         window = self.start()
         view = next(a.menu() for a in window.menuBar().actions() if a.text() == "&View")
         self.assertEqual([a.text() for a in view.actions()],
-                         ["&Layout", "&Panels", "", "&Side by Side Diff", "", "&Reset Layout"])
+                         ["&Layout", "&Panels", "", "Show Files as &Tree",
+                          "&Side by Side Diff", "", "&Reset Layout"])
 
     def test_a_saved_layout_survives_a_restart(self):
         window = self.start()
@@ -228,6 +229,13 @@ class MainWindowTests(unittest.TestCase):
         self.assertTrue(again.ctx.actions.side_by_side_diff.isChecked())
         diff = again.layout_host.panels["diff"]
         self.assertIs(diff._stack.currentWidget(), diff._message_page)  # no file yet
+
+    def test_file_tree_is_remembered(self):
+        window = self.start()
+        self.assertTrue(window.ctx.actions.file_tree.isChecked())
+        window.ctx.actions.file_tree.setChecked(False)
+        self.quit(window)
+        self.assertFalse(self.start().ctx.actions.file_tree.isChecked())
 
     def test_repository_menu_has_the_staging_and_commit_actions(self):
         window = self.start()

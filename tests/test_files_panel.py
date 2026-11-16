@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent, QItemSelectionModel, Qt
+from PySide6.QtWidgets import QTreeWidgetItemIterator
 
 from rzgitclient.core.selection import FileSelection, FileSource
 from rzgitclient.ui.panels.files_panel import FilesPanel
@@ -60,17 +61,39 @@ class FilesPanelTests(unittest.TestCase):
         return [(tree.topLevelItem(i).text(0), tree.topLevelItem(i).text(1))
                 for i in range(tree.topLevelItemCount())]
 
+    def all_items(self, source):
+        found, it = [], QTreeWidgetItemIterator(self.tree(source))
+        while (item := it.value()) is not None:
+            found.append(item)
+            it += 1
+        return found
+
     def item(self, path, source):
-        tree = self.tree(source)
-        for i in range(tree.topLevelItemCount()):
-            item = tree.topLevelItem(i)
-            if item.data(0, Qt.ItemDataRole.UserRole)[0] == FileSelection(path, source):
+        for item in self.all_items(source):
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data[0] == FileSelection(path, source):
                 return item
         self.fail(f"no row {path!r} in {source}")
 
-    def highlighted(self, source):
+    def folder(self, path, source):
+        for item in self.all_items(source):
+            if item.data(0, Qt.ItemDataRole.UserRole + 1) == path:
+                return item
+        self.fail(f"no folder {path!r} in {source}")
+
+    def nested(self, source, parent=None):
+        """The rows as nested lists: a folder as (name, [...]), a file as its text."""
         tree = self.tree(source)
-        return sorted(i.data(0, Qt.ItemDataRole.UserRole)[0].path for i in tree.selectedItems())
+        count = parent.childCount() if parent else tree.topLevelItemCount()
+        at = parent.child if parent else tree.topLevelItem
+        return [(item.text(0), self.nested(source, item)) if item.childCount() else item.text(0)
+                for item in map(at, range(count))]
+
+    def highlighted(self, source):
+        """Paths of the highlighted file rows (folder rows left out)."""
+        tree = self.tree(source)
+        return sorted(data[0].path for i in tree.selectedItems()
+                      if (data := i.data(0, Qt.ItemDataRole.UserRole)))
 
     def select(self, source, *paths):
         """Select rows like the user: the first becomes current, the rest are added."""
@@ -100,14 +123,18 @@ class FilesPanelTests(unittest.TestCase):
         (self.repo / "new.txt").write_text("hi")
         git(self.repo, "mv", "old.txt", "renamed.txt")
         self.open()
-        self.assertEqual(self.shown(W), [("a.txt", "Modified"), ("new.txt", "Untracked")])
-        self.assertEqual(self.shown(I), [("a.txt", "Modified"), ("old.txt → renamed.txt", "Renamed")])
+        self.assertEqual(self.shown(W), [("a.txt", "M"), ("new.txt", "U")])
+        self.assertEqual(self.shown(I), [("a.txt", "M"), ("old.txt → renamed.txt", "R")])
         self.assertEqual((self.unstaged.header, self.staged.header),
                          ("Unstaged Files (2)", "Staged Files (2)"))
         self.assertFalse(self.staged.collapsed)
         status = LIGHT_THEME.status
         self.assertEqual(self.item("new.txt", W).foreground(1).color().name(), status.untracked)
         self.assertEqual(self.item("renamed.txt", I).foreground(1).color().name(), status.renamed)
+        # Only the letter is coloured; the full word is in the tooltip.
+        self.assertIsNone(self.item("new.txt", W).data(0, Qt.ItemDataRole.ForegroundRole))
+        self.assertEqual(self.item("new.txt", W).toolTip(0), "new.txt · Untracked")
+        self.assertEqual(self.item("new.txt", W).toolTip(1), "new.txt · Untracked")
 
     def test_staged_files_collapses_when_the_last_file_is_unstaged(self):
         (self.repo / "a.txt").write_text("2")
@@ -206,7 +233,7 @@ class FilesPanelTests(unittest.TestCase):
         self.select(W, "a.txt")
         self.tree(W).itemDoubleClicked.emit(self.item("a.txt", W), 0)
         wait_idle(self.session)
-        self.assertEqual((self.shown(W), self.shown(I)), ([], [("a.txt", "Modified")]))
+        self.assertEqual((self.shown(W), self.shown(I)), ([], [("a.txt", "M")]))
         self.assertEqual(self.ctx.selection.file, FileSelection("a.txt", I))
         self.assertEqual(self.highlighted(I), ["a.txt"])
         self.tree(I).itemDoubleClicked.emit(self.item("a.txt", I), 0)
@@ -260,6 +287,133 @@ class FilesPanelTests(unittest.TestCase):
                 menu = panel._list._menu()
                 self.addCleanup(menu.deleteLater)
                 self.assertEqual([a for a in menu.actions() if not a.isSeparator()], want)
+
+
+    # ---- folder tree (RZG-25) -----------------------------------------------
+
+    def make_nested_changes(self):
+        for path in ("src/app/ui/panel.py", "src/app/ui/theme.py", "src/app/core.py", "docs/a.md"):
+            (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / path).write_text(path)
+        (self.repo / "a.txt").write_text("changed")
+
+    def test_files_sit_under_their_folders_by_name(self):
+        self.make_nested_changes()
+        self.open()
+        self.assertEqual(self.nested(W), [
+            ("docs", ["a.md"]),
+            ("src/app", [("ui", ["panel.py", "theme.py"]), "core.py"]),
+            "a.txt",
+        ])
+        self.assertEqual(self.item("src/app/ui/panel.py", W).text(1), "U")
+        self.assertEqual(self.item("src/app/ui/panel.py", W).toolTip(0),
+                         "src/app/ui/panel.py · Untracked")
+        folder = self.folder("src/app", W)
+        self.assertEqual(folder.text(1), "")
+        self.assertEqual(folder.foreground(0).color().name(), LIGHT_THEME.colors.text_muted)
+        self.assertEqual(folder.toolTip(0), "src/app")
+        self.assertEqual(self.unstaged.header, "Unstaged Files (5)")  # files, not folders
+
+    def test_a_rename_shows_both_names(self):
+        (self.repo / "dir").mkdir()
+        git(self.repo, "mv", "old.txt", "dir/new.txt")
+        git(self.repo, "mv", "a.txt", "b.txt")
+        self.open()
+        self.assertEqual(self.nested(I), [("dir", ["old.txt → new.txt"]), "a.txt → b.txt"])
+
+    def test_the_toggle_switches_to_flat_paths_and_back(self):
+        self.make_nested_changes()
+        self.open()
+        self.ctx.actions.file_tree.setChecked(False)
+        self.assertEqual(self.nested(W), ["a.txt", "docs/a.md", "src/app/core.py",
+                                          "src/app/ui/panel.py", "src/app/ui/theme.py"])
+        self.ctx.actions.file_tree.setChecked(True)
+        self.assertEqual(self.nested(W)[0], ("docs", ["a.md"]))
+
+    def test_folders_start_expanded_and_a_collapsed_one_stays_collapsed(self):
+        self.make_nested_changes()
+        self.open()
+        self.assertTrue(all(self.folder(p, W).isExpanded()
+                            for p in ("docs", "src/app", "src/app/ui")))
+        self.folder("src/app/ui", W).setExpanded(False)  # as the user would
+        (self.repo / "docs/b.md").write_text("more")
+        self.refresh()
+        self.assertFalse(self.folder("src/app/ui", W).isExpanded())
+        self.assertTrue(self.folder("docs", W).isExpanded())
+        self.ctx.actions.file_tree.setChecked(False)
+        self.ctx.actions.file_tree.setChecked(True)
+        self.assertFalse(self.folder("src/app/ui", W).isExpanded())
+        self.folder("src/app/ui", W).setExpanded(True)
+        self.refresh()
+        self.assertTrue(self.folder("src/app/ui", W).isExpanded())
+
+    def test_indent_guides_are_drawn_beside_nested_rows(self):
+        from PySide6.QtWidgets import QVBoxLayout, QWidget
+        window = QWidget()
+        self.addCleanup(window.deleteLater)
+        QVBoxLayout(window).addWidget(self.unstaged)
+        self.ctx.theme.set_theme(LIGHT_THEME)  # the stylesheet, as the app has it
+        self.make_nested_changes()
+        self.open()
+        window.resize(300, 400)
+        window.show()
+        self.addCleanup(window.hide)
+        QCoreApplication.processEvents()
+        tree = self.tree(W)
+        image = tree.viewport().grab().toImage()
+        guide, indent = LIGHT_THEME.colors.tree_guide, tree.indentation()
+        row = tree.visualItemRect(self.item("src/app/ui/panel.py", W))  # depth 2
+        colour = lambda x, r: image.pixelColor(x, r.center().y()).name()
+        self.assertEqual([colour(level * indent + indent // 2, row) for level in (0, 1)],
+                         [guide, guide])
+        top = tree.visualItemRect(self.item("a.txt", W))  # top level: no guide
+        self.assertNotEqual(colour(indent // 2, top), guide)
+
+    def test_collapsed_folders_are_forgotten_for_another_repository(self):
+        self.make_nested_changes()
+        self.open()
+        self.folder("docs", W).setExpanded(False)
+        self.session.open(self.repo)  # opened again: a new repository for the panel
+        wait_idle(self.session)
+        self.assertTrue(self.folder("docs", W).isExpanded())
+
+    def test_selecting_a_folder_selects_the_files_under_it(self):
+        self.make_nested_changes()
+        self.open()
+        tree = self.tree(W)
+        tree.selectionModel().setCurrentIndex(tree.indexFromItem(self.folder("src/app", W)),
+                                              QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        self.assertEqual([f.path for f in self.ctx.selection.files],
+                         ["src/app/ui/panel.py", "src/app/ui/theme.py", "src/app/core.py"])
+        self.assertIsNone(self.ctx.selection.file)  # a folder: nothing for Diff
+        self.assertEqual(self.ctx.actions.selected(W), (
+            "src/app/ui/panel.py", "src/app/ui/theme.py", "src/app/core.py"))
+
+    def test_staging_a_folder_stages_its_files_and_the_selection_follows(self):
+        self.make_nested_changes()
+        self.open()
+        tree = self.tree(W)
+        tree.selectionModel().setCurrentIndex(tree.indexFromItem(self.folder("src/app/ui", W)),
+                                              QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        self.ctx.actions.stage.trigger()
+        wait_idle(self.session)
+        self.assertEqual(self.nested(I), [("src/app/ui", ["panel.py", "theme.py"])])
+        self.assertEqual(self.highlighted(I), ["src/app/ui/panel.py", "src/app/ui/theme.py"])
+        self.assertEqual(self.highlighted(W), [])
+
+    def test_double_click_on_a_folder_does_not_stage(self):
+        self.make_nested_changes()
+        self.open()
+        with mock.patch.object(self.session, "stage") as stage:
+            self.tree(W).itemDoubleClicked.emit(self.folder("docs", W), 0)
+        stage.assert_not_called()
+
+    def test_enter_on_a_folder_moves_its_files(self):
+        self.make_nested_changes()
+        self.open()
+        with mock.patch.object(self.session, "stage") as stage:
+            self.unstaged._list._move([self.folder("docs", W)])
+        stage.assert_called_once_with(("docs/a.md",))
 
 
 if __name__ == "__main__":

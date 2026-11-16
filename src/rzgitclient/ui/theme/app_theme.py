@@ -22,6 +22,7 @@ class ThemeColors:
     content_bg: str
     border: str
     border_light: str
+    tree_guide: str  # the indent guides of a folder tree (file panels)
     # text
     text: str
     text_muted: str
@@ -159,6 +160,7 @@ LIGHT_THEME = AppTheme(
         content_bg="#ffffff",
         border="#c6c6c6",
         border_light="#e4e4e4",
+        tree_guide="#cdcdcd",
         text="#2b2b2b",
         text_muted="#8a8a8a",
         placeholder="#a8a8a8",

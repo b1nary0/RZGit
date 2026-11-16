@@ -27,6 +27,7 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(geometry)
         # Before the panels are built, so the Diff panel starts in the saved view.
         ctx.actions.side_by_side_diff.setChecked(settings.side_by_side_diff)
+        ctx.actions.file_tree.setChecked(settings.file_tree)
         self._build_ui()
         self._build_actions()
 
@@ -62,7 +63,7 @@ class MainWindow(QMainWindow):
         view_menu.addMenu(LayoutMenu(self.layout_host, self.settings, view_menu))
         view_menu.addMenu(PanelsMenu(self.layout_host, view_menu))
         view_menu.addSeparator()
-        view_menu.addAction(actions.side_by_side_diff)
+        view_menu.addActions([actions.file_tree, actions.side_by_side_diff])
         view_menu.addSeparator()
         view_menu.addAction(actions.reset_layout)
 
@@ -88,6 +89,7 @@ class MainWindow(QMainWindow):
         self.settings.layout_preset = matching_preset(state) if state is not None else None
         self.settings.window_geometry = self.saveGeometry()
         self.settings.side_by_side_diff = self.ctx.actions.side_by_side_diff.isChecked()
+        self.settings.file_tree = self.ctx.actions.file_tree.isChecked()
         super().closeEvent(event)
 
     def discard_selected(self) -> None:
