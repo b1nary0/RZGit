@@ -30,7 +30,7 @@ log = logging.getLogger(__name__)
 H, V = Orientation.HORIZONTAL, Orientation.VERTICAL
 BRANCHES, FILES, HISTORY = PanelNode("branches"), PanelNode("files"), PanelNode("history")
 CONTROLS, DIFF, COMMIT = PanelNode("controls"), PanelNode("diff"), PanelNode("commit")
-STAGED = PanelNode("staged")
+STAGED, COMMIT_FILES = PanelNode("staged"), PanelNode("commit_files")
 # History and the diff of the selected file share one tab group in every preset.
 CONTENT = TabsNode((HISTORY, DIFF))
 
@@ -46,24 +46,30 @@ def _below_controls(root: LayoutNode) -> SplitNode:
     return SplitNode(V, (CONTROLS, root))
 
 
-# In every preset Staged Files and Commit are directly below (Unstaged) Files,
-# as in GitKraken. Standard: Branches, Unstaged Files, Staged Files and Commit
+# In every preset Staged Files, Commit and Commit Files are directly below
+# (Unstaged) Files, as in GitKraken: Commit Files takes the place of the other
+# three while a commit is selected (spec §5.4). Its size is 0: it always takes
+# theirs (§6.2). Standard: Branches, Unstaged Files, Staged Files and Commit
 # stacked in a left sidebar; History and Diff on the right.
 DEFAULT_LAYOUT = _below_controls(SplitNode(
-    H, (SplitNode(V, (BRANCHES, FILES, STAGED, COMMIT), sizes=(200, 220, 120, 160)), CONTENT),
+    H, (SplitNode(V, (BRANCHES, FILES, STAGED, COMMIT, COMMIT_FILES),
+                  sizes=(200, 220, 120, 160, 0)),
+        CONTENT),
     sizes=(220, 880)))
 
 PRESETS = (
     Preset("Standard", DEFAULT_LAYOUT),
     # Branches and Unstaged Files as tabs, above Staged Files and Commit.
     Preset("Sidebar Tabs", _below_controls(SplitNode(H, (
-        SplitNode(V, (TabsNode((BRANCHES, FILES)), STAGED, COMMIT), sizes=(330, 120, 160)),
+        SplitNode(V, (TabsNode((BRANCHES, FILES)), STAGED, COMMIT, COMMIT_FILES),
+                  sizes=(330, 120, 160, 0)),
         CONTENT), sizes=(220, 880)))),
     # History and Diff across the top; below, Branches beside Unstaged Files,
-    # with Staged Files and Commit below it.
+    # with Staged Files, Commit and Commit Files below it.
     Preset("Stacked", _below_controls(SplitNode(V, (
         CONTENT,
-        SplitNode(H, (BRANCHES, SplitNode(V, (FILES, STAGED, COMMIT), sizes=(120, 90, 160))),
+        SplitNode(H, (BRANCHES, SplitNode(V, (FILES, STAGED, COMMIT, COMMIT_FILES),
+                                          sizes=(120, 90, 160, 0))),
                   sizes=(400, 700))),
         sizes=(240, 370)))),
 )

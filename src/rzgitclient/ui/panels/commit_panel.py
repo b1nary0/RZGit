@@ -71,6 +71,7 @@ class CommitPanel(Panel):
         ctx.session.repo_changed.connect(self._on_repo)
         ctx.session.status_changed.connect(self._on_status)
         ctx.session.command_finished.connect(self._on_finished)
+        ctx.selection.commit_changed.connect(self._update_collapsed)
         self.destroyed.connect(ctx.actions.clear_commit_ready)
         self._on_repo()
 
@@ -176,10 +177,11 @@ class CommitPanel(Panel):
         self._button.setText(text)
         self._button.setEnabled(self.ctx.actions.commit.isEnabled())
 
-    def _update_collapsed(self) -> None:
+    def _update_collapsed(self, *_args: object) -> None:
         staged = any(f.is_staged for f in self.ctx.session.status)
         # Kept while typing: unstaging everything mid-sentence doesn't snatch it away.
-        collapsed = not self._focused and not staged
+        # Commit Files takes its place while a commit is selected (§5.4); the draft stays.
+        collapsed = (not self._focused and not staged) or self.ctx.selection.commit is not None
         if not collapsed and self._summary is None:
             self._build()
         self.set_collapsed(collapsed)

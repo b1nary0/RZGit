@@ -27,11 +27,14 @@ class DiffRequest:
         return self.file.source is not FileSource.COMMIT
 
 
-def load_diff(repo: Repo, request: DiffRequest, status: tuple[FileStatus, ...]) -> FileDiff:
+def load_diff(repo: Repo, request: DiffRequest, status: tuple[FileStatus, ...],
+              commit_files: tuple[FileStatus, ...] = ()) -> FileDiff:
     """The diff ``request`` asks for. ``status`` is the latest status: it
-    tells an untracked file and a staged rename's old path."""
+    tells an untracked file and a staged rename's old path. ``commit_files``,
+    the files of the commit a commit file is from, tell its rename's old path."""
     file = request.file
-    entry = next((f for f in status if f.path == file.path), None)
+    changes = commit_files if file.source is FileSource.COMMIT else status
+    entry = next((f for f in changes if f.path == file.path), None)
     old_path = None
     match file.source:
         case FileSource.WORKTREE:
@@ -43,6 +46,8 @@ def load_diff(repo: Repo, request: DiffRequest, status: tuple[FileStatus, ...]) 
                 old_path = entry.orig_path
         case FileSource.COMMIT:
             source = DiffSource.COMMIT
+            if entry is not None and entry.index in "RC":
+                old_path = entry.orig_path
         case _:
             raise ValueError(f"not a file source: {file.source!r}")
     limit = {} if request.full else {"max_bytes": DIFF_MAX_BYTES, "max_lines": DIFF_MAX_LINES}

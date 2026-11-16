@@ -18,6 +18,7 @@ from rzgitclient.ui.layout.layout_model import (
     insert_panel,
     move_panel,
     normalize,
+    panel_ids,
     remove_panel,
     to_dict,
 )
@@ -122,7 +123,7 @@ class SerialisationTests(unittest.TestCase):
 
 class NormalizeTests(unittest.TestCase):
     def test_valid_tree_is_unchanged(self):
-        known = {"controls", "branches", "files", "history", "diff", "staged", "commit"}
+        known = {"controls", "branches", "files", "history", "diff", "staged", "commit", "commit_files"}
         self.assertEqual(normalize(DEFAULT_LAYOUT, known), DEFAULT_LAYOUT)
 
     def test_drops_unknown_panels(self):
@@ -197,7 +198,7 @@ class EditTests(unittest.TestCase):
         for pid in ("branches", "files", "history"):
             with self.subTest(pid):
                 rest, _, back = self.round_trip(DEFAULT_LAYOUT, pid)
-                self.assertNotIn(pid, str(rest))
+                self.assertNotIn(pid, panel_ids(rest))
                 strip = lambda n: (SplitNode(n.orientation, tuple(strip(c) for c in n.children))  # noqa: E731
                                    if isinstance(n, SplitNode) else n)
                 self.assertEqual(strip(back), strip(DEFAULT_LAYOUT))

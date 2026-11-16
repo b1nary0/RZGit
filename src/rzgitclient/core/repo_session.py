@@ -58,6 +58,7 @@ class RepoSession(QObject):
     status_changed = Signal(object)  # tuple[FileStatus, ...]
     commit_count_changed = Signal(object)  # int | None  (None: not counted yet)
     diff_changed = Signal(object, object)  # FileSelection | None, FileDiff | None
+    commit_files_changed = Signal(object, object)  # sha | None, tuple[FileStatus, ...] | None
     command_finished = Signal(object, bool)  # GitCommand, whether it ran without error
     error_occurred = Signal(str)
     busy_changed = Signal(bool)  # True while git work is queued or running
@@ -79,6 +80,11 @@ class RepoSession(QObject):
         self._diff_generation = 0
         self._diff_pending = False  # the target waits for the next job
         self._diff: tuple[FileSelection | None, FileDiff | None] = (None, None)
+        # The commit files target, the same way (spec §4.1).
+        self._files_sha: str | None = None
+        self._files_generation = 0
+        self._files_pending = False
+        self._commit_files: tuple[str | None, tuple[FileStatus, ...] | None] = (None, None)
         self._commands: list[GitCommand] = []  # waiting for the next job, in order
         # One thread: git commands on a repo can clash on index.lock, and
         # in-order jobs can't deliver results out of order.
@@ -146,6 +152,16 @@ class RepoSession(QObject):
         """The latest diff, of ``diff_file``; None if it couldn't be read."""
         return self._diff[1]
 
+    @property
+    def commit_files_sha(self) -> str | None:
+        """The commit the latest ``commit_files_changed`` was for."""
+        return self._commit_files[0]
+
+    @property
+    def commit_files(self) -> tuple[FileStatus, ...] | None:
+        """The files ``commit_files_sha`` changed; None if they couldn't be read."""
+        return self._commit_files[1]
+
     # ---- opening and closing ------------------------------------------------
 
     def open(self, path: str | Path) -> bool:
@@ -168,6 +184,7 @@ class RepoSession(QObject):
         self._forced = Refresh.ALL
         self._commands = []
         self._drop_diff()
+        self._drop_commit_files()
         self.repo_changed.emit(repo)
         self.refresh()
         return True
@@ -182,6 +199,7 @@ class RepoSession(QObject):
         self._forced = Refresh.ALL
         self._commands = []
         self._drop_diff()
+        self._drop_commit_files()
         self.repo_changed.emit(None)
         self._store_forced_as_empty()
 
@@ -191,6 +209,7 @@ class RepoSession(QObject):
         self._pending = Refresh(0)
         self._more_pending = False
         self._diff_pending = False
+        self._files_pending = False
         self._commands = []
         self._pool.waitForDone()
 
@@ -237,6 +256,20 @@ class RepoSession(QObject):
         elif self._diff_pending and not self._running:
             self._start_next()
 
+    def request_commit_files(self, sha: str | None) -> None:
+        """Make ``sha`` the commit files target and read the files it changed in
+        the background. The result comes as ``commit_files_changed``; results of
+        older requests are dropped. ``None`` clears the target."""
+        if sha == self._files_sha:
+            return
+        self._files_generation += 1
+        self._files_sha = sha
+        self._files_pending = sha is not None and self._repo is not None
+        if sha is None:
+            self._store_commit_files(None, None)
+        elif self._files_pending and not self._running:
+            self._start_next()
+
     # ---- commands (spec §4.1) ------------------------------------------------
     # Each returns the queued command, which ``command_finished`` reports, or
     # None with no repo.
@@ -281,6 +314,12 @@ class RepoSession(QObject):
         self._diff_pending = False
         self._store_diff(None, None)
 
+    def _drop_commit_files(self) -> None:
+        self._files_generation += 1
+        self._files_sha = None
+        self._files_pending = False
+        self._store_commit_files(None, None)
+
     def _start_next(self) -> None:
         parts, self._pending = self._pending, Refresh(0)
         more, self._more_pending = self._more_pending, False
@@ -288,6 +327,8 @@ class RepoSession(QObject):
         if not (self._diff_pending or (Refresh.STATUS in parts and diff and diff.follows_status)):
             diff = None
         self._diff_pending = False
+        files_sha = self._files_sha if self._files_pending else None
+        self._files_pending = False
         commands, self._commands = tuple(self._commands), []
         if Refresh.COUNT in parts and (Refresh.HISTORY in parts or more):
             # Count in the next job, so it doesn't delay the history.
@@ -295,8 +336,10 @@ class RepoSession(QObject):
             self._pending |= Refresh.COUNT
         # The first load of a repo starts from nothing, not the old repo's history.
         loaded = () if Refresh.HISTORY in self._forced else self.history
+        known = self.commit_files or ()
         job = _Job(self._repo, self._generation, parts, loaded, more,  # type: ignore[arg-type]
-                   diff, self._diff_generation, self.status, commands)
+                   diff, self._diff_generation, self.status, commands,
+                   files_sha, self._files_generation, known)
         relay = self._relay
         self._running = True
         self._loading_more = more
@@ -313,6 +356,11 @@ class RepoSession(QObject):
                 self._history_complete = result.history_complete
             for part, value in result.values:
                 self._store(part, value)
+            if result.files_generation == self._files_generation and self._files_sha:
+                if result.files_read:
+                    self._store_commit_files(self._files_sha, result.files)
+                elif result.files_wanted:  # an earlier part failed: read them by themselves
+                    self._files_pending = True
             # After the parts: a listener of status_changed may have changed the target.
             if result.diff_generation == self._diff_generation and self._diff_request:
                 if result.diff_read:
@@ -328,12 +376,14 @@ class RepoSession(QObject):
             for i, command in enumerate(result.commands):
                 self.command_finished.emit(command, i < result.commands_ok)
         self._running = False
-        if (self._pending or self._more_pending or self._diff_pending) and self._repo is not None:
+        if (self._pending or self._more_pending or self._diff_pending
+                or self._files_pending) and self._repo is not None:
             self._start_next()
         else:
             self._pending = Refresh(0)
             self._more_pending = False
             self._diff_pending = False
+            self._files_pending = False
             self._set_busy(False)
 
     def _set_busy(self, busy: bool) -> None:
@@ -354,6 +404,13 @@ class RepoSession(QObject):
             return
         self._diff = (file, diff)
         self.diff_changed.emit(file, diff)
+
+    def _store_commit_files(self, sha: str | None,
+                            files: tuple[FileStatus, ...] | None) -> None:
+        if (sha, files) == self._commit_files:
+            return
+        self._commit_files = (sha, files)
+        self.commit_files_changed.emit(sha, files)
 
     def _store_forced_as_empty(self) -> None:
         for part in _PARTS:
@@ -377,6 +434,9 @@ class _Job:
     diff_generation: int
     status: tuple[FileStatus, ...]  # the latest status, for the diff, unless STATUS loads
     commands: tuple[GitCommand, ...] = ()  # run first, in order
+    files_sha: str | None = None  # the commit whose files to read, after the parts
+    files_generation: int = 0
+    commit_files: tuple[FileStatus, ...] = ()  # the latest, for a commit file's diff
 
 
 @dataclass(frozen=True)
@@ -392,6 +452,10 @@ class _JobResult:
     command_failed: bool = False  # ``error`` is a command's; the parts still loaded
     commands: tuple[GitCommand, ...] = ()  # the job's
     commands_ok: int = 0  # how many of them ran without error, from the first
+    files_generation: int = 0
+    files_wanted: bool = False  # the job was to read a commit's files
+    files_read: bool = False  # it tried; ``files`` is None if that failed
+    files: tuple[FileStatus, ...] | None = None
 
 
 class _Relay(QObject):
@@ -404,7 +468,9 @@ def _run_job(job: _Job) -> _JobResult:
     values: list[tuple[Refresh, object]] = []
     complete: bool | None = None
     diff: dict[str, object] = {"diff_generation": job.diff_generation,
-                               "diff_wanted": job.diff is not None}
+                               "diff_wanted": job.diff is not None,
+                               "files_generation": job.files_generation,
+                               "files_wanted": job.files_sha is not None}
     for ran, command in enumerate(job.commands):
         try:
             run_command(job.repo, command)
@@ -430,11 +496,19 @@ def _run_job(job: _Job) -> _JobResult:
         except Exception as exc:
             return _JobResult(job.generation, tuple(values), complete, _error(exc, part), **diff)
         values.append((part, value))
+    commit_files = job.commit_files
+    if job.files_sha is not None:
+        try:
+            commit_files = tuple(job.repo.commit_files(job.files_sha))
+        except Exception as exc:
+            return _JobResult(job.generation, tuple(values), complete,
+                              _error(exc, "the commit's files"), **diff, files_read=True)
+        diff.update(files_read=True, files=commit_files)
     if job.diff is None:
         return _JobResult(job.generation, tuple(values), complete, **diff)
     status = dict(values).get(Refresh.STATUS, job.status)
     try:
-        value = load_diff(job.repo, job.diff, status)  # type: ignore[arg-type]
+        value = load_diff(job.repo, job.diff, status, commit_files)  # type: ignore[arg-type]
     except Exception as exc:
         return _JobResult(job.generation, tuple(values), complete, _error(exc, "the diff"),
                           **diff, diff_read=True)

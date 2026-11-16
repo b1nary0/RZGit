@@ -1,0 +1,60 @@
+"""Commit Files: the files the commit selected in History changed (spec §5.4).
+
+The list is a ``FileList`` in commit mode. The panel asks the session for the
+commit's files when ``selection.commit`` changes, and collapses while it is
+None (Uncommitted changes). It takes the place of Unstaged Files, Staged Files
+and Commit, which collapse while a commit is selected.
+"""
+
+from __future__ import annotations
+
+from PySide6.QtWidgets import QVBoxLayout
+
+from rzgitclient.core.selection import FileSource
+from rzgitclient.git.git_models import Commit
+from rzgitclient.ui.panels.file_list import FileList
+from rzgitclient.ui.panels.panel import Panel
+from rzgitclient.ui.theme.app_theme import AppTheme
+from rzgitclient.ui.theme.style_roles import Surface
+
+
+class CommitFilesPanel(Panel):
+    panel_id = "commit_files"
+    title = "Commit Files"
+    surface = Surface.SIDEBAR
+
+    # Built when a commit is first selected: the panel starts collapsed.
+    _list: FileList | None
+
+    def _setup(self) -> None:
+        self._list = None
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.set_collapsed(True)
+        self.ctx.selection.commit_changed.connect(self._on_commit)
+        self.ctx.session.commit_files_changed.connect(self._update_header)
+        self._on_commit(self.ctx.selection.commit)
+
+    def _on_commit(self, commit: Commit | None) -> None:
+        self.ctx.session.request_commit_files(commit.sha if commit is not None else None)
+        if commit is not None and self._list is None:
+            self._list = FileList(self.ctx, FileSource.COMMIT, ([], []))
+            self.layout().addWidget(self._list)
+            self._list.ensurePolished()  # styled before its first rows (see StagedPanel)
+            self._list.render()
+        self._update_header()
+        self.set_collapsed(commit is None)
+
+    def _update_header(self, *_args: object) -> None:
+        commit = self.ctx.selection.commit
+        if commit is None:
+            self.set_header(self.title)
+            return
+        files = self.ctx.session.commit_files
+        loaded = self.ctx.session.commit_files_sha == commit.sha and files is not None
+        count = f" ({len(files):,})" if loaded else ""
+        self.set_header(f"Files in {commit.short_sha}{count}")
+
+    def apply_theme(self, theme: AppTheme) -> None:
+        if self._list is not None:
+            self._list.apply_theme(theme)

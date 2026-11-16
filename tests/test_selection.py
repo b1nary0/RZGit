@@ -6,7 +6,7 @@ from pathlib import Path
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import FileSelection, FileSource, Selection, file_rows
 from rzgitclient.git.git_models import Commit, FileStatus
-from tests.support import SignalRecorder, make_repo, qt_app, wait_idle
+from tests.support import SignalRecorder, commit_file, git, make_repo, qt_app, wait_idle
 
 COMMIT = Commit("a" * 40, "Test User", datetime(2026, 1, 1, tzinfo=timezone.utc), "first")
 
@@ -44,6 +44,36 @@ class SelectionTests(unittest.TestCase):
         self.selection.file = file
         self.selection.file = FileSelection("a.py", FileSource.WORKTREE)  # equal
         self.assertEqual(self.rec.events, [("commit_changed", COMMIT), ("file_changed", file)])
+
+    def test_only_the_selected_commit_s_rows_are_kept(self):
+        worktree = FileSelection("w.py", FileSource.WORKTREE)
+        self.selection.select([worktree], worktree)
+        self.selection.commit = COMMIT  # Unstaged Files collapses: its rows go
+        self.assertEqual((self.selection.files, self.selection.file), ((), None))
+        mine = FileSelection("a.py", FileSource.COMMIT, COMMIT.sha)
+        self.selection.select([mine], mine)
+        other = Commit("b" * 40, "Test User", COMMIT.date, "second")
+        self.selection.commit = other
+        self.assertEqual((self.selection.files, self.selection.file), ((), None))
+        theirs = FileSelection("b.py", FileSource.COMMIT, other.sha)
+        self.selection.select([theirs], theirs)
+        self.selection.commit = None  # Uncommitted changes
+        self.assertEqual(self.selection.files, ())
+
+    def test_a_commit_the_history_no_longer_has_goes_back_to_uncommitted(self):
+        repo = make_repo(self.tmp / "a")
+        commit_file(repo, "a.txt", "1", "first")
+        self.assertTrue(self.session.open(repo))
+        wait_idle(self.session)
+        (first,) = self.session.history
+        self.selection.commit = first
+        self.session.refresh()  # the same history: kept
+        wait_idle(self.session)
+        self.assertEqual(self.selection.commit, first)
+        git(repo, "commit", "-q", "--amend", "-m", "amended")
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertIsNone(self.selection.commit)
 
     def test_cleared_when_repo_changes(self):
         self.assertTrue(self.session.open(make_repo(self.tmp / "a")))

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rzgitclient.git.git_models import DiffLine, DiffSource, LineKind
+from rzgitclient.git.git_models import DiffLine, DiffSource, FileStatus, LineKind
 from rzgitclient.git.repo import GitError, Repo, parse_diff
 from tests.support import commit_file, git, make_repo
 
@@ -207,6 +207,56 @@ class RepoDiffTests(unittest.TestCase):
     def test_git_failure_raises(self):
         with self.assertRaises(GitError):
             self.repo.diff("missing.txt", DiffSource.UNTRACKED)
+
+
+class RepoCommitFilesTests(unittest.TestCase):
+    """A commit's changed files (spec §4.1)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        self.repo = Repo(self.path)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def head(self):
+        return git(self.path, "rev-parse", "HEAD").strip()
+
+    def test_the_first_commit_is_compared_with_nothing(self):
+        commit_file(self.path, "a.txt", "1\n", "first")
+        self.assertEqual(self.repo.commit_files(self.head()), [FileStatus("A", " ", "a.txt")])
+
+    def test_modified_deleted_added_and_renamed(self):
+        commit_file(self.path, "a.txt", "1\n", "first")
+        commit_file(self.path, "gone.txt", "x\n", "second")
+        commit_file(self.path, "old name.txt", "keep\n" * 20, "third")
+        (self.path / "a.txt").write_text("2\n")
+        git(self.path, "rm", "-q", "gone.txt")
+        git(self.path, "mv", "old name.txt", "new name.txt")
+        (self.path / "n.txt").write_text("n\n")
+        git(self.path, "add", "-A")
+        git(self.path, "commit", "-m", "many")
+        self.assertEqual(sorted(self.repo.commit_files(self.head()), key=lambda f: f.path), [
+            FileStatus("M", " ", "a.txt"),
+            FileStatus("D", " ", "gone.txt"),
+            FileStatus("A", " ", "n.txt"),
+            FileStatus("R", " ", "new name.txt", "old name.txt"),
+        ])
+
+    def test_a_merge_is_compared_with_its_first_parent(self):
+        commit_file(self.path, "a.txt", "1\n", "first")
+        git(self.path, "checkout", "-q", "-b", "side")
+        commit_file(self.path, "side.txt", "s\n", "on side")
+        git(self.path, "checkout", "-q", "main")
+        commit_file(self.path, "main.txt", "m\n", "on main")
+        git(self.path, "merge", "-q", "--no-edit", "side")
+        self.assertEqual(self.repo.commit_files(self.head()), [FileStatus("A", " ", "side.txt")])
+
+    def test_an_empty_commit_changed_nothing(self):
+        commit_file(self.path, "a.txt", "1\n", "first")
+        git(self.path, "commit", "-q", "--allow-empty", "-m", "empty")
+        self.assertEqual(self.repo.commit_files(self.head()), [])
 
 
 class ParseDiffTests(unittest.TestCase):

@@ -1,4 +1,5 @@
 import dataclasses
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +14,7 @@ from rzgitclient.ui.theme.app_theme import LIGHT_THEME
 from tests.support import SignalRecorder, commit_file, make_panel_context, make_repo, qt_app, wait_idle
 
 ROLE = Qt.ItemDataRole
+UNCOMMITTED = "Uncommitted changes (0)"  # row 0 while a repo is open; commits start at 1
 
 
 class HistoryPanelTests(unittest.TestCase):
@@ -59,39 +61,82 @@ class HistoryPanelTests(unittest.TestCase):
 
     def test_rows_hash_and_muted_columns(self):
         self.open()
-        self.assertEqual(self.subjects(), ["second", "first"])
+        self.assertEqual(self.subjects(), [UNCOMMITTED, "second", "first"])
         commit = self.ctx.session.history[0]
         self.assertEqual(self.model.headerData(0, Qt.Orientation.Horizontal), "Subject")
-        self.assertEqual(self.cell(0, 1), "Test User")
-        self.assertEqual(self.cell(0, 3), commit.short_sha)
-        self.assertEqual(self.cell(0, 3, ROLE.ToolTipRole), commit.sha)
-        self.assertEqual(self.cell(0, 3, ROLE.FontRole).family(), LIGHT_THEME.mono_font().family())
-        self.assertIsNone(self.cell(0, 0, ROLE.ForegroundRole))  # subject: normal text
+        self.assertEqual(self.cell(1, 1), "Test User")
+        self.assertEqual(self.cell(1, 3), commit.short_sha)
+        self.assertEqual(self.cell(1, 3, ROLE.ToolTipRole), commit.sha)
+        self.assertEqual(self.cell(1, 3, ROLE.FontRole).family(), LIGHT_THEME.mono_font().family())
+        self.assertIsNone(self.cell(1, 0, ROLE.ForegroundRole))  # subject: normal text
         for col in (1, 2, 3):
-            self.assertEqual(self.cell(0, col, ROLE.ForegroundRole).name(), LIGHT_THEME.colors.text_muted)
+            self.assertEqual(self.cell(1, col, ROLE.ForegroundRole).name(), LIGHT_THEME.colors.text_muted)
+
+    def test_uncommitted_changes_is_row_0_selected_by_default(self):
+        self.open()
+        self.assertEqual(self.view.currentIndex().row(), 0)
+        self.assertIsNone(self.ctx.selection.commit)
+        self.assertTrue(self.cell(0, 0, ROLE.FontRole).italic())
+        self.assertEqual([self.cell(0, c) for c in (1, 2, 3)], ["", "", ""])
+        self.assertIsNone(self.cell(0, 3, ROLE.ToolTipRole))
+        self.assertIsNone(self.model.commit_at(0))
+        self.assertEqual(self.model.row_of(self.ctx.session.history[0].sha), 1)
+
+    def test_columns_fit_the_commits_though_uncommitted_changes_came_first(self):
+        self.open()  # the row arrives with the repo, before the first page
+        header = self.view.horizontalHeader()
+        for col in (1, 2, 3):
+            self.assertGreaterEqual(header.sectionSize(col),
+                                    self.view.width_hint(self.model.index(1, col)))
+
+    def test_uncommitted_changes_counts_the_changed_files(self):
+        self.open()
+        (self.repo / "a.txt").write_text("changed")
+        (self.repo / "new.txt").write_text("new")
+        self.refresh()
+        self.assertEqual(self.cell(0, 0), "Uncommitted changes (2)")
+        self.ctx.session.close()
+        self.assertEqual(self.subjects(), [])  # no repo, no row
+
+    def test_selecting_uncommitted_changes_clears_the_commit(self):
+        self.open()
+        self.select(2)
+        self.assertEqual(self.ctx.selection.commit.subject, "first")
+        self.select(0)
+        self.assertIsNone(self.ctx.selection.commit)
 
     def test_selecting_a_row_sets_selection(self):
         self.open()
-        self.select(1)
+        self.select(2)
         self.assertEqual(self.ctx.selection.commit.subject, "first")
 
     def test_selection_survives_refresh_silently(self):
         self.open()
-        self.select(1)
+        self.select(2)
         self.rec.clear()
         commit_file(self.repo, "a.txt", "3", "third")
         self.refresh()
-        self.assertEqual(self.subjects(), ["third", "second", "first"])
+        self.assertEqual(self.subjects(), [UNCOMMITTED, "third", "second", "first"])
         self.assertEqual(self.current_subject(), "first")
         self.assertEqual(self.rec.events, [])  # no flicker through None
 
-    def test_selection_cleared_when_commit_is_gone(self):
+    def test_another_repo_starts_on_uncommitted_changes(self):
         self.open()
-        self.select(0)
+        self.select(1)
         other = make_repo(self.tmp / "other")
         commit_file(other, "b.txt", "1", "other")
         self.open(other)
-        self.assertFalse(self.view.currentIndex().isValid())
+        self.assertEqual(self.view.currentIndex().row(), 0)
+        self.assertIsNone(self.ctx.selection.commit)
+
+    def test_an_amended_commit_goes_back_to_uncommitted_changes(self):
+        self.open()
+        self.select(1)  # "second"
+        subprocess.run(["git", "commit", "-q", "--amend", "-m", "second, amended"],
+                       cwd=self.repo, check=True, capture_output=True)
+        self.refresh()
+        self.assertEqual(self.subjects(), [UNCOMMITTED, "second, amended", "first"])
+        self.assertEqual(self.view.currentIndex().row(), 0)
         self.assertIsNone(self.ctx.selection.commit)
 
     def test_hover_marks_the_whole_row(self):
@@ -121,7 +166,7 @@ class HistoryPanelTests(unittest.TestCase):
         self.model.dataChanged.connect(lambda *args: changed.append(args))
         colors = dataclasses.replace(LIGHT_THEME.colors, text_muted="#123456")
         self.ctx.theme.set_theme(dataclasses.replace(LIGHT_THEME, colors=colors))
-        self.assertEqual(self.cell(0, 1, ROLE.ForegroundRole).name(), "#123456")
+        self.assertEqual(self.cell(1, 1, ROLE.ForegroundRole).name(), "#123456")
         self.assertEqual(len(changed), 1)  # one signal repaints every row
 
 
@@ -164,32 +209,32 @@ class HistoryPanelPagingTests(unittest.TestCase):
         self.settle()
 
     def test_first_page_then_more_on_scroll(self):
-        self.assertEqual(self.model.rowCount(), 3)  # the view isn't full-height
+        self.assertEqual(self.model.rowCount(), 4)  # Uncommitted changes, a page
         inserted = []
         self.model.rowsInserted.connect(lambda _p, first, last: inserted.append((first, last)))
         resets = []
         self.model.modelReset.connect(lambda: resets.append(1))
         self.scroll_to_end()
-        self.assertEqual(self.model.rowCount(), 6)
-        self.assertEqual(inserted, [(3, 5)])  # the page is appended…
+        self.assertEqual(self.model.rowCount(), 7)
+        self.assertEqual(inserted, [(4, 6)])  # the page is appended…
         self.assertEqual(resets, [])  # …and nothing is rebuilt
 
     def test_scrolling_stops_at_the_first_commit(self):
-        while self.model.rowCount() < 10:
+        while self.model.rowCount() < 11:
             self.scroll_to_end()
         self.assertTrue(self.ctx.session.history_complete)
         bar = self.view.verticalScrollBar()
         bar.setValue(0)
         bar.setValue(bar.maximum())  # at the end again: nothing more to ask for
         self.assertFalse(self.ctx.session.busy)
-        self.assertEqual(self.model.rowCount(), 10)
+        self.assertEqual(self.model.rowCount(), 11)
 
     def test_refresh_keeps_the_top_commit_in_place(self):
         self.scroll_to_end()
         self.scroll_to_end()
-        self.view.setCurrentIndex(self.model.index(5, 0))
+        self.view.setCurrentIndex(self.model.index(6, 0))
         selected = self.ctx.selection.commit
-        self.view.scrollTo(self.model.index(4, 0), self.view.ScrollHint.PositionAtTop)
+        self.view.scrollTo(self.model.index(5, 0), self.view.ScrollHint.PositionAtTop)
         top = self.model.commit_at(self.view.indexAt(QPoint(0, 0)).row())
         self.assertEqual(top.subject, "c6")
 

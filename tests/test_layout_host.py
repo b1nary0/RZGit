@@ -70,7 +70,7 @@ class LayoutHostTests(unittest.TestCase):
 
     def test_builds_the_default_layout(self):
         self.host.apply(DEFAULT_LAYOUT)
-        self.assertEqual(set(self.host.panels), {"controls", "branches", "files", "history", "diff", "staged", "commit"})
+        self.assertEqual(set(self.host.panels), {"controls", "branches", "files", "history", "diff", "staged", "commit", "commit_files"})
 
         top = self.root()
         self.assertEqual(top.orientation(), Qt.Orientation.Vertical)
@@ -88,6 +88,8 @@ class LayoutHostTests(unittest.TestCase):
         self.assertEqual([content.widget(i) for i in range(2)],
                          [self.host.panels["history"], self.host.panels["diff"]])
         self.assertEqual(content.currentIndex(), 0)
+        self.assertEqual([sidebar.widget(i).panel.panel_id for i in range(2, 5)],
+                         ["staged", "commit", "commit_files"])
 
     def test_tabs_use_the_panel_header_and_follow_it(self):
         self.host.apply(TABS)
@@ -135,7 +137,7 @@ class LayoutHostTests(unittest.TestCase):
         self.host.apply(DEFAULT_LAYOUT)
         self.show()
         history = self.host.panels["history"]
-        history._view.setCurrentIndex(history._model.index(1, 0))
+        history._view.setCurrentIndex(history._model.index(2, 0))  # row 0: Uncommitted
 
         self.host.apply(TabsNode((PanelNode("files"), PanelNode("history")), current=1))
         flush_deletes()
@@ -148,9 +150,10 @@ class LayoutHostTests(unittest.TestCase):
         self.host.apply(DEFAULT_LAYOUT)  # back from tabs to frames
         flush_deletes()
         self.app.processEvents()
-        # Only Diff, History's other tab, and Staged Files and Commit, collapsed.
+        # Only Diff, History's other tab, and the collapsed Unstaged Files, Staged
+        # Files and Commit: a commit is selected, so Commit Files is in their place.
         self.assertEqual({pid for pid, p in self.host.panels.items() if not p.isVisible()},
-                         {"diff", "staged", "commit"})
+                         {"diff", "files", "staged", "commit"})
 
     def test_header_changes_after_moving_out_of_tabs(self):
         self.host.apply(TABS)
@@ -171,7 +174,7 @@ class LayoutHostTests(unittest.TestCase):
         self.show()
         self.host.hide_panel("files")
         flush_deletes()
-        self.assertEqual(set(self.host.panels), {"controls", "branches", "history", "diff", "staged", "commit"})
+        self.assertEqual(set(self.host.panels), {"controls", "branches", "history", "diff", "staged", "commit", "commit_files"})
         self.assertEqual(set(self.host.hidden), {"files"})
         self.assertEqual(self.host.state().hidden, self.host.hidden)
 
@@ -247,6 +250,11 @@ class LayoutHostTests(unittest.TestCase):
 
     # ---- collapsed panels (§5.1) ------------------------------------------
 
+    def settle(self):
+        """Let the host apply collapse changes (a zero-time timer), then lay out."""
+        for _ in range(2):
+            self.app.processEvents()
+
     SIDE = SplitNode(H, (PanelNode("history"), PanelNode("commit")), sizes=(500, 300))
 
     def test_a_collapsed_pane_lends_its_space_and_takes_it_back(self):
@@ -254,16 +262,16 @@ class LayoutHostTests(unittest.TestCase):
         self.show()
         commit = self.host.panels["commit"]
         commit.set_collapsed(False)
-        self.app.processEvents()
+        self.settle()
         splitter = self.body()
         before = splitter.sizes()
         commit.set_collapsed(True)
-        self.app.processEvents()
+        self.settle()
         self.assertFalse(splitter.widget(1).isVisible())
         self.assertEqual(splitter.sizes()[1], 0)
         self.assertEqual(splitter.sizes()[0], sum(before) + splitter.handleWidth())
         commit.set_collapsed(False)
-        self.app.processEvents()
+        self.settle()
         self.assertEqual(splitter.sizes(), before)
 
     def test_a_layout_read_while_collapsed_keeps_the_pane_s_size(self):
@@ -271,10 +279,10 @@ class LayoutHostTests(unittest.TestCase):
         self.show()
         commit = self.host.panels["commit"]
         commit.set_collapsed(False)
-        self.app.processEvents()
+        self.settle()
         before = self.host.current_layout()
         commit.set_collapsed(True)
-        self.app.processEvents()
+        self.settle()
         read = self.host.current_layout()
         self.assertEqual(read.children[1].children, before.children[1].children)
         for got, want in zip(read.children[1].sizes, before.children[1].sizes):
@@ -287,7 +295,7 @@ class LayoutHostTests(unittest.TestCase):
         self.assertFalse(splitter.widget(1).isVisible())
         self.assertEqual(self.host.current_layout().children[1].sizes[1], 300)
         self.host.panels["commit"].set_collapsed(False)
-        self.app.processEvents()
+        self.settle()
         self.assertTrue(splitter.widget(1).isVisible())
         self.assertAlmostEqual(splitter.sizes()[1] / sum(splitter.sizes()), 300 / 800, delta=0.01)
 
@@ -300,14 +308,75 @@ class LayoutHostTests(unittest.TestCase):
         branches, files, commit = column.sizes()
         self.assertEqual(commit, 0)
         self.host.panels["commit"].set_collapsed(False)
-        self.app.processEvents()
+        self.settle()
         self.assertEqual(column.sizes(), [branches, files - 150 - column.handleWidth(), 150])
         self.host.panels["commit"].set_collapsed(True)
-        self.app.processEvents()
+        self.settle()
         self.assertEqual(column.sizes(), [branches, files, 0])  # Files took it back
         read = self.host.current_layout().children[1].children[0]
         self.assertEqual(read.sizes[0], branches)
         self.assertEqual(read.sizes[2], 150)
+
+    def test_a_swap_gives_the_freed_space_to_the_panes_shown_and_back(self):
+        column = SplitNode(V, (PanelNode("branches"), PanelNode("files"), PanelNode("staged"),
+                               PanelNode("commit_files")), sizes=(150, 250, 150, 300))
+        self.host.apply(SplitNode(H, (column, PanelNode("history"))))
+        self.show()
+        panels = self.host.panels
+        panels["staged"].set_collapsed(False)
+        panels["commit_files"].set_collapsed(True)
+        self.settle()
+        splitter = self.body().widget(0)
+        branches, files, staged, _ = splitter.sizes()
+        # Both change in one moment, as when a commit is selected.
+        panels["files"].set_collapsed(True)
+        panels["staged"].set_collapsed(True)
+        panels["commit_files"].set_collapsed(False)
+        self.settle()
+        self.assertEqual(splitter.sizes()[0], branches)  # untouched
+        self.assertEqual(splitter.sizes()[3], files + staged + splitter.handleWidth())
+        panels["commit_files"].set_collapsed(True)  # and back
+        panels["files"].set_collapsed(False)
+        panels["staged"].set_collapsed(False)
+        self.settle()
+        got = splitter.sizes()
+        self.assertEqual(got[0], branches)
+        self.assertEqual(got[3], 0)
+        self.assertAlmostEqual(got[1] / got[2], files / staged, delta=0.05)
+
+    def test_a_swap_reads_as_swapped_back_and_survives_a_rebuild(self):
+        column = SplitNode(V, (PanelNode("branches"), PanelNode("files"),
+                               PanelNode("commit_files")), sizes=(150, 400, 0))
+        self.host.apply(SplitNode(H, (column, PanelNode("history"))))
+        self.show()
+        panels = self.host.panels
+        panels["commit_files"].set_collapsed(True)
+        self.settle()
+        before = self.host.current_layout()
+        panels["files"].set_collapsed(True)  # a commit is selected
+        panels["commit_files"].set_collapsed(False)
+        self.settle()
+        read = self.host.current_layout()
+        self.assertEqual(read, before)  # as if swapped back: Commit Files has no size
+        self.host.apply(read)  # e.g. after hiding another panel
+        self.settle()
+        splitter = self.body().widget(0)
+        self.assertFalse(splitter.widget(1).isVisible())
+        self.assertTrue(splitter.widget(2).isVisible())
+        self.assertGreater(splitter.sizes()[2], 300)  # in Unstaged Files' place
+        self.assertEqual(self.host.current_layout(), before)
+
+    def test_a_change_undone_in_the_same_moment_does_nothing(self):
+        self.host.apply(self.SIDE)
+        self.show()
+        commit = self.host.panels["commit"]
+        commit.set_collapsed(False)
+        self.settle()
+        before = self.body().sizes()
+        commit.set_collapsed(True)
+        commit.set_collapsed(False)
+        self.settle()
+        self.assertEqual(self.body().sizes(), before)
 
     def test_a_collapsed_tab_is_hidden_and_the_panel_stays_in_the_layout(self):
         self.host.apply(TabsNode((PanelNode("history"), PanelNode("commit"))))

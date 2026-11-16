@@ -94,6 +94,7 @@ src/rzgitclient/
       files_panel.py            FilesPanel: "Unstaged Files"
       staged_panel.py           StagedPanel: "Staged Files"
       file_list.py              FileList: one source's changed files, the body of both
+      commit_files_panel.py     CommitFilesPanel: the files the selected commit changed
       diff_panel.py             DiffPanel
       diff_view.py              DiffView: read-only text with a line-number gutter
       diff_rows.py              DiffRow, unified_rows, split_rows (plain Python, no Qt)
@@ -136,6 +137,7 @@ class RepoSession(QObject):
     status_changed   = Signal(object)  # tuple[FileStatus, ...]
     commit_count_changed = Signal(object)  # int | None  (commits reachable from HEAD)
     diff_changed     = Signal(object, object)  # FileSelection | None, FileDiff | None
+    commit_files_changed = Signal(object, object)  # sha | None, tuple[FileStatus, ...] | None
     command_finished = Signal(object, bool)    # GitCommand, whether it ran without error
     error_occurred   = Signal(str)
     busy_changed     = Signal(bool)  # True while git work is queued or running
@@ -145,6 +147,7 @@ class RepoSession(QObject):
     def refresh(self, parts: Refresh = Refresh.ALL) -> None   # Flag: HEAD|BRANCHES|HISTORY|STATUS|COUNT
     def load_more_history(self) -> None   # the next page of history, in the background
     def request_diff(self, file: FileSelection | None, full: bool = False) -> None
+    def request_commit_files(self, sha: str | None) -> None   # the files a commit changed
 
     # Commands: they change the repository (§4.1, "Commands").
     def stage(self, paths) -> None        # git add
@@ -155,7 +158,8 @@ class RepoSession(QObject):
     def commit(self, message) -> GitCommand | None   # the staged changes; None with no repo
 
     # Latest values, so a panel created later renders at once (read-only properties):
-    repo, head, branches, history, status, commit_count, history_complete, diff_file, diff
+    repo, head, branches, history, status, commit_count, history_complete, diff_file, diff,
+    commit_files_sha, commit_files
 ```
 
 - **Push, not pull.** Panels never ask for data and wait for a return value. They read the
@@ -230,6 +234,19 @@ class RepoSession(QObject):
   - **Size limit:** a diff of more than `DIFF_MAX_BYTES` (1 MB) or `DIFF_MAX_LINES`
     (20,000 lines) comes back as `FileDiff(too_large=True)` with no hunks, and isn't parsed.
     `request_diff(file, full=True)` reads it whole; the target keeps `full` across refreshes.
+- **A commit's files are asked for** too, like a diff: `request_commit_files(sha)` makes
+  `sha` the **commit files target**, and the result arrives as `commit_files_changed(sha,
+  files)`, after the parts of its job. A newer request, `open()` and `close()` make older
+  results stale (their own counter); `None` clears the target. A commit never changes,
+  so refreshes don't read them again.
+  - `Repo.commit_files(sha)` runs `git diff-tree -r -M --root --first-parent
+    --no-commit-id --name-status -z`: a merge is compared with its first parent, the
+    first commit with nothing. Each change is a `FileStatus` whose `index` is its code
+    (`M`, `A`, `D`, `R`…) and whose `worktree` is `" "`: like a staged change, which is
+    what a commit is to its parent; `orig_path` is a rename's source.
+  - A commit file's diff (`DiffSource.COMMIT`, `git show --diff-merges=first-parent`)
+    passes a rename's old path, found in the latest commit files, so git shows it as a
+    rename.
 - **Commands** change the repository. A command is a `GitCommand` (`core/git_commands.py`)
   queued on the same worker as refreshes, so commands and loads never overlap and run in the
   order they were asked for.
@@ -304,8 +321,20 @@ the status changes, so the two file panels never need to know each other. It lis
 - or moves to the same path in the other source (staged or unstaged outside the app);
 - or is dropped, and the Diff panel shows its empty state if it was the current one.
 
-Selection is cleared when the repo changes. What happens to a selected commit that
-disappears (after an amend) is decided with RZG-21.
+Selection is cleared when the repo changes.
+
+**The selected commit.** `selection.commit` is the commit selected in History, or None for
+the **Uncommitted changes** row (the working tree), which is where it starts. A Commit
+Files row is `FileSelection(path, COMMIT, sha)`.
+- Selecting another commit (or Uncommitted changes) keeps only the selected rows that
+  belong to it: a commit's files for a commit, worktree and index rows for Uncommitted
+  changes. The panels that show the others are collapsed then (§5.4), so neither the
+  Diff panel nor the stage actions act on rows the user can't see.
+- **A selected commit that disappears** (amend, reset, rebase): Selection listens to
+  `history_changed` (before any panel) and sets `commit` to None when the new history
+  doesn't have it, which is back to Uncommitted changes. Loaded history always reaches
+  the selected commit (a reload keeps every commit down to the oldest loaded, §4.1), so
+  one missing from it is gone.
 
 ## 5. Panels
 
@@ -420,7 +449,8 @@ The first three are extracted from the original `main_window.py` with the same b
 |---|---|---|---|---|
 | ControlsPanel | `controls` | chrome | Open, Refresh (`ctx.actions`), current branch | (later: fetch/pull/push, switch branch) |
 | BranchesPanel | `branches` | sidebar | branches, current in bold | (later: checkout) |
-| HistoryPanel | `history` | content | commit table | `selection.commit` |
+| HistoryPanel | `history` | content | Uncommitted changes, then the commit table | `selection.commit` |
+| CommitFilesPanel | `commit_files` | sidebar | "Commit Files": the selected commit's changed files, in place of Unstaged Files, Staged Files and Commit; collapsed for Uncommitted changes | `selection.select()` |
 | FilesPanel | `files` | sidebar | "Unstaged Files": unstaged and untracked files, status colours | `selection.select()`; stages |
 | StagedPanel | `staged` | sidebar | "Staged Files": the index's changes; collapsed when empty | `selection.select()`; unstages |
 | DiffPanel | `diff` | content | the diff of `selection.file`, unified or side by side | (later: stage hunks) |
@@ -433,6 +463,16 @@ with both kinds of change is in both, and each row is one `FileSelection` (workt
 index). Headers show the count, e.g. "Unstaged Files (29)". Staged Files sits between
 Unstaged Files and Commit and collapses (§5.1) when nothing is staged. Like Commit, it
 builds its list the first time something is staged (6 ms of startup otherwise).
+**Commit Files** (CommitFilesPanel) is the third `FileList`, in commit mode: it lists
+`session.commit_files` with one status column, its header names the commit ("Files in
+a1b2c3d4 (12)"), and it has no staging menu or double-click. It asks
+`session.request_commit_files` when `selection.commit` changes. **It takes the place of
+the working tree's panels**, as in GitKraken: while a commit is selected, Unstaged
+Files, Staged Files and Commit collapse and Commit Files is shown; on Uncommitted changes
+it's the other way round. Each panel collapses by itself from `selection.commit` (none
+knows another), and it sits directly below Commit in every preset, so the host's swap
+rule (§6.2) gives it their space. Like Staged Files it builds its list the first time a
+commit is selected; Commit keeps its draft while collapsed.
 - **Selecting:** extended selection (Ctrl and Shift) within a panel. One panel holds the
   selection at a time: selecting in one clears the other, since each shows only the rows
   of `selection.files` that are its own.
@@ -455,6 +495,11 @@ asks, so a theme change is one `dataChanged`.
   its header is left-aligned and not clickable; the stylesheet's tree rules cover
   `QTableView` too. It renders pixel-identical to the tree it replaced.
 
+- **Uncommitted changes:** while a repo is open, row 0 is "Uncommitted changes (N)", N
+  the changed files in the status, in italics, with the other columns empty. It's
+  selected by default, and selecting it sets `selection.commit` to None. Commits start at
+  row 1: `commit_at(row)` and `row_of(sha)` account for it, and an appended page
+  inserts after it. A reset that can't find the selected commit selects it.
 - **Paging:** when the view is scrolled to within a screen of the end, the panel asks the
   session for the next page (§4.1). It watches its scroll bar rather than using Qt's
   `canFetchMore` / `fetchMore`, which Qt also calls while laying rows out, before they have
@@ -469,7 +514,8 @@ asks, so a theme change is one `dataChanged`.
 
 **Selection survives a refresh.** A list panel rebuilds with its signals blocked, then
 re-selects the same item (a commit by sha; a file as `selection.files` now says, §4.2).
-History writes `Selection` only when the selected commit no longer exists; the file panels
+History writes `Selection` only when the selected commit no longer exists (it then
+selects Uncommitted changes, as Selection did already, §4.2); the file panels
 never write it on a refresh. So a refresh never clears what
 another panel (a future Diff) is showing. `apply_theme` recolours existing rows rather
 than rebuilding them.
@@ -584,16 +630,17 @@ class LayoutState: root: LayoutNode; hidden: Mapping[str, Anchor] = {}   # what'
 
 **Presets** (`layout_presets.py`, `PRESETS`) are named trees that show every panel. Each
 has the Controls panel across the top, above the arrangement described. In every preset,
-History and Diff are tabs of one group, with History current, and Staged Files and
-Commit are directly below Unstaged Files (`files`), in that order:
-- **Standard** (`DEFAULT_LAYOUT`): Branches, Unstaged Files, Staged Files and Commit
-  stacked in a left sidebar, History and Diff on the right: `Split(V, [controls, Split(H,
-  [Split(V, [branches, files, staged, commit], sizes=(200, 220, 120, 160)), Tabs([history,
-  diff])], sizes=(220, 880))])`.
+History and Diff are tabs of one group, with History current, and Staged Files, Commit
+and Commit Files are directly below Unstaged Files (`files`), in that order:
+- **Standard** (`DEFAULT_LAYOUT`): Branches, Unstaged Files, Staged Files, Commit and
+  Commit Files stacked in a left sidebar, History and Diff on the right: `Split(V,
+  [controls, Split(H, [Split(V, [branches, files, staged, commit, commit_files],
+  sizes=(200, 220, 120, 160, 0)), Tabs([history, diff])], sizes=(220, 880))])`. Commit
+  Files' size is 0 in every preset: it has no space of its own (§6.2, swaps).
 - **Sidebar Tabs:** Branches and Unstaged Files as tabs on the left, Staged Files and
   Commit below the tabs; History and Diff on the right.
 - **Stacked:** History and Diff across the top; below, Branches beside Unstaged Files,
-  with Staged Files and Commit below it.
+  with Staged Files, Commit and Commit Files below it.
 
 ### 6.2 LayoutHost
 
@@ -620,6 +667,19 @@ Commit are directly below Unstaged Files (`files`), in that order:
   Branches. (If that pane can't spare it, Qt shares it out as usual.) `current_layout()`
   reports the pane at that size, taken from the same pane, so a layout saved meanwhile
   brings it back at that size.
+- **Collapsing is batched:** the host applies the collapse changes of one moment together
+  (a zero-time timer), per splitter. When panes collapse and others are shown in the same
+  splitter at once, a **swap**, the space the collapsing panes free goes to the panes
+  being shown, shared in proportion to their sizes when they collapsed, and the other
+  panes keep theirs: so selecting a commit puts Commit Files exactly where Unstaged
+  Files, Staged Files and Commit were (§5.4), and back. Otherwise each change lends or
+  takes back space one pane at a time, as above. Tab visibility isn't batched.
+  - The host remembers which shown panes **stand in** for which collapsed ones. A stand-in
+    has no size of its own (it collapses at 0), and `current_layout()` reads a swap as if
+    swapped back, so a layout saved while a commit is selected is the working tree's.
+  - Building a split applies the same rule: shown panes of size 0 next to collapsed panes
+    with sizes take their space (a layout applied while a commit is selected); otherwise
+    collapsed panes lend theirs from the start, as above.
 - **Drag and drop** moves a panel. A drag starts from a panel's section header (in a
   split) or its tab (in a tab group) once the mouse moves `startDragDistance`, and
   carries the panel id under its own MIME type. The host accepts the drop: the pane

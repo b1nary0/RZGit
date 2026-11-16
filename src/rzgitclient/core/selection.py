@@ -71,6 +71,7 @@ class Selection(QObject):
         session.repo_changed.connect(self._on_repo_changed)
         # Before any panel connects: they render what this decides.
         session.status_changed.connect(self._on_status)
+        session.history_changed.connect(self._on_history)
 
     @property
     def commit(self) -> Commit | None:
@@ -78,9 +79,20 @@ class Selection(QObject):
 
     @commit.setter
     def commit(self, commit: Commit | None) -> None:
+        """The commit selected in History; None for Uncommitted changes (§4.2).
+        Only the selected files that belong to it are kept: its own, or the
+        worktree and index rows for Uncommitted changes."""
         if commit == self._commit:
             return
+        sha = commit.sha if commit is not None else None
+
+        def kept(f: FileSelection | None) -> bool:
+            return f is not None and f.commit == sha
+
         self._commit = commit
+        self.files = tuple(f for f in self._files if kept(f))
+        if self._file is not None and not kept(self._file):
+            self.file = None
         self.commit_changed.emit(commit)
 
     @property
@@ -127,6 +139,12 @@ class Selection(QObject):
 
     def _on_repo_changed(self, _repo: object) -> None:
         self.clear()
+
+    def _on_history(self, history: tuple[Commit, ...]) -> None:
+        """A selected commit the history no longer has is gone (amend, reset,
+        rebase): back to Uncommitted changes."""
+        if self._commit is not None and all(c.sha != self._commit.sha for c in history):
+            self.commit = None
 
     def _on_status(self, status: tuple[FileStatus, ...]) -> None:
         """Each selected file stays, moves where it was sent, moves to the same

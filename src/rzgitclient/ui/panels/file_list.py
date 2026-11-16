@@ -1,8 +1,9 @@
 """The flat list of one source's changed files (spec §5.4).
 
-The body of the Unstaged Files (``FilesPanel``) and Staged Files
-(``StagedPanel``) panels: a panel never imports another, so they share this
-widget. Each row is one ``FileSelection``. A list shows only the rows of
+The body of the Unstaged Files (``FilesPanel``), Staged Files
+(``StagedPanel``) and Commit Files (``CommitFilesPanel``) panels: a panel
+never imports another, so they share this widget. With ``FileSource.COMMIT``
+it lists ``session.commit_files``, and has no staging menu or double-click. Each row is one ``FileSelection``. A list shows only the rows of
 ``selection.files`` that are its own, so one of the two holds the selection
 at a time, and Selection decides what stays selected after a refresh (§4.2).
 """
@@ -45,6 +46,8 @@ _ROW = Qt.ItemDataRole.UserRole  # (FileSelection, status code) of a row
 
 def rows(changes: Iterable[FileStatus], source: FileSource) -> list[tuple[FileStatus, str]]:
     """The rows for ``source``, as ``(status, code)``; ``code`` picks label and colour."""
+    if source is FileSource.COMMIT:  # a commit's changes, coded like staged ones
+        return [(f, f.index) for f in changes]
     if source is FileSource.INDEX:
         return [(f, f.index) for f in changes if f.is_staged]
     return [(f, "?" if f.is_untracked else f.worktree)
@@ -53,9 +56,10 @@ def rows(changes: Iterable[FileStatus], source: FileSource) -> list[tuple[FileSt
 
 class FileList(QWidget):
     """The changed files of one ``source``, as a flat list; the body of the
-    Unstaged Files and Staged Files panels."""
+    Unstaged Files, Staged Files and Commit Files panels."""
 
     count_changed = Signal(int)  # rows after each render: for the header
+    count = 0  # rows after the last render
 
     def __init__(self, ctx: PanelContext, source: FileSource,
                  menu: tuple[list[QAction], list[QAction]], parent: QWidget | None = None):
@@ -90,20 +94,32 @@ class FileList(QWidget):
             shortcut = QShortcut(QKeySequence(key), self._tree)
             shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
             shortcut.activated.connect(lambda: self._move(self._tree.selectedItems()))
-        self.ctx.session.status_changed.connect(self._render)
+        session = self.ctx.session
+        if source is FileSource.COMMIT:
+            session.commit_files_changed.connect(self.render)
+        else:
+            session.status_changed.connect(self.render)
         self.ctx.selection.files_changed.connect(self._show_selection)
         self.ctx.selection.file_changed.connect(self._show_selection)
 
     # ---- rendering -------------------------------------------------------
 
-    def _render(self, changes: tuple[FileStatus, ...]) -> None:
+    def _changes(self) -> tuple[FileStatus, ...]:
+        session = self.ctx.session
+        if self.source is FileSource.COMMIT:
+            return session.commit_files or ()
+        return session.status
+
+    def render(self, *_args: object) -> None:
         theme = self._rendered_theme = self.ctx.theme.current
+        commit = self.ctx.session.commit_files_sha if self.source is FileSource.COMMIT else None
         items = []
-        for f, code in rows(changes, self.source):
-            renamed = f.orig_path and self.source is FileSource.INDEX  # renames are staged
+        for f, code in rows(self._changes(), self.source):
+            # Renames are staged, or committed.
+            renamed = f.orig_path and self.source is not FileSource.WORKTREE
             path = f"{f.orig_path} → {f.path}" if renamed else f.path
             item = QTreeWidgetItem([path, STATUS_LABELS.get(code, code)])
-            item.setData(0, _ROW, (FileSelection(f.path, self.source), code))
+            item.setData(0, _ROW, (FileSelection(f.path, self.source, commit), code))
             # Styled before it joins the tree: styling an item in the tree
             # updates the view each time (5x slower for 5,000 files).
             item.setForeground(_STATUS_COLUMN, QColor(theme.status_color(code)))
@@ -116,6 +132,7 @@ class FileList(QWidget):
             self._tree.blockSignals(blocked)
         self._tree.resizeColumnToContents(_STATUS_COLUMN)
         self._show_selection()
+        self.count = len(items)
         self.count_changed.emit(len(items))
 
     def _show_selection(self, *_args: object) -> None:
@@ -144,13 +161,10 @@ class FileList(QWidget):
             self._tree.blockSignals(blocked)
             self._showing = False
 
-    def render(self) -> None:
-        self._render(self.ctx.session.status)
-
     def apply_theme(self, theme: AppTheme) -> None:
-        # Rebuilding is the fast way to recolour (see _render); the selection is kept.
+        # Rebuilding is the fast way to recolour (see render); the selection is kept.
         if theme != self._rendered_theme:
-            self._render(self.ctx.session.status)
+            self.render()
 
     # ---- selection and staging -------------------------------------------
 
@@ -170,10 +184,14 @@ class FileList(QWidget):
 
     def _move(self, items: list[QTreeWidgetItem]) -> None:
         """Stage the rows (unstage, in Staged Files): they move to the other panel."""
+        if self.source is FileSource.COMMIT:  # a commit's files go nowhere
+            return
         paths = tuple(f.path for i in items if (f := self._file(i)) is not None)
         self.ctx.actions.move(paths, other_source(self.source))
 
     def _show_menu(self, pos: QPoint) -> None:
+        if not any(self._menu_actions):
+            return
         menu = self._menu()
         menu.exec(self._tree.viewport().mapToGlobal(pos))
         menu.deleteLater()

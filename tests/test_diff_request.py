@@ -30,6 +30,15 @@ class LoadDiffTests(unittest.TestCase):
         diff = self.load("new.txt", FileSource.WORKTREE)
         self.assertEqual([l.text for l in diff.hunks[0].lines], ["x"])
 
+    def test_a_committed_rename_passes_its_old_path_from_the_commit_files(self):
+        git(self.path, "mv", "a.txt", "b.txt")
+        git(self.path, "commit", "-q", "-m", "rename")
+        sha = git(self.path, "rev-parse", "HEAD").strip()
+        request = DiffRequest(FileSelection("b.txt", FileSource.COMMIT, sha))
+        diff = load_diff(self.repo, request, (), tuple(self.repo.commit_files(sha)))
+        self.assertEqual(diff.old_path, "a.txt")
+        self.assertEqual(diff.hunks, ())  # renamed, not changed
+
     def test_staged_rename_passes_its_old_path(self):
         git(self.path, "mv", "a.txt", "b.txt")
         with mock.patch.object(Repo, "diff", wraps=self.repo.diff) as spy:

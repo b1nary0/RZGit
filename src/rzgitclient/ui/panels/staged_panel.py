@@ -1,7 +1,7 @@
 """Staged Files: the index's changes, between Unstaged Files and Commit (spec §5.4).
 
 The list is a ``FileList``, as in Unstaged Files. The panel collapses while
-nothing is staged.
+nothing is staged, and while a commit is selected (Commit Files takes its place).
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ class StagedPanel(Panel):
         layout.setContentsMargins(0, 0, 0, 0)
         self.set_collapsed(True)
         self.ctx.session.status_changed.connect(self._on_status)
+        self.ctx.selection.commit_changed.connect(self._update_collapsed)
         self._on_status(self.ctx.session.status)
 
     def _on_status(self, status: tuple[FileStatus, ...]) -> None:
@@ -47,7 +48,11 @@ class StagedPanel(Panel):
 
     def _on_count(self, count: int) -> None:
         self.set_header(f"{self.title} ({count})" if count else self.title)
-        self.set_collapsed(not count)
+        self._update_collapsed()
+
+    def _update_collapsed(self, *_args: object) -> None:
+        count = self._list.count if self._list is not None else 0
+        self.set_collapsed(not count or self.ctx.selection.commit is not None)
 
     def apply_theme(self, theme: AppTheme) -> None:
         if self._list is not None:

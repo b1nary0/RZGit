@@ -172,6 +172,30 @@ class Repo:
             result.append(FileStatus(x, y, path, orig))
         return result
 
+    def commit_files(self, sha: str) -> list[FileStatus]:
+        """The files commit ``sha`` changed, compared with its first parent (with
+        nothing, for the first commit). Each is a ``FileStatus`` whose ``index``
+        is the change's code and whose ``worktree`` is " ", as for a staged
+        change; ``orig_path`` is a rename's or copy's source (spec §4.1)."""
+        out = self.git("show", "--format=", "--name-status", "-z", "--no-color", "-M",
+                       "--diff-merges=first-parent", sha, "--")
+        fields = out.split("\0")
+        result = []
+        i = 0
+        while i < len(fields):
+            code = fields[i].strip()
+            i += 1
+            if not code:
+                continue
+            if code[0] in "RC":  # R100 old new
+                orig, path = fields[i], fields[i + 1]
+                i += 2
+            else:
+                orig, path = None, fields[i]
+                i += 1
+            result.append(FileStatus(code[0], " ", path, orig))
+        return result
+
     # ---- commands: they change the repository ------------------------------
 
     def stage(self, paths: Sequence[str]) -> None:

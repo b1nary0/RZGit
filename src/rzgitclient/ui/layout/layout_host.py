@@ -6,7 +6,7 @@ import dataclasses
 from collections.abc import Mapping
 from types import MappingProxyType
 
-from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QRect, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QRect, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QDrag, QDropEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -70,6 +70,15 @@ class LayoutHost(QWidget):
         self._containers: list[QSplitter | QTabWidget] = []  # in pre-order of _tree
         # A collapsed panel's size in its split when it collapsed: what to save.
         self._collapsed_sizes: dict[str, int] = {}
+        # Collapse changes in splits, applied together (§6.2): panel id → collapsed.
+        self._collapse_queue: dict[str, bool] = {}
+        self._collapse_timer = QTimer(self)
+        self._collapse_timer.setSingleShot(True)
+        self._collapse_timer.setInterval(0)
+        self._collapse_timer.timeout.connect(self._apply_collapses)
+        # Panes shown in place of others by a swap, and the panes they replace.
+        self._stand_ins: set[str] = set()
+        self._swapped_out: set[str] = set()
         self._root: QWidget | None = None
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
@@ -148,6 +157,7 @@ class LayoutHost(QWidget):
             self._root.deleteLater()
 
         self._tree, self._containers = tree, []
+        self._stand_ins, self._swapped_out = set(), set()
         self._root = self._build(tree) if tree is not None else None
         if self._root is not None:
             self._layout.addWidget(self._root)
@@ -292,8 +302,21 @@ class LayoutHost(QWidget):
 
     def _sizes(self, splitter: QSplitter) -> tuple[int, ...]:
         """The splitter's sizes, with each collapsed pane at its size when it
-        collapsed, as if it were shown (see ``_lend``)."""
+        collapsed, as if it were shown (see ``_lend``). A swap is read as if
+        swapped back: the stand-ins' space goes to the panes they replace."""
         sizes = splitter.sizes()
+        frames = [(i, w) for i in range(splitter.count())
+                  if isinstance(w := splitter.widget(i), PanelFrame)]
+        outs = [(i, f.panel.panel_id) for i, f in frames
+                if f.panel.panel_id in self._swapped_out and f.isHidden()]
+        ins = [i for i, f in frames if f.panel.panel_id in self._stand_ins and not f.isHidden()]
+        if outs and ins:
+            freed = sum(sizes[i] for i in ins)
+            for i in ins:
+                sizes[i] = 0
+            wants = [max(self._collapsed_sizes.get(pid, 0), 1) for _, pid in outs]
+            for (i, _), share in zip(outs, _shares(freed, wants)):
+                sizes[i] = share
         for i in range(splitter.count()):
             frame = splitter.widget(i)
             if isinstance(frame, PanelFrame) and frame.panel.collapsed and sizes[i] == 0:
@@ -307,27 +330,111 @@ class LayoutHost(QWidget):
         if not isinstance(panel, Panel):
             return
         frame = panel.parentWidget()
-        splitter = frame.parentWidget() if isinstance(frame, PanelFrame) else None
-        if isinstance(frame, PanelFrame) and isinstance(splitter, QSplitter):
-            index, sizes = splitter.indexOf(frame), splitter.sizes()
-            if collapsed:
-                if sizes[index] > 0:
-                    self._collapsed_sizes[panel.panel_id] = sizes[index]
-                frame.hide()
-                new = _lend(sizes, index, 0)
-            else:
-                frame.show()
-                size = self._collapsed_sizes.get(panel.panel_id)
-                new = _lend(sizes, index, size) if size else None
-            if new is not None and sum(sizes) > 0:
-                splitter.setSizes(new)
+        if isinstance(frame, PanelFrame) and isinstance(frame.parentWidget(), QSplitter):
+            self._collapse_queue[panel.panel_id] = collapsed
+            self._collapse_timer.start()
             return
         for tabs in self._containers:
             if isinstance(tabs, _PanelTabs) and (index := tabs.indexOf(panel)) >= 0:
                 tabs.setTabVisible(index, not collapsed)
                 return
 
+    def _apply_collapses(self) -> None:
+        """Apply the queued collapse changes, per splitter (§6.2)."""
+        queue, self._collapse_queue = self._collapse_queue, {}
+        changes: dict[QSplitter, list[tuple[Panel, bool]]] = {}
+        for panel_id, collapsed in queue.items():
+            panel = self._panels.get(panel_id)
+            frame = panel.parentWidget() if panel is not None else None
+            splitter = frame.parentWidget() if isinstance(frame, PanelFrame) else None
+            # Gone, moved into tabs, or rebuilt as it is now by an apply since.
+            if not isinstance(splitter, QSplitter) or frame.isHidden() == collapsed:
+                continue
+            changes.setdefault(splitter, []).append((panel, collapsed))
+        for splitter, panels in changes.items():
+            hiding = [p for p, c in panels if c]
+            showing = [p for p, c in panels if not c]
+            if not (hiding and showing and self._swap(splitter, hiding, showing)):
+                for panel, collapsed in panels:
+                    self._collapse_one(splitter, panel, collapsed)
+
+    def _swap(self, splitter: QSplitter, hiding: list[Panel], showing: list[Panel]) -> bool:
+        """Give the space of ``hiding`` to ``showing``, in proportion to their sizes
+        when they collapsed; the other panes keep theirs. False if nothing is freed."""
+        sizes = splitter.sizes()
+        index = {p.panel_id: splitter.indexOf(p.parentWidget()) for p in hiding + showing}
+        freed = sum(sizes[index[p.panel_id]] for p in hiding)
+        if freed <= 0:
+            return False
+        hid, shown = {p.panel_id for p in hiding}, {p.panel_id for p in showing}
+        back = bool(hid & self._stand_ins)  # the stand-ins go: swapped back
+        for panel in hiding:
+            pid = panel.panel_id
+            # A stand-in has no size of its own: it always takes the others' space.
+            self._collapsed_sizes[pid] = 0 if pid in self._stand_ins else sizes[index[pid]]
+            panel.parentWidget().hide()
+        for panel in showing:
+            panel.parentWidget().show()
+        if back:
+            self._stand_ins -= hid
+            self._swapped_out -= shown
+        else:
+            self._stand_ins |= shown
+            self._swapped_out |= hid
+        wants = [max(self._collapsed_sizes.get(p.panel_id, 0), 1) for p in showing]
+        new = list(sizes)
+        for panel in hiding:
+            new[index[panel.panel_id]] = 0
+        for panel, share in zip(showing, _shares(freed, wants)):
+            new[index[panel.panel_id]] = share
+        splitter.setSizes(new)
+        return True
+
+    def _collapse_one(self, splitter: QSplitter, panel: Panel, collapsed: bool) -> None:
+        """Lend one pane's space to its neighbour, or take it back."""
+        self._stand_ins.discard(panel.panel_id)
+        self._swapped_out.discard(panel.panel_id)
+        frame = panel.parentWidget()
+        index, sizes = splitter.indexOf(frame), splitter.sizes()
+        if collapsed:
+            if sizes[index] > 0:
+                self._collapsed_sizes[panel.panel_id] = sizes[index]
+            frame.hide()
+            new = _lend(sizes, index, 0)
+        else:
+            frame.show()
+            size = self._collapsed_sizes.get(panel.panel_id)
+            new = _lend(sizes, index, size) if size else None
+        if new is not None and sum(sizes) > 0:
+            splitter.setSizes(new)
+
     # ---- building --------------------------------------------------------
+
+    def _place_collapsed(self, splitter: QSplitter, sizes: list[int] | None) -> None:
+        """Hide the panes of collapsed panels in a new splitter, and share out
+        their ``sizes`` (changed in place) as if they had just collapsed. Shown
+        panes of size 0 stand in for them (a swap: a commit is selected, §5.4)."""
+        frames = [(i, w) for i in range(splitter.count())
+                  if isinstance(w := splitter.widget(i), PanelFrame)]
+        collapsed = [(i, f) for i, f in frames if f.panel.collapsed]
+        for _, frame in collapsed:
+            frame.hide()
+        if sizes is None:
+            return
+        for i, frame in collapsed:
+            self._collapsed_sizes[frame.panel.panel_id] = sizes[i]
+        ins = [(i, f) for i, f in frames if not f.panel.collapsed and sizes[i] == 0]
+        freed = sum(sizes[i] for i, _ in collapsed)
+        if ins and freed > 0:
+            for i, frame in collapsed:
+                sizes[i] = 0
+                self._swapped_out.add(frame.panel.panel_id)
+            for (i, frame), share in zip(ins, _shares(freed, [1] * len(ins))):
+                sizes[i] = share
+                self._stand_ins.add(frame.panel.panel_id)
+            return
+        for i, _ in collapsed:  # lent out from the start, as if it had collapsed
+            sizes[:] = _lend(sizes, i, 0) or sizes
 
     def _panel(self, panel_id: str) -> Panel:
         panel = self._panels.get(panel_id)
@@ -350,13 +457,7 @@ class LayoutHost(QWidget):
                 for child in node.children:
                     splitter.addWidget(self._build(child))
                 sizes = list(node.sizes) if node.sizes is not None else None
-                for i in range(splitter.count()):
-                    frame = splitter.widget(i)
-                    if isinstance(frame, PanelFrame) and frame.panel.collapsed:
-                        frame.hide()
-                        if sizes is not None:  # lent out from the start, as if it had collapsed
-                            self._collapsed_sizes[frame.panel.panel_id] = sizes[i]
-                            sizes = _lend(sizes, i, 0) or sizes
+                self._place_collapsed(splitter, sizes)
                 if sizes is not None:
                     splitter.setSizes(sizes)
                 if node.orientation is Orientation.VERTICAL:
@@ -386,6 +487,12 @@ def _drag_source(watched: QObject, pos: QPoint) -> str | None:
         index = watched.tabAt(pos)
         panel = parent.widget(index) if index >= 0 else None
     return panel.panel_id if isinstance(panel, Panel) and panel.movable else None
+
+
+def _shares(total: int, weights: list[int]) -> list[int]:
+    """``total`` split in proportion to ``weights``; the last takes the remainder."""
+    shares = [total * w // sum(weights) for w in weights[:-1]]
+    return [*shares, total - sum(shares)]
 
 
 def _lend(sizes: list[int], index: int, size: int) -> list[int] | None:

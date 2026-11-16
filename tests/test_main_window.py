@@ -97,7 +97,7 @@ class MainWindowTests(unittest.TestCase):
         self.quit(window)
 
         again = self.start()
-        self.assertEqual(set(again.layout_host.panels), {"controls", "files", "history", "diff", "staged", "commit"})
+        self.assertEqual(set(again.layout_host.panels), {"controls", "files", "history", "diff", "staged", "commit", "commit_files"})
         again.layout_host.show_panel("branches")  # and comes back where it was
         self.assertEqual(strip_sizes(again.layout_host.current_layout()), strip_sizes(DEFAULT_LAYOUT))
 
@@ -129,6 +129,64 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(again.layout_host.hidden, {})
         next(a for a in layout_menu.actions() if a.text() == "Review").trigger()
         self.assertEqual(set(again.layout_host.hidden), {"branches"})
+
+    def test_a_commit_s_file_shows_its_diff_from_history_to_diff(self):
+        repo = make_repo(self.tmp / "repo")
+        commit_file(repo, "a.txt", "1\n", "first")
+        commit_file(repo, "a.txt", "2\n", "second")
+        window = self.start()
+        window.session.open(repo)
+        wait_idle(window.session)
+        panels = window.layout_host.panels
+        self.assertTrue(panels["commit_files"].collapsed)  # Uncommitted changes
+        sidebar = panels["branches"].parentWidget().parentWidget()
+        branches_height = sidebar.sizes()[0]
+        history = panels["history"]
+        history._view.setCurrentIndex(history._model.index(2, 0))  # "first"
+        wait_idle(window.session)
+        self.app.processEvents()
+        first = window.ctx.selection.commit
+        self.assertEqual(first.subject, "first")
+        # Commit Files takes the place of the working tree's panels.
+        self.assertEqual([pid for pid in ("files", "staged", "commit", "commit_files")
+                          if not panels[pid].collapsed], ["commit_files"])
+        self.assertTrue(panels["commit_files"].isVisible())
+        self.assertFalse(panels["files"].isVisible())
+        self.assertEqual(sidebar.sizes()[0], branches_height)
+        tree = panels["commit_files"]._list._tree
+        tree.setCurrentItem(tree.topLevelItem(0))
+        wait_idle(window.session)
+        self.assertEqual(window.session.diff_file,
+                         FileSelection("a.txt", FileSource.COMMIT, first.sha))
+        self.assertEqual([l.text for h in window.session.diff.hunks for l in h.lines], ["1"])
+        history._view.setCurrentIndex(history._model.index(0, 0))  # back to Uncommitted
+        self.app.processEvents()
+        self.assertTrue(panels["commit_files"].collapsed)
+        self.assertTrue(panels["files"].isVisible())
+        self.assertEqual(sidebar.sizes()[0], branches_height)
+        self.assertIsNone(window.ctx.selection.file)
+
+    def test_a_layout_saved_while_a_commit_is_selected_is_the_working_tree_s(self):
+        repo = make_repo(self.tmp / "repo")
+        commit_file(repo, "a.txt", "1\n", "first")
+        window = self.start()
+        window.session.open(repo)
+        wait_idle(window.session)
+        sidebar = window.layout_host.panels["branches"].parentWidget().parentWidget()
+        working = sidebar.sizes()
+        history = window.layout_host.panels["history"]
+        history._view.setCurrentIndex(history._model.index(1, 0))
+        wait_idle(window.session)
+        self.app.processEvents()
+        self.assertTrue(window.layout_host.panels["files"].collapsed)
+        self.quit(window)
+
+        again = self.start()
+        again.session.open(repo)
+        wait_idle(again.session)
+        self.app.processEvents()
+        sidebar = again.layout_host.panels["branches"].parentWidget().parentWidget()
+        self.assertEqual(sidebar.sizes(), working)
 
     def test_side_by_side_diff_is_remembered(self):
         window = self.start()
@@ -199,7 +257,7 @@ class MainWindowTests(unittest.TestCase):
         window = self.start()
         window.layout_host.hide_panel("files")
         window.ctx.actions.reset_layout.trigger()
-        self.assertEqual(set(window.layout_host.panels), {"controls", "branches", "files", "history", "diff", "staged", "commit"})
+        self.assertEqual(set(window.layout_host.panels), {"controls", "branches", "files", "history", "diff", "staged", "commit", "commit_files"})
         self.assertEqual(window.layout_host.hidden, {})
 
     def test_status_bar_counts_every_commit_not_just_the_loaded_page(self):

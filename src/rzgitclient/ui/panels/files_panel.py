@@ -1,7 +1,7 @@
 """Unstaged Files: the working tree's unstaged and untracked files (spec §5.4).
 
 The list is a ``FileList``; Staged Files (staged_panel.py) is the same for
-the index.
+the index. It collapses while a commit is selected: Commit Files takes its place.
 """
 
 from __future__ import annotations
@@ -31,6 +31,11 @@ class FilesPanel(Panel):
         layout.addWidget(self._list)
         self._list.count_changed.connect(self._on_count)
         self._list.render()
+        self.ctx.selection.commit_changed.connect(self._update_collapsed)
+        self._update_collapsed()
+
+    def _update_collapsed(self, *_args: object) -> None:
+        self.set_collapsed(self.ctx.selection.commit is not None)
 
     def _on_count(self, count: int) -> None:
         self.set_header(f"{self.title} ({count})" if count else self.title)

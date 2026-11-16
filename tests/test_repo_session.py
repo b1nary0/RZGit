@@ -7,6 +7,7 @@ from unittest import mock
 
 from rzgitclient.core.repo_session import Refresh, RepoSession
 from rzgitclient.core.selection import FileSelection, FileSource
+from rzgitclient.git.git_models import FileStatus
 from rzgitclient.git.repo import GitError, Repo
 from tests.support import SignalRecorder, commit_file, git, make_repo, qt_app, wait_idle
 
@@ -569,6 +570,78 @@ class RepoSessionDiffTests(unittest.TestCase):
         self.session.close()
         self.assertEqual(self.diffs[-1], (None, None))
         self.session.request_diff(FileSelection("a.txt", FileSource.WORKTREE))  # no repo
+        self.assertFalse(self.session.busy)
+
+
+class RepoSessionCommitFilesTests(unittest.TestCase):
+    """A commit's files are asked for (spec §4.1)."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        commit_file(self.path, "a.txt", "1\n", "first")
+        commit_file(self.path, "b.txt", "1\n", "second")
+        self.session = RepoSession()
+        self.events = []
+        self.session.commit_files_changed.connect(lambda sha, f: self.events.append((sha, f)))
+        self.errors = []
+        self.session.error_occurred.connect(self.errors.append)
+        self.assertTrue(self.session.open(self.path))
+        wait_idle(self.session)
+        self.first, self.second = (c.sha for c in reversed(self.session.history))
+
+    def tearDown(self):
+        self.session.shutdown()
+        self._tmp.cleanup()
+
+    def test_request_reads_them_off_the_ui_thread(self):
+        self.session.request_commit_files(self.second)
+        self.assertEqual(self.events, [])  # not yet: it runs on the worker
+        wait_idle(self.session)
+        files = (FileStatus("A", " ", "b.txt"),)
+        self.assertEqual(self.events, [(self.second, files)])
+        self.assertEqual((self.session.commit_files_sha, self.session.commit_files),
+                         (self.second, files))
+
+    def test_a_newer_request_drops_the_older_result(self):
+        self.session.request_commit_files(self.second)
+        self.session.request_commit_files(self.first)
+        wait_idle(self.session)
+        self.assertEqual(self.events, [(self.first, (FileStatus("A", " ", "a.txt"),))])
+
+    def test_the_same_target_again_reads_nothing(self):
+        self.session.request_commit_files(self.second)
+        wait_idle(self.session)
+        self.session.request_commit_files(self.second)
+        self.assertFalse(self.session.busy)
+
+    def test_none_clears_the_target_at_once_and_refreshes_leave_it(self):
+        self.session.request_commit_files(self.second)
+        wait_idle(self.session)
+        self.session.request_commit_files(None)
+        self.assertEqual(self.events[-1], (None, None))
+        self.events.clear()
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertEqual(self.events, [])
+
+    def test_a_failure_is_an_error_and_none(self):
+        with mock.patch.object(Repo, "commit_files", side_effect=GitError("bad commit")):
+            self.session.request_commit_files(self.second)
+            wait_idle(self.session)
+        self.assertEqual(self.errors, ["bad commit"])
+        self.assertEqual(self.events, [(self.second, None)])
+
+    def test_open_and_close_forget_them(self):
+        self.session.request_commit_files(self.second)
+        wait_idle(self.session)
+        self.session.close()
+        self.assertEqual(self.events[-1], (None, None))
+        self.session.request_commit_files(self.first)  # no repo
         self.assertFalse(self.session.busy)
 
 

@@ -1,4 +1,5 @@
-"""The commit table; the selected row is ``selection.commit`` (spec §5.4)."""
+"""Uncommitted changes and the commit table; the selected row is
+``selection.commit``, None for Uncommitted changes (spec §5.4)."""
 
 from __future__ import annotations
 
@@ -48,17 +49,44 @@ class HistoryPanel(Panel):
         bar = self._view.verticalScrollBar()
         bar.valueChanged.connect(self._load_more_near_the_end)
         bar.rangeChanged.connect(self._load_more_near_the_end)
-        self.ctx.session.history_changed.connect(self._render)
-        self._render(self.ctx.session.history)
+        session = self.ctx.session
+        session.history_changed.connect(self._render)
+        session.status_changed.connect(self._show_uncommitted)
+        session.repo_changed.connect(self._show_uncommitted)
+        self._show_uncommitted()
+        self._render(session.history)
+
+    def _show_uncommitted(self, *_args: object) -> None:
+        """The Uncommitted changes row while a repo is open, with its file count."""
+        session = self.ctx.session
+        self._quiet = True
+        try:
+            self._model.set_uncommitted(len(session.status) if session.repo else None)
+            self._select_uncommitted_if_none()
+        finally:
+            self._quiet = False
+        self._sync_selection()
+
+    def _select_uncommitted_if_none(self) -> None:
+        if not self._view.currentIndex().isValid() and self._model.has_uncommitted:
+            self._select_row(0)
+
+    def _select_row(self, row: int) -> None:
+        """Select ``row`` without scrolling to it: the commit at the top decides the scroll."""
+        auto = self._view.hasAutoScroll()
+        self._view.setAutoScroll(False)
+        self._view.setCurrentIndex(self._model.index(row, 0))
+        self._view.setAutoScroll(auto)
 
     def _render(self, commits: tuple[Commit, ...]) -> None:
         keep, top = self._current_commit(), self._top_commit()
-        was_empty = self._model.rowCount() == 0
+        was_empty = not self._model.commits  # Uncommitted changes may be shown already
         self._quiet = True
         try:
             appended = self._model.set_commits(commits)
             if not appended:  # reset: same selection, same commit at the top
                 self._restore(keep, top)
+            self._select_uncommitted_if_none()
         finally:
             self._quiet = False
         if was_empty or not appended:
@@ -83,7 +111,7 @@ class HistoryPanel(Panel):
         500 commits); the widest text is found here with font metrics, and
         only that row is measured by the view.
         """
-        rows = range(min(len(self._model.commits), _MEASURED_ROWS))
+        rows = range(min(self._model.rowCount(), _MEASURED_ROWS))
         header = self._view.horizontalHeader()
         for col in MUTED_COLUMNS:
             width = 0  # no rows: the header's text decides
@@ -96,11 +124,7 @@ class HistoryPanel(Panel):
     def _restore(self, keep: Commit | None, top: Commit | None) -> None:
         row = self._model.row_of(keep.sha) if keep is not None else -1
         if row >= 0:
-            # Without scrolling to it: the commit at the top decides the scroll.
-            auto = self._view.hasAutoScroll()
-            self._view.setAutoScroll(False)
-            self._view.setCurrentIndex(self._model.index(row, 0))
-            self._view.setAutoScroll(auto)
+            self._select_row(row)
         row = self._model.row_of(top.sha) if top is not None else -1
         if row >= 0:
             self._view.scrollTo(
