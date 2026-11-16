@@ -27,6 +27,17 @@ class CommitDraftsTests(unittest.TestCase):
         self.assertEqual(drafts.get("/repos/two"), "Fix two")
         self.assertEqual(drafts.get("/repos/three"), "")
 
+    def test_every_path_to_a_repository_finds_its_draft(self):
+        real = Path(self._tmp.name) / "repo"
+        real.mkdir()
+        link = Path(self._tmp.name) / "link"
+        link.symlink_to(real)
+        drafts = CommitDrafts()
+        drafts.set(link, "Through the link")
+        self.assertEqual(drafts.get(real.resolve()), "Through the link")
+        drafts.set(real, "  ")
+        self.assertEqual(drafts.get(link), "")
+
     def test_a_blank_draft_is_removed(self):
         settings = AppSettings(self.path)
         drafts = CommitDrafts(settings)

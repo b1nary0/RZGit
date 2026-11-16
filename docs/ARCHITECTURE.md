@@ -570,7 +570,9 @@ RZG-26).
   and description (the rest, without the blank line). A cleared message removes the
   draft.
   `CommitDrafts` writes through `AppSettings` (`commit/drafts`, JSON keyed by the
-  repository root); tests give it none, and it keeps drafts in memory.
+  repository root); tests give it none, and it keeps drafts in memory. The key is the
+  root with symlinks resolved (`Path.resolve()`), so every path to one repository finds
+  the same draft (on macOS, `/var/...` and `/private/var/...` are one folder).
 - **Summary hint:** "n/50", muted (`Role.HINT`), and in the warning colour past 72
   (`Role.HINT_WARNING`). Nothing is enforced.
 - **Built when first shown:** the panel starts collapsed (the repository opens after the

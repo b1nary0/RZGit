@@ -18,13 +18,18 @@ class CommitDrafts:
         self._settings = settings
         self._drafts = settings.commit_drafts if settings is not None else {}
 
+    @staticmethod
+    def _key(root: str | Path) -> str:
+        """``root`` with symlinks resolved, so every path to a repository is one key."""
+        return str(Path(root).resolve())
+
     def get(self, root: str | Path) -> str:
         """The draft for the repository at ``root`` ("" if none)."""
-        return self._drafts.get(str(root), "")
+        return self._drafts.get(self._key(root), "")
 
     def set(self, root: str | Path, text: str) -> None:
         """Keep ``text`` as the draft for ``root``; a blank text removes it."""
-        key = str(root)
+        key = self._key(root)
         if text.strip():
             if self._drafts.get(key) == text:
                 return
