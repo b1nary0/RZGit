@@ -86,6 +86,7 @@ src/rzgitclient/
       panel_registry.py         PANEL_TYPES, panel_type(id)
       branches_panel.py         BranchesPanel
       history_panel.py          HistoryPanel
+      history_model.py          HistoryModel: the commit table's Qt model, paged
       files_panel.py            FilesPanel
     layout/
       layout_model.py           PanelNode / SplitNode / TabsNode, (de)serialisation, normalize
@@ -125,9 +126,10 @@ class RepoSession(QObject):
     def open(self, path) -> bool
     def close(self) -> None
     def refresh(self, parts: Refresh = Refresh.ALL) -> None   # Flag: BRANCHES|HISTORY|STATUS|HEAD
+    def load_more_history(self) -> None   # the next page of history, in the background
 
     # Latest values, so a panel created later renders at once (read-only properties):
-    repo, head, branches, history, status
+    repo, head, branches, history, status, history_complete
 
     # Future git commands (stage, commit, checkout…) are methods here. Each one ends with
     # refresh(<only the parts it changes>).
@@ -164,6 +166,24 @@ class RepoSession(QObject):
   - On quit, the session waits for the running git command (it can't be interrupted).
   - `busy_changed(True)` when the first job is queued, `False` when the queue is empty. The
     window shows it in the status bar at once. Tests wait with `wait_idle()`.
+- **History loads in pages** of `HISTORY_PAGE` (500) commits, from `HEAD`.
+  - `history` holds every commit loaded so far; `history_complete` is True once the oldest
+    commit is in it (and with no repo, so nothing asks for more).
+  - `load_more_history()` queues the next page on the worker. It does nothing when history
+    is complete, or a page is already queued or loading. A page job runs
+    `git log --skip=<loaded>` and emits `history_changed` with the longer tuple, whose first
+    part is the very same objects as before, so a listener can tell it's an append. Every
+    read asks git for one commit more than it keeps, to know whether it reached the end.
+  - **Paging relies on HEAD.** History from the same HEAD commit can't change, so a job
+    first compares `HEAD` with the newest loaded commit:
+    - **Unchanged:** a refresh runs no `git log` at all, however much is loaded, and a page
+      continues where the last load ended.
+    - **Moved** (a commit, a checkout, or anything outside the app): the job reloads, so
+      `--skip` never repeats or misses commits.
+  - **A reload keeps what was loaded.** It reads a page more than was loaded and keeps
+    everything down to the oldest commit loaded before, so the user's scroll position and
+    selection survive new commits on top. If that commit is gone (another branch), it keeps
+    as many whole pages as were loaded. A page requested at the same time is added on.
 - **Growth:** when the session gains many commands (stage, commit, checkout, fetch…), they
   can move to a separate `core/git_commands.py` that the session delegates to. Not before.
 
@@ -281,7 +301,8 @@ every panel. The lookup table is built at import by `index_panel_types()`, which
 
 ### 5.4 Panels
 
-The first three are extracted from the original `main_window.py` with the same behaviour:
+The first three are extracted from the original `main_window.py` with the same behaviour
+(History no longer stops at 500 commits):
 
 | Panel | id | Surface | Shows | Writes |
 |---|---|---|---|---|
@@ -291,6 +312,30 @@ The first three are extracted from the original `main_window.py` with the same b
 
 FilesPanel is the original "Working Tree Changes" list; its header shows the count,
 e.g. "Files (24)".
+
+HistoryPanel is a `QTableView` over `HistoryModel` (`QAbstractTableModel`), because item
+widgets for 100k commits are too slow to build. The model creates nothing per row: `data()`
+answers text, the muted colour and the monospace hash font from the current theme when Qt
+asks, so a theme change is one `dataChanged`.
+
+- **A table, styled as a tree.** A `QTreeView` keeps a layout entry per row and redoes all
+  of them on every insert or reset: a page cost 63 ms with 20k rows loaded and 232 ms with
+  100k. A table with fixed row heights costs the same at any depth (13–24 ms). The view
+  hides the grid and row numbers, selects and hovers whole rows (a small delegate), and
+  its header is left-aligned and not clickable; the stylesheet's tree rules cover
+  `QTableView` too. It renders pixel-identical to the tree it replaced.
+
+- **Paging:** when the view is scrolled to within a screen of the end, the panel asks the
+  session for the next page (§4.1). It watches its scroll bar rather than using Qt's
+  `canFetchMore` / `fetchMore`, which Qt also calls while laying rows out, before they have
+  a position, so it would load pages nobody scrolled to.
+- **Updates:** an appended page inserts rows. Any other change resets the model; the panel
+  then re-selects the same commit and keeps the same commit at the top of the view (or
+  stays at the top, so new commits show).
+- **Column widths:** the author, date and hash columns fit their widest text in the first
+  page, as `resizeColumnToContents` would. That asks the model for every cell (45 ms for
+  500 commits), so the panel finds the widest text with font metrics and has the view
+  measure only that row. Every row is as tall as the first wants.
 
 **Selection survives a refresh.** A list panel rebuilds with its signals blocked, then
 re-selects the same item (a commit by sha, a file by path and source). It writes
@@ -475,7 +520,7 @@ cheap to fix **later**, without paying for them now:
 | Hot spot | When it matters | Planned fix | Kept open by |
 |---|---|---|---|
 | git on the UI thread | large repos, network ops | **done:** one worker thread inside RepoSession (§4.1) | push-based signals (§4.1); panels never run git (§5.2) |
-| History rebuilds as item widgets | 10k+ commits | `QAbstractTableModel` + paging | HistoryPanel is the only place that changes |
+| History rebuilds as item widgets | 10k+ commits | **done:** `QAbstractTableModel` + paging (§4.1, §5.4) | HistoryPanel is the only place that changes |
 | Full rebuild on every refresh | frequent refreshes | granular signals, emitted only on change | §4.1 (done now: cheap, and the right semantics anyway) |
 | Layout changes recreating panels | layout switching | panel reuse in `LayoutHost.apply` | §6.2 (done now: needed to keep panel state anyway) |
 | Restyling | theme switch | one app-wide stylesheet | §7.3 |
@@ -486,8 +531,8 @@ cheap to fix **later**, without paying for them now:
   returns one shared offscreen `QApplication` (`QT_QPA_PLATFORM=offscreen` is set before
   import), `SignalRecorder` records emissions in order, `make_panel_context()` gives a
   `PanelContext` with no repo open, and `wait_idle(session)` waits for the git worker. A test
-  that opens a repo waits before it ends, so no late result reaches the next test. Qt is imported only inside these functions, so git-only
-  tests never load it.
+  that opens a repo waits before it ends, so no late result reaches the next test. Qt is
+  imported only inside these functions, so git-only tests never load it.
 - One test file per module: `test_repo` (git, no Qt), `test_repo_session` (signals and
   latest values on temp repos), `test_app_theme` / `test_theme_manager` (the stylesheet
   builds, and every role it uses exists), `test_layout_model` (round-trip and `normalize`

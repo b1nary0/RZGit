@@ -2,85 +2,210 @@ import dataclasses
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+from PySide6.QtGui import QHoverEvent
+from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
 
 from rzgitclient.ui.panels.history_panel import HistoryPanel
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
 from tests.support import SignalRecorder, commit_file, make_panel_context, make_repo, qt_app, wait_idle
 
+ROLE = Qt.ItemDataRole
+
 
 class HistoryPanelTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        qt_app()
+        cls.app = qt_app()
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
         self.tmp = Path(self._tmp.name)
         self.repo = make_repo(self.tmp / "repo")
         commit_file(self.repo, "a.txt", "1", "first")
         commit_file(self.repo, "a.txt", "2", "second")
         self.ctx = make_panel_context()
+        self.addCleanup(self.ctx.session.shutdown)
         self.panel = HistoryPanel(self.ctx)
-        self.tree = self.panel._tree
+        self.view, self.model = self.panel._view, self.panel._model
         self.rec = SignalRecorder(self.ctx.selection, "commit_changed")
 
-    def tearDown(self):
-        self._tmp.cleanup()
+    def open(self, path=None):
+        self.ctx.session.open(path or self.repo)
+        wait_idle(self.ctx.session)
+
+    def refresh(self):
+        self.ctx.session.refresh()
+        wait_idle(self.ctx.session)
 
     def subjects(self):
-        return [self.tree.topLevelItem(i).text(0) for i in range(self.tree.topLevelItemCount())]
+        return [self.cell(row, 0) for row in range(self.model.rowCount())]
+
+    def cell(self, row, col, role=ROLE.DisplayRole):
+        return self.model.data(self.model.index(row, col), role)
+
+    def select(self, row):
+        self.view.setCurrentIndex(self.model.index(row, 0))
+
+    def current_subject(self):
+        return self.cell(self.view.currentIndex().row(), 0)
 
     def test_empty_state(self):
         self.assertEqual(self.subjects(), [])
         self.assertIsNone(self.ctx.selection.commit)
 
     def test_rows_hash_and_muted_columns(self):
-        self.ctx.session.open(self.repo)
-        wait_idle(self.ctx.session)
+        self.open()
         self.assertEqual(self.subjects(), ["second", "first"])
-        item, commit = self.tree.topLevelItem(0), self.ctx.session.history[0]
-        self.assertEqual(item.text(1), "Test User")
-        self.assertEqual(item.text(3), commit.short_sha)
-        self.assertEqual(item.toolTip(3), commit.sha)
-        self.assertEqual(item.font(3).family(), LIGHT_THEME.mono_font().family())
+        commit = self.ctx.session.history[0]
+        self.assertEqual(self.model.headerData(0, Qt.Orientation.Horizontal), "Subject")
+        self.assertEqual(self.cell(0, 1), "Test User")
+        self.assertEqual(self.cell(0, 3), commit.short_sha)
+        self.assertEqual(self.cell(0, 3, ROLE.ToolTipRole), commit.sha)
+        self.assertEqual(self.cell(0, 3, ROLE.FontRole).family(), LIGHT_THEME.mono_font().family())
+        self.assertIsNone(self.cell(0, 0, ROLE.ForegroundRole))  # subject: normal text
         for col in (1, 2, 3):
-            self.assertEqual(item.foreground(col).color().name(), LIGHT_THEME.colors.text_muted)
+            self.assertEqual(self.cell(0, col, ROLE.ForegroundRole).name(), LIGHT_THEME.colors.text_muted)
 
     def test_selecting_a_row_sets_selection(self):
-        self.ctx.session.open(self.repo)
-        wait_idle(self.ctx.session)
-        self.tree.setCurrentItem(self.tree.topLevelItem(1))
+        self.open()
+        self.select(1)
         self.assertEqual(self.ctx.selection.commit.subject, "first")
 
     def test_selection_survives_refresh_silently(self):
-        self.ctx.session.open(self.repo)
-        wait_idle(self.ctx.session)
-        self.tree.setCurrentItem(self.tree.topLevelItem(1))
+        self.open()
+        self.select(1)
         self.rec.clear()
         commit_file(self.repo, "a.txt", "3", "third")
-        self.ctx.session.refresh()
-        wait_idle(self.ctx.session)
+        self.refresh()
         self.assertEqual(self.subjects(), ["third", "second", "first"])
-        self.assertEqual(self.tree.currentItem().text(0), "first")
+        self.assertEqual(self.current_subject(), "first")
         self.assertEqual(self.rec.events, [])  # no flicker through None
 
     def test_selection_cleared_when_commit_is_gone(self):
-        self.ctx.session.open(self.repo)
-        wait_idle(self.ctx.session)
-        self.tree.setCurrentItem(self.tree.topLevelItem(0))
+        self.open()
+        self.select(0)
         other = make_repo(self.tmp / "other")
         commit_file(other, "b.txt", "1", "other")
-        self.ctx.session.open(other)
-        wait_idle(self.ctx.session)
-        self.assertIsNone(self.tree.currentItem())
+        self.open(other)
+        self.assertFalse(self.view.currentIndex().isValid())
         self.assertIsNone(self.ctx.selection.commit)
 
+    def test_hover_marks_the_whole_row(self):
+        self.open()
+        self.panel.resize(600, 300)
+        self.panel.show()
+        self.addCleanup(self.panel.hide)
+        self.app.processEvents()
+        y = self.view.rowViewportPosition(1) + 2
+        event = QHoverEvent(QEvent.Type.HoverMove, QPointF(5, y), QPointF(5, y), QPointF(-1, -1))
+        self.view.viewportEvent(event)
+        delegate = self.view.itemDelegate()
+
+        def hovered(row, col):
+            option = QStyleOptionViewItem()
+            delegate.initStyleOption(option, self.model.index(row, col))
+            return bool(option.state & QStyle.StateFlag.State_MouseOver)
+
+        self.assertEqual([hovered(1, c) for c in range(4)], [True] * 4)  # not just the cell
+        self.assertEqual([hovered(0, c) for c in range(4)], [False] * 4)
+        self.view.viewportEvent(QHoverEvent(QEvent.Type.HoverLeave, QPointF(-1, -1), QPointF(-1, -1), QPointF(5, y)))
+        self.assertFalse(hovered(1, 0))
+
     def test_apply_theme_recolours_rows(self):
-        self.ctx.session.open(self.repo)
-        wait_idle(self.ctx.session)
+        self.open()
+        changed = []
+        self.model.dataChanged.connect(lambda *args: changed.append(args))
         colors = dataclasses.replace(LIGHT_THEME.colors, text_muted="#123456")
         self.ctx.theme.set_theme(dataclasses.replace(LIGHT_THEME, colors=colors))
-        self.assertEqual(self.tree.topLevelItem(0).foreground(1).color().name(), "#123456")
+        self.assertEqual(self.cell(0, 1, ROLE.ForegroundRole).name(), "#123456")
+        self.assertEqual(len(changed), 1)  # one signal repaints every row
+
+
+class HistoryPanelPagingTests(unittest.TestCase):
+    """History in pages of three commits, shown in a view a few rows tall."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = qt_app()
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.repo = make_repo(Path(self._tmp.name) / "repo")
+        for n in range(1, 11):
+            commit_file(self.repo, "a.txt", str(n), f"c{n}")
+        page = mock.patch("rzgitclient.core.repo_session.HISTORY_PAGE", 3)
+        page.start()
+        self.addCleanup(page.stop)
+        self.ctx = make_panel_context()
+        self.addCleanup(self.ctx.session.shutdown)
+        self.panel = HistoryPanel(self.ctx)
+        self.addCleanup(self.panel.deleteLater)
+        self.view, self.model = self.panel._view, self.panel._model
+        self.panel.resize(400, 66)  # two rows: a page of three overflows it
+        self.panel.show()
+        self.ctx.session.open(self.repo)
+        self.settle()
+
+    def settle(self):
+        """Wait for git, and for the view to lay out (and maybe fetch) what arrived."""
+        for _ in range(3):
+            wait_idle(self.ctx.session)
+            self.app.processEvents()
+
+    def scroll_to_end(self):
+        bar = self.view.verticalScrollBar()
+        self.assertGreater(bar.maximum(), bar.value())  # laid out, and not at the end yet
+        bar.setValue(bar.maximum())
+        self.settle()
+
+    def test_first_page_then_more_on_scroll(self):
+        self.assertEqual(self.model.rowCount(), 3)  # the view isn't full-height
+        inserted = []
+        self.model.rowsInserted.connect(lambda _p, first, last: inserted.append((first, last)))
+        resets = []
+        self.model.modelReset.connect(lambda: resets.append(1))
+        self.scroll_to_end()
+        self.assertEqual(self.model.rowCount(), 6)
+        self.assertEqual(inserted, [(3, 5)])  # the page is appended…
+        self.assertEqual(resets, [])  # …and nothing is rebuilt
+
+    def test_scrolling_stops_at_the_first_commit(self):
+        while self.model.rowCount() < 10:
+            self.scroll_to_end()
+        self.assertTrue(self.ctx.session.history_complete)
+        bar = self.view.verticalScrollBar()
+        bar.setValue(0)
+        bar.setValue(bar.maximum())  # at the end again: nothing more to ask for
+        self.assertFalse(self.ctx.session.busy)
+        self.assertEqual(self.model.rowCount(), 10)
+
+    def test_refresh_keeps_the_top_commit_in_place(self):
+        self.scroll_to_end()
+        self.scroll_to_end()
+        self.view.setCurrentIndex(self.model.index(5, 0))
+        selected = self.ctx.selection.commit
+        self.view.scrollTo(self.model.index(4, 0), self.view.ScrollHint.PositionAtTop)
+        top = self.model.commit_at(self.view.indexAt(QPoint(0, 0)).row())
+        self.assertEqual(top.subject, "c6")
+
+        commit_file(self.repo, "a.txt", "11", "c11")
+        self.ctx.session.refresh()
+        self.settle()
+        self.assertEqual(self.model.commits[0].subject, "c11")
+        self.assertEqual(self.model.commit_at(self.view.indexAt(QPoint(0, 0)).row()), top)
+        self.assertEqual(self.ctx.selection.commit, selected)
+
+    def test_refresh_at_the_top_shows_new_commits(self):
+        commit_file(self.repo, "a.txt", "11", "c11")
+        self.ctx.session.refresh()
+        self.settle()
+        self.assertEqual(self.view.verticalScrollBar().value(), 0)
+        self.assertEqual(self.view.indexAt(QPoint(0, 0)).row(), 0)
 
 
 if __name__ == "__main__":

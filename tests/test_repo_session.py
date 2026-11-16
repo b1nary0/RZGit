@@ -228,5 +228,163 @@ class RepoSessionTests(unittest.TestCase):
         self.assertEqual(self.rec.events, [])  # the result was dropped
 
 
+
+class HistoryPagingTests(unittest.TestCase):
+    """History in pages of two commits (spec §4.1)."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        for n in range(1, 6):
+            commit_file(self.path, "a.txt", str(n), f"c{n}")
+        page = mock.patch("rzgitclient.core.repo_session.HISTORY_PAGE", 2)
+        page.start()
+        self.addCleanup(page.stop)
+        self.session = RepoSession()
+        self.addCleanup(self.session.shutdown)
+        self.rec = SignalRecorder(self.session, "history_changed", "error_occurred")
+
+    def subjects(self):
+        return [c.subject for c in self.session.history]
+
+    def open(self):
+        self.session.open(self.path)
+        wait_idle(self.session)
+
+    def more(self):
+        self.session.load_more_history()
+        wait_idle(self.session)
+
+    def test_complete_with_no_repo_or_no_commits(self):
+        self.assertTrue(self.session.history_complete)
+        self.session.load_more_history()  # nothing to load from
+        self.assertFalse(self.session.busy)
+        self.session.open(make_repo(Path(self._tmp.name) / "empty"))
+        wait_idle(self.session)
+        self.assertTrue(self.session.history_complete)
+
+    def test_pages_append_until_complete(self):
+        self.open()
+        self.assertEqual(self.subjects(), ["c5", "c4"])
+        self.assertFalse(self.session.history_complete)
+        first = self.session.history
+
+        self.more()
+        self.assertEqual(self.subjects(), ["c5", "c4", "c3", "c2"])
+        # The loaded part is the very same objects, so a listener can tell it's an append.
+        self.assertTrue(all(a is b for a, b in zip(first, self.session.history)))
+        self.more()
+        self.assertEqual(self.subjects(), ["c5", "c4", "c3", "c2", "c1"])
+        self.assertTrue(self.session.history_complete)
+
+        self.rec.clear()
+        self.session.load_more_history()  # complete: does nothing
+        self.assertFalse(self.session.busy)
+        self.assertEqual(self.rec.events, [])
+
+    def test_a_full_last_page_is_known_to_be_the_last(self):
+        commit_file(self.path, "a.txt", "6", "c6")  # six commits: exactly three pages
+        self.open()
+        self.more()
+        self.more()
+        self.assertEqual(len(self.session.history), 6)
+        self.assertTrue(self.session.history_complete)  # no empty fourth page needed
+
+    def test_a_page_already_on_its_way_is_not_asked_for_twice(self):
+        self.open()
+        self.session.load_more_history()  # starts a job
+        self.session.load_more_history()  # loading already
+        self.session.refresh(Refresh.STATUS)
+        self.session.load_more_history()  # still the same page
+        wait_idle(self.session)
+        self.assertEqual(len(self.session.history), 4)
+
+    def test_refresh_keeps_the_loaded_pages(self):
+        self.open()
+        self.more()
+        commit_file(self.path, "a.txt", "6", "c6")
+        self.session.refresh()
+        wait_idle(self.session)
+        # Everything loaded before is still there, plus the new commit.
+        self.assertEqual(self.subjects(), ["c6", "c5", "c4", "c3", "c2"])
+        self.assertFalse(self.session.history_complete)
+
+    def test_refresh_with_head_unchanged_runs_no_log(self):
+        self.open()
+        self.more()
+        with mock.patch.object(Repo, "log", side_effect=AssertionError("no log")):
+            self.session.refresh()
+            wait_idle(self.session)
+        self.assertEqual(len(self.session.history), 4)
+        self.assertEqual(self.rec.names(), ["history_changed", "history_changed"])
+
+    def test_refresh_of_complete_history_stays_complete(self):
+        self.open()
+        self.more()
+        self.more()
+        commit_file(self.path, "a.txt", "6", "c6")
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertEqual(self.subjects(), ["c6", "c5", "c4", "c3", "c2", "c1"])
+        self.assertTrue(self.session.history_complete)
+
+    def test_a_listener_asking_for_more_while_handling_a_result(self):
+        # The view does this: laying out new rows can call fetchMore at once.
+        busy = SignalRecorder(self.session, BUSY)
+        asked = []
+
+        def on_history(history):
+            if len(history) < 4:
+                asked.append(len(history))
+                self.session.load_more_history()
+                self.assertTrue(self.session.busy)
+
+        self.session.history_changed.connect(on_history)
+        self.open()
+        self.assertEqual(asked, [2])
+        self.assertEqual(len(self.session.history), 4)  # the page asked for mid-signal loaded
+        self.assertEqual(busy.events, [(BUSY, True), (BUSY, False)])  # one busy period
+
+    def test_a_page_asked_for_with_a_refresh_joins_it(self):
+        self.open()
+        self.session.refresh(Refresh.STATUS)  # running, so the next two wait together
+        self.session.refresh(Refresh.HISTORY)
+        self.session.load_more_history()
+        wait_idle(self.session)
+        self.assertEqual(self.subjects(), ["c5", "c4", "c3", "c2"])
+
+    def test_head_moved_outside_the_app_reloads_instead_of_skipping(self):
+        self.open()
+        commit_file(self.path, "a.txt", "6", "c6")  # e.g. in a terminal
+        self.more()
+        # --skip=2 from the new HEAD would repeat c5; a reload gets it right:
+        # what was loaded, the new commit, and the page asked for.
+        self.assertEqual(self.subjects(), ["c6", "c5", "c4", "c3", "c2"])
+        self.assertEqual(self.rec.names(), ["history_changed", "history_changed"])
+
+    def test_switching_repos_starts_from_the_first_page(self):
+        self.open()
+        self.more()
+        other = make_repo(Path(self._tmp.name) / "other")
+        for n in range(1, 6):
+            commit_file(other, "b.txt", str(n), f"o{n}")
+        self.session.open(other)
+        self.assertTrue(self.session.history_complete)  # until the new repo loads
+        wait_idle(self.session)
+        self.assertEqual(self.subjects(), ["o5", "o4"])
+        self.assertFalse(self.session.history_complete)
+
+    def test_close_marks_history_complete(self):
+        self.open()
+        self.session.close()
+        self.assertTrue(self.session.history_complete)
+        self.assertEqual(self.session.history, ())
+
+
 if __name__ == "__main__":
     unittest.main()

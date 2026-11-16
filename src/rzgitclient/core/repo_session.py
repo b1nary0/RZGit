@@ -18,7 +18,7 @@ from PySide6.QtCore import QObject, QThreadPool, Signal
 from rzgitclient.git.git_models import Branch, Commit, FileStatus
 from rzgitclient.git.repo import GitError, Repo
 
-HISTORY_LIMIT = 500
+HISTORY_PAGE = 500  # commits per page of history (spec §4.1)
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +60,9 @@ class RepoSession(QObject):
         self._pending = Refresh(0)  # parts waiting for the next job
         self._running = False
         self._busy = False
+        self._history_complete = True  # nothing to page in until a load says otherwise
+        self._more_pending = False  # a history page waits for the next job
+        self._loading_more = False  # the running job loads a history page
         # One thread: git commands on a repo can clash on index.lock, and
         # in-order jobs can't deliver results out of order.
         self._pool = QThreadPool(self)
@@ -105,6 +108,11 @@ class RepoSession(QObject):
     def status(self) -> tuple[FileStatus, ...]:
         return self._values[Refresh.STATUS]  # type: ignore[return-value]
 
+    @property
+    def history_complete(self) -> bool:
+        """True once ``history`` reaches the first commit (and with no repo)."""
+        return self._history_complete
+
     # ---- opening and closing ------------------------------------------------
 
     def open(self, path: str | Path) -> bool:
@@ -122,6 +130,8 @@ class RepoSession(QObject):
         self._repo = repo
         self._generation += 1
         self._pending = Refresh(0)
+        self._more_pending = False
+        self._history_complete = True
         self._forced = Refresh.ALL
         self.repo_changed.emit(repo)
         self.refresh()
@@ -133,6 +143,7 @@ class RepoSession(QObject):
         self._repo = None
         self._generation += 1
         self._pending = Refresh(0)
+        self._more_pending = False
         self._forced = Refresh.ALL
         self.repo_changed.emit(None)
         self._store_forced_as_empty()
@@ -141,6 +152,7 @@ class RepoSession(QObject):
         """Drop queued work and wait for the running git command (on quit)."""
         self._generation += 1
         self._pending = Refresh(0)
+        self._more_pending = False
         self._pool.waitForDone()
 
     # ---- loading ------------------------------------------------------------
@@ -151,6 +163,7 @@ class RepoSession(QObject):
         A request made while another job is waiting merges into it. A job
         stops at the first part that fails and sends one ``error_occurred``.
         Parts already loaded keep their new values; the rest keep the old.
+        History reloads as many commits as are loaded, in whole pages.
         """
         if self._repo is None:
             return
@@ -158,25 +171,49 @@ class RepoSession(QObject):
         if not self._running:
             self._start_next()
 
+    def load_more_history(self) -> None:
+        """Load the next page of history in the background.
+
+        Does nothing when history is complete or a page is already on its way.
+        """
+        if (self._repo is None or self._history_complete
+                or self._more_pending or self._loading_more):
+            return
+        self._more_pending = True
+        if not self._running:
+            self._start_next()
+
     def _start_next(self) -> None:
         parts, self._pending = self._pending, Refresh(0)
-        repo, generation, relay = self._repo, self._generation, self._relay
+        more, self._more_pending = self._more_pending, False
+        # The first load of a repo starts from nothing, not the old repo's history.
+        loaded = () if Refresh.HISTORY in self._forced else self.history
+        job = _Job(self._repo, self._generation, parts, loaded, more)  # type: ignore[arg-type]
+        relay = self._relay
         self._running = True
+        self._loading_more = more
         self._set_busy(True)
-        self._pool.start(lambda: relay.done.emit(_run_job(repo, parts, generation)))
+        self._pool.start(lambda: relay.done.emit(_run_job(job)))
 
     def _on_done(self, result: _JobResult) -> None:
-        self._running = False
+        # _running stays True while the results are emitted: a listener that
+        # asks for more (a refresh, the next page) only queues it, and it
+        # starts below. Otherwise it would start mid-way and busy would lie.
+        self._loading_more = False  # this page has arrived; the next may be asked for
         if result.generation == self._generation:
+            if result.history_complete is not None:  # before history_changed fires
+                self._history_complete = result.history_complete
             for part, value in result.values:
                 self._store(part, value)
             if result.error is not None:
                 self.error_occurred.emit(result.error)
             self._store_forced_as_empty()  # parts a failed first load left behind
-        if self._pending and self._repo is not None:
+        self._running = False
+        if (self._pending or self._more_pending) and self._repo is not None:
             self._start_next()
         else:
             self._pending = Refresh(0)
+            self._more_pending = False
             self._set_busy(False)
 
     def _set_busy(self, busy: bool) -> None:
@@ -195,6 +232,8 @@ class RepoSession(QObject):
     def _store_forced_as_empty(self) -> None:
         for part in _PARTS:
             if part in self._forced:
+                if part is Refresh.HISTORY:
+                    self._history_complete = True
                 self._store(part, _EMPTY[part])
 
 
@@ -202,9 +241,19 @@ class RepoSession(QObject):
 
 
 @dataclass(frozen=True)
+class _Job:
+    repo: Repo
+    generation: int
+    parts: Refresh
+    loaded: tuple[Commit, ...]  # history so far; shared safely, it's immutable
+    more: bool  # add a page of history
+
+
+@dataclass(frozen=True)
 class _JobResult:
     generation: int
     values: tuple[tuple[Refresh, object], ...]  # in _PARTS order
+    history_complete: bool | None = None  # None: history wasn't loaded
     error: str | None = None
 
 
@@ -214,19 +263,26 @@ class _Relay(QObject):
     done = Signal(object)  # _JobResult
 
 
-def _run_job(repo: Repo, parts: Refresh, generation: int) -> _JobResult:
+def _run_job(job: _Job) -> _JobResult:
     values: list[tuple[Refresh, object]] = []
+    complete: bool | None = None
     for part in _PARTS:
-        if part not in parts:
+        wanted = part in job.parts or (part is Refresh.HISTORY and job.more)
+        if not wanted:
             continue
         try:
-            values.append((part, _load(repo, part)))
+            if part is Refresh.HISTORY:
+                value, complete = _load_history(job)
+            else:
+                value = _load(job.repo, part)
         except GitError as exc:
-            return _JobResult(generation, tuple(values), str(exc))
+            return _JobResult(job.generation, tuple(values), complete, str(exc))
         except Exception as exc:  # a bug must not leave the session busy forever
             log.exception("Loading %s failed", part)
-            return _JobResult(generation, tuple(values), f"Unexpected error: {exc}")
-    return _JobResult(generation, tuple(values))
+            return _JobResult(job.generation, tuple(values), complete,
+                              f"Unexpected error: {exc}")
+        values.append((part, value))
+    return _JobResult(job.generation, tuple(values), complete)
 
 
 def _load(repo: Repo, part: Refresh) -> object:
@@ -234,8 +290,35 @@ def _load(repo: Repo, part: Refresh) -> object:
         return repo.current_branch()
     if part is Refresh.BRANCHES:
         return tuple(repo.branches())
-    if part is Refresh.HISTORY:
-        return tuple(repo.log(HISTORY_LIMIT))
     if part is Refresh.STATUS:
         return tuple(repo.status())
     raise ValueError(f"not a single part: {part!r}")
+
+
+def _load_history(job: _Job) -> tuple[tuple[Commit, ...], bool | None]:
+    """The commits to show, and whether they reach the first commit (None: unknown).
+
+    Reads ask git for one commit more than they keep, to know whether there
+    are more.
+    """
+    loaded, page = job.loaded, HISTORY_PAGE
+    if loaded and job.repo.head_sha() == loaded[0].sha:
+        # HEAD hasn't moved, so the loaded commits are still exactly right.
+        if not job.more:
+            return loaded, None
+        new = job.repo.log(page + 1, skip=len(loaded))
+        return loaded + tuple(new[:page]), len(new) <= page
+    # Reload. Read a page more than was loaded, for commits that are new on
+    # top, then keep everything down to the oldest commit loaded before, so
+    # what the user scrolled to and selected is still there.
+    pages = max(1, -(-len(loaded) // page)) * page  # loaded, in whole pages
+    extra = page if job.more else 0
+    want = pages + (page if loaded else 0) + extra
+    commits = job.repo.log(want + 1)
+    keep = pages + extra
+    if loaded:
+        oldest = loaded[-1].sha
+        found = next((i for i, c in enumerate(commits) if c.sha == oldest), -1)
+        if found >= 0:
+            keep = min(want, found + 1 + extra)
+    return tuple(commits[:keep]), len(commits) <= keep

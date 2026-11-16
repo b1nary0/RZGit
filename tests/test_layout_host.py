@@ -106,12 +106,12 @@ class LayoutHostTests(unittest.TestCase):
         self.host.apply(DEFAULT_LAYOUT)
         self.show()
         history = self.host.panels["history"]
-        history._tree.setCurrentItem(history._tree.topLevelItem(1))
+        history._view.setCurrentIndex(history._model.index(1, 0))
 
         self.host.apply(TabsNode((PanelNode("files"), PanelNode("history")), current=1))
         flush_deletes()
         self.app.processEvents()
-        self.assertEqual(history._tree.currentItem().text(0), "first")
+        self.assertEqual(history._view.currentIndex().data(), "first")
         self.assertEqual(self.ctx.selection.commit.subject, "first")
         self.assertTrue(history.isVisible())
         self.assertFalse(self.host.panels["files"].isVisible())  # the other tab

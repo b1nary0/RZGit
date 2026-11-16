@@ -152,32 +152,36 @@ QLabel[role="section-header"] {
     padding: 7px 8px 4px 8px;
 }
 
-/* ---- lists & trees -------------------------------------------------- */
-QListView, QTreeView {
+/* ---- lists, trees & tables ------------------------------------------ */
+QListView, QTreeView, QTableView {
     border: none;
     outline: 0;
     background: $content_bg;
     show-decoration-selected: 1;
 }
-QWidget[surface="sidebar"] QListView, QWidget[surface="sidebar"] QTreeView {
+QWidget[surface="sidebar"] QListView, QWidget[surface="sidebar"] QTreeView,
+QWidget[surface="sidebar"] QTableView {
     background: $sidebar_bg;
 }
-QListView::item, QTreeView::item {
+QListView::item, QTreeView::item, QTableView::item {
     padding: ${row_padding}px 4px;
     min-height: ${row_min_height}px;
     border: none;
 }
-QListView::item:hover:!selected, QTreeView::item:hover:!selected {
+QListView::item:hover:!selected, QTreeView::item:hover:!selected,
+QTableView::item:hover:!selected {
     background: $hover;
 }
-QListView::item:selected, QTreeView::item:selected {
+QListView::item:selected, QTreeView::item:selected, QTableView::item:selected {
     background: $selection;
     color: $text;
 }
-QWidget[surface="content"] QTreeView::item:hover:!selected {
+QWidget[surface="content"] QTreeView::item:hover:!selected,
+QWidget[surface="content"] QTableView::item:hover:!selected {
     background: $content_hover;
 }
-QWidget[surface="content"] QTreeView::item:selected {
+QWidget[surface="content"] QTreeView::item:selected,
+QWidget[surface="content"] QTableView::item:selected {
     background: $content_selection;
 }
 QHeaderView {

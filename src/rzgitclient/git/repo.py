@@ -68,12 +68,15 @@ class Repo:
         return self.root.name
 
     def has_commits(self) -> bool:
+        return self.head_sha() is not None
+
+    def head_sha(self) -> str | None:
+        """The commit HEAD points at, or None before the first commit."""
         try:
-            self.git("rev-parse", "--verify", "-q", "HEAD")
-            return True
+            return self.git("rev-parse", "--verify", "-q", "HEAD").strip()
         except GitError as exc:
             if exc.returncode == 1:  # -q: HEAD doesn't resolve yet
-                return False
+                return None
             raise
 
     def current_branch(self) -> str | None:
@@ -95,11 +98,12 @@ class Repo:
             result.append(Branch(name=name, is_current=head == "*"))
         return result
 
-    def log(self, limit: int = 500) -> list[Commit]:
+    def log(self, limit: int = 500, skip: int = 0) -> list[Commit]:
+        """Up to ``limit`` commits reachable from HEAD, newest first, after ``skip``."""
         if not self.has_commits():
             return []
         fmt = "%H%x1f%an%x1f%aI%x1f%s%x1e"
-        out = self.git("log", f"--format={fmt}", f"-n{limit}")
+        out = self.git("log", f"--format={fmt}", f"-n{limit}", f"--skip={skip}")
         commits = []
         for record in out.split("\x1e"):
             record = record.strip("\n")
