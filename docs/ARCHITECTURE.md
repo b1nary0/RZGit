@@ -1071,11 +1071,22 @@ class AppTheme:
 
 LIGHT_THEME = AppTheme(...)
 DARK_THEME = AppTheme(..., dark=True)
+LIGHT_CB_THEME = dataclasses.replace(LIGHT_THEME, ...)    # colour-blind variants
+DARK_CB_THEME = dataclasses.replace(DARK_THEME, ...)
+def colour_blind_theme(base: AppTheme) -> AppTheme   # LIGHT_THEME → LIGHT_CB_THEME, …
 ```
 
-- **Two themes:** `LIGHT_THEME` and `DARK_THEME`. Both set every token; neither derives
+- **Two base themes:** `LIGHT_THEME` and `DARK_THEME`. Both set every token; neither derives
   from the other. `dark` tells Qt which colour scheme the theme is, so Fusion's own
   drawing (frames, arrows) and native dialogs match it.
+- **Colour-blind variants** (RZG-33): `LIGHT_CB_THEME` and `DARK_CB_THEME` derive from
+  their base with `dataclasses.replace`, so they share every token except those that tell
+  kinds apart: `status.*`, `diff_added*` / `diff_removed*`, `diff_line_button*` and
+  `warning`. Those use one palette built on blue and orange instead of green and red
+  (Okabe–Ito): added is blue, deleted orange. Tests simulate deuteranopia, protanopia and
+  tritanopia (Machado et al. 2009) and require a minimum ΔE between the pairs that must
+  differ, and at least the base theme's contrast. Their `name` is the base's plus
+  ", colour-blind".
 - **Colours live only here.** No module outside `ui/theme/` writes a colour (a `"#rrggbb"`
   string or a Qt named colour); `tests/test_architecture.py` checks it. Panels take theirs
   from the theme's tokens, so a new theme needs no panel changes.
@@ -1128,6 +1139,11 @@ what settings store). `set_mode(m)` picks the theme for it; `mode` is the curren
 - `ThemeManager(app, mode=m)` starts in a mode, so the first theme applied is already the
   right one: the window never shows light first.
 
+**Colour-blind colours:** `colour_blind` is a flag next to the mode, in every mode. The
+mode picks the base theme and the flag picks its variant (`colour_blind_theme(base)`, §7.1).
+`set_colour_blind(on)` switches live, and `ThemeManager(app, mode=m, colour_blind=b)` starts
+with it.
+
 **Performance rule:** one stylesheet for the whole app, never per-widget `setStyleSheet`.
 Per-widget sheets are slow to apply and scatter the rules.
 
@@ -1148,6 +1164,10 @@ Per-widget sheets are slow to apply and scatter the rules.
   current mode, calls `ctx.theme.set_mode` when one is triggered, and saves it on close
   (`AppSettings.theme_mode`, `"system"` by default). app.py reads it before the window is
   built. Switching is live.
+  Below them, **Colour-blind Friendly Colours** (`AppActions.colour_blind`) is checkable:
+  MainWindow checks it from `ctx.theme.colour_blind`, calls `set_colour_blind` when it's
+  toggled, and saves it on close (`AppSettings.colour_blind`, off by default), read by
+  app.py with the mode.
 - **Staging actions:** Stage (Ctrl+S) and Unstage (Ctrl+U) act on the selected rows of
   that kind (`selection.files`), Discard Changes… (Ctrl+Backspace) on the selected unstaged
   rows, Stage All (Ctrl+Shift+S) and Unstage All (Ctrl+Shift+U) on the whole status. Each is

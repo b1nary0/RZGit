@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 
 from PySide6.QtGui import QColor, QFont, QPalette
@@ -283,3 +284,69 @@ DARK_THEME = AppTheme(
         untracked="#2ebdc9",
     ),
 )
+
+
+# Colour-blind friendly variants (RZG-33): the base theme with the colours that tell kinds
+# apart swapped for blue and orange (Okabe–Ito) in place of green and red. Every other
+# token is the base's. Checked under simulated deuteranopia, protanopia and tritanopia.
+
+def _colour_blind_variant(base: AppTheme, status: StatusColors, **colors: str) -> AppTheme:
+    return dataclasses.replace(base, name=f"{base.name}, colour-blind", status=status,
+                               colors=dataclasses.replace(base.colors, **colors))
+
+
+LIGHT_CB_THEME = _colour_blind_variant(
+    LIGHT_THEME,
+    StatusColors(
+        modified="#8f6a00",  # dark gold
+        added="#0072b2",  # blue
+        deleted="#b84c00",  # vermillion
+        renamed="#8250df",  # violet
+        copied="#8250df",
+        type_changed="#8f6a00",
+        conflict="#7a1010",  # dark red: apart from gold and violet by lightness
+        untracked="#007079",
+    ),
+    warning="#b84c00",
+    diff_added_bg="#c6e1fb",
+    diff_added_word="#9fc8f2",
+    diff_added_selected_bg="#b0d4f7",
+    diff_removed_bg="#fbe0c4",
+    diff_removed_word="#f5bd85",
+    diff_removed_selected_bg="#f7cc9f",
+    diff_line_button="#0a6ab0",
+    diff_line_button_hover="#08568f",
+    diff_line_button_border="#063e68",
+)
+
+
+DARK_CB_THEME = _colour_blind_variant(
+    DARK_THEME,
+    StatusColors(
+        modified="#f0e442",  # yellow
+        added="#56b4e9",  # sky blue
+        deleted="#e69f00",  # orange
+        renamed="#c58cff",  # violet
+        copied="#c58cff",
+        type_changed="#f0e442",
+        conflict="#ff7a45",  # vermillion
+        untracked="#2ebdc9",
+    ),
+    warning="#f0e442",
+    diff_added_bg="#12364e",
+    diff_added_word="#1d5479",
+    diff_added_selected_bg="#18435f",
+    diff_removed_bg="#42301c",
+    diff_removed_word="#6b4a1f",
+    diff_removed_selected_bg="#533c22",
+    diff_line_button="#2a73b8",
+    diff_line_button_hover="#3080c4",
+)
+
+
+def colour_blind_theme(base: AppTheme) -> AppTheme:
+    """The colour-blind variant of a base theme; any other theme is returned as is."""
+    for plain, variant in ((LIGHT_THEME, LIGHT_CB_THEME), (DARK_THEME, DARK_CB_THEME)):
+        if base == plain:
+            return variant
+    return base

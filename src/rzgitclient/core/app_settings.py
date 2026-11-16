@@ -22,6 +22,7 @@ _WINDOW_GEOMETRY = "window/geometry"
 _SIDE_BY_SIDE_DIFF = "diff/side_by_side"
 _FILE_TREE = "files/tree"
 _THEME_MODE = "theme/mode"
+_COLOUR_BLIND = "theme/colour_blind"
 _COMMIT_DRAFTS = "commit/drafts"
 _SAVED_LAYOUTS = "layouts/saved"
 
@@ -106,6 +107,15 @@ class AppSettings:
     @theme_mode.setter
     def theme_mode(self, mode: str) -> None:
         self._set(_THEME_MODE, str(mode))
+
+    @property
+    def colour_blind(self) -> bool:
+        """Whether the theme uses its colour-blind friendly colours (off by default)."""
+        return self._settings.value(_COLOUR_BLIND, False, bool)
+
+    @colour_blind.setter
+    def colour_blind(self, on: bool) -> None:
+        self._set(_COLOUR_BLIND, bool(on))
 
     @property
     def commit_drafts(self) -> dict[str, str]:

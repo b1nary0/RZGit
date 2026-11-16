@@ -26,7 +26,8 @@ def main(argv: list[str] | None = None) -> int:
     app.setDesktopFileName("rzgitclient")
     settings = AppSettings()
     # The saved theme, before any widget exists: the window never shows another first.
-    theme = ThemeManager(app, mode=ThemeMode(settings.theme_mode))
+    theme = ThemeManager(app, mode=ThemeMode(settings.theme_mode),
+                         colour_blind=settings.colour_blind)
     session = RepoSession()
     # The window follows the repository by itself (spec §4.3).
     watcher = RepoWatcher(session)

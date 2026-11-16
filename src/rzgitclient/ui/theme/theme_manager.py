@@ -11,7 +11,8 @@ from enum import StrEnum
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import QApplication
 
-from rzgitclient.ui.theme.app_theme import DARK_THEME, LIGHT_THEME, AppTheme
+from rzgitclient.ui.theme.app_theme import (DARK_THEME, LIGHT_THEME, AppTheme,
+                                            colour_blind_theme)
 
 
 class ThemeMode(StrEnum):
@@ -26,8 +27,10 @@ class ThemeManager(QObject):
     theme_changed = Signal(object)  # AppTheme
 
     def __init__(self, app: QApplication, theme: AppTheme = LIGHT_THEME,
-                 parent: QObject | None = None, *, mode: ThemeMode | None = None):
-        """Apply ``theme``, or the theme for ``mode`` when one is given."""
+                 parent: QObject | None = None, *, mode: ThemeMode | None = None,
+                 colour_blind: bool = False):
+        """Apply ``theme``, or the theme for ``mode`` when one is given, as its
+        colour-blind variant if ``colour_blind``."""
         super().__init__(parent)
         self._app = app
         self._hints = app.styleHints()
@@ -36,7 +39,8 @@ class ThemeManager(QObject):
         app.setStyle("Fusion")
         self._hints.colorSchemeChanged.connect(self._on_color_scheme_changed)
         self._mode = ThemeMode.DARK if theme.dark else ThemeMode.LIGHT
-        self._current = theme
+        self._colour_blind = colour_blind
+        self._current = self._variant(theme)
         if mode is not None:
             self._mode = mode
             self._current = self._theme_for_mode()
@@ -49,6 +53,15 @@ class ThemeManager(QObject):
     @property
     def mode(self) -> ThemeMode:
         return self._mode
+
+    @property
+    def colour_blind(self) -> bool:
+        return self._colour_blind
+
+    def set_colour_blind(self, on: bool) -> None:
+        """Switch to the colour-blind variant of the mode's theme now, or back."""
+        self._colour_blind = bool(on)
+        self.set_theme(self._theme_for_mode())
 
     def set_mode(self, mode: ThemeMode) -> None:
         """Switch to the theme for ``mode`` now; SYSTEM keeps following the desktop."""
@@ -68,11 +81,13 @@ class ThemeManager(QObject):
             if hasattr(self._hints, "unsetColorScheme"):  # Qt >= 6.8
                 self._hints.unsetColorScheme()  # so colorScheme() is the desktop's
             return self._theme_for_scheme(self._hints.colorScheme())
-        return DARK_THEME if self._mode is ThemeMode.DARK else LIGHT_THEME
+        return self._variant(DARK_THEME if self._mode is ThemeMode.DARK else LIGHT_THEME)
 
-    @staticmethod
-    def _theme_for_scheme(scheme: Qt.ColorScheme) -> AppTheme:
-        return DARK_THEME if scheme == Qt.ColorScheme.Dark else LIGHT_THEME
+    def _theme_for_scheme(self, scheme: Qt.ColorScheme) -> AppTheme:
+        return self._variant(DARK_THEME if scheme == Qt.ColorScheme.Dark else LIGHT_THEME)
+
+    def _variant(self, base: AppTheme) -> AppTheme:
+        return colour_blind_theme(base) if self._colour_blind else base
 
     def _on_color_scheme_changed(self, scheme: Qt.ColorScheme) -> None:
         if self._mode is ThemeMode.SYSTEM:

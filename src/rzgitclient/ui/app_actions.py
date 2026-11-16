@@ -67,6 +67,9 @@ class AppActions(QObject):
             action = QAction(text, self._theme_group)
             action.setCheckable(True)
             self.theme_modes[mode] = action
+        # ... and below them, colour-blind friendly colours for whichever it is.
+        self.colour_blind = QAction("Colour-blind &Friendly Colours", self)
+        self.colour_blind.setCheckable(True)
 
         # Staging (spec §8): on the selected rows of their kind, or on everything.
         self.stage = self._action("list-add", "&Stage", "Ctrl+S")

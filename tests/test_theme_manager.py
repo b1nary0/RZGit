@@ -5,7 +5,7 @@ from unittest import mock
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPalette
 
-from rzgitclient.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
+from rzgitclient.ui.theme.app_theme import DARK_CB_THEME, DARK_THEME, LIGHT_CB_THEME, LIGHT_THEME
 from rzgitclient.ui.theme.theme_manager import ThemeManager, ThemeMode
 from tests.support import qt_app
 
@@ -108,6 +108,37 @@ class ThemeModeTests(unittest.TestCase):
         self.manager.set_mode(ThemeMode.LIGHT)
         self.hints.colorSchemeChanged.emit(Qt.ColorScheme.Dark)
         self.assertIs(self.manager.current, LIGHT_THEME)  # no longer following
+
+    def test_colour_blind_switches_live_in_every_mode(self):
+        self.assertFalse(self.manager.colour_blind)
+        self.manager.set_colour_blind(True)
+        self.assertTrue(self.manager.colour_blind)
+        self.assertEqual(self.emitted, [LIGHT_CB_THEME])
+        self.assertEqual(self.app.styleSheet(), LIGHT_CB_THEME.stylesheet())
+        self.manager.set_colour_blind(True)
+        self.assertEqual(len(self.emitted), 1)  # already on
+        self.manager.set_mode(ThemeMode.DARK)
+        self.assertIs(self.manager.current, DARK_CB_THEME)  # the flag stays with the mode
+        self.manager.set_colour_blind(False)
+        self.assertIs(self.manager.current, DARK_THEME)
+        self.assertEqual(self.emitted, [LIGHT_CB_THEME, DARK_CB_THEME, DARK_THEME])
+
+    def test_colour_blind_follows_the_desktop_in_system(self):
+        self.manager.set_mode(ThemeMode.SYSTEM)
+        self.manager.set_colour_blind(True)
+        self.hints.colorSchemeChanged.emit(Qt.ColorScheme.Dark)
+        self.assertIs(self.manager.current, DARK_CB_THEME)
+        self.hints.colorSchemeChanged.emit(Qt.ColorScheme.Light)
+        self.assertIs(self.manager.current, LIGHT_CB_THEME)
+        self.assertEqual(self.schemes[-1], None)  # still following the desktop
+
+    def test_starting_colour_blind_applies_the_variant_first(self):
+        manager = ThemeManager(self.app, mode=ThemeMode.DARK, colour_blind=True)
+        self.assertTrue(manager.colour_blind)
+        self.assertIs(manager.current, DARK_CB_THEME)
+        self.assertEqual(self.app.styleSheet(), DARK_CB_THEME.stylesheet())
+        self.assertIs(ThemeManager(self.app, LIGHT_THEME, colour_blind=True).current,
+                      LIGHT_CB_THEME)
 
     def test_the_dark_palette_has_dark_bevels(self):
         palette = DARK_THEME.palette()

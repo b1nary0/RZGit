@@ -43,6 +43,12 @@ class AppActionsTests(unittest.TestCase):
         modes[ThemeMode.SYSTEM].trigger()
         self.assertEqual([m for m, a in modes.items() if a.isChecked()], [ThemeMode.SYSTEM])
 
+    def test_colour_blind_is_checkable_and_off(self):
+        action = self.actions.colour_blind
+        self.assertEqual(action.text(), "Colour-blind &Friendly Colours")
+        self.assertTrue(action.isCheckable())
+        self.assertFalse(action.isChecked())
+
     def test_refresh_enabled_only_with_a_repo(self):
         self.assertFalse(self.actions.refresh.isEnabled())
         self.session.open(self.repo)

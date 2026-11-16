@@ -20,7 +20,7 @@ from rzgitclient.ui.layout.layout_model import (
 )
 from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
 from rzgitclient.ui.main_window import MainWindow, commit_summary
-from rzgitclient.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
+from rzgitclient.ui.theme.app_theme import DARK_CB_THEME, DARK_THEME, LIGHT_THEME
 from rzgitclient.ui.theme.theme_manager import ThemeManager, ThemeMode
 from tests.support import commit_file, make_panel_context, make_repo, qt_app, wait_idle
 
@@ -142,13 +142,36 @@ class MainWindowTests(unittest.TestCase):
         actions = window.ctx.actions.theme_modes
         view = next(a.menu() for a in window.menuBar().actions() if a.text() == "&View")
         theme_menu = next(a.menu() for a in view.actions() if a.text() == "&Theme")
-        self.assertEqual(theme_menu.actions(), list(actions.values()))
+        self.assertEqual(theme_menu.actions()[:3], list(actions.values()))
+        self.assertTrue(theme_menu.actions()[3].isSeparator())
+        self.assertEqual(theme_menu.actions()[4:], [window.ctx.actions.colour_blind])
         self.assertTrue(actions[ThemeMode.LIGHT].isChecked())  # the context's theme
         actions[ThemeMode.DARK].trigger()
         self.assertIs(window.ctx.theme.current, DARK_THEME)
         self.assertEqual(self.app.styleSheet(), DARK_THEME.stylesheet())
         self.quit(window)
         self.assertEqual(AppSettings(self.settings_path).theme_mode, "dark")
+
+    def test_colour_blind_colours_switch_live_and_are_remembered(self):
+        self.addCleanup(ThemeManager, self.app, LIGHT_THEME)
+        window = self.start()
+        action = window.ctx.actions.colour_blind
+        self.assertFalse(action.isChecked())
+        window.ctx.theme.set_mode(ThemeMode.DARK)
+        action.trigger()
+        self.assertIs(window.ctx.theme.current, DARK_CB_THEME)
+        self.assertEqual(self.app.styleSheet(), DARK_CB_THEME.stylesheet())
+        self.quit(window)
+        self.assertTrue(AppSettings(self.settings_path).colour_blind)
+
+    def test_the_colour_blind_action_starts_checked_from_the_theme(self):
+        self.addCleanup(ThemeManager, self.app, LIGHT_THEME)
+        ctx = make_panel_context()
+        ctx.theme.set_colour_blind(True)
+        window = MainWindow(ctx, AppSettings(self.settings_path))
+        self.addCleanup(window.deleteLater)
+        self.addCleanup(window.session.shutdown)
+        self.assertTrue(ctx.actions.colour_blind.isChecked())
 
     def test_every_panel_is_dark_in_the_dark_theme(self):
         self.addCleanup(ThemeManager, self.app, LIGHT_THEME)

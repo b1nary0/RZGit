@@ -51,6 +51,11 @@ class AppSettingsTests(unittest.TestCase):
         self.settings.theme_mode = "dark"
         self.assertEqual(self.reopen().theme_mode, "dark")
 
+    def test_colour_blind_defaults_to_off_and_survives_a_reopen(self):
+        self.assertFalse(self.settings.colour_blind)
+        self.settings.colour_blind = True
+        self.assertTrue(self.reopen().colour_blind)
+
     def test_an_unknown_theme_mode_reads_as_system(self):
         self.settings.theme_mode = "purple"
         self.assertEqual(self.reopen().theme_mode, "system")

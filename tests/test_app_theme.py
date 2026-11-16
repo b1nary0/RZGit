@@ -4,29 +4,24 @@ import unittest
 
 from PySide6.QtGui import QColor, QFont, QPalette
 
-from rzgitclient.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
+from rzgitclient.ui.theme.app_theme import (DARK_CB_THEME, DARK_THEME, LIGHT_CB_THEME,
+                                            LIGHT_THEME, colour_blind_theme)
 from rzgitclient.ui.theme.style_roles import Role, Surface
 from rzgitclient.ui.theme.theme_stylesheet import template_values
+from tests.colour_vision import VISIONS, contrast, delta_e, min_delta_e
 from tests.support import qt_app
 
 
 THEMES = (LIGHT_THEME, DARK_THEME)
+VARIANTS = ((LIGHT_THEME, LIGHT_CB_THEME), (DARK_THEME, DARK_CB_THEME))
+ALL_THEMES = (*THEMES, LIGHT_CB_THEME, DARK_CB_THEME)
 
 
-def contrast(a: str, b: str) -> float:
-    """WCAG contrast ratio of two #rrggbb colours."""
-    def luminance(hex_colour: str) -> float:
-        channels = [int(hex_colour[i:i + 2], 16) / 255 for i in (1, 3, 5)]
-        r, g, b = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
-                   for c in channels]
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b
-    hi, lo = sorted((luminance(a), luminance(b)), reverse=True)
-    return (hi + 0.05) / (lo + 0.05)
 
 
 class AppThemeTests(unittest.TestCase):
     def test_stylesheet_has_no_unreplaced_placeholders(self):
-        for theme in THEMES:
+        for theme in ALL_THEMES:
             self.assertNotIn("$", theme.stylesheet(), theme.name)
 
     def test_field_names_unique_across_groups(self):
@@ -43,14 +38,14 @@ class AppThemeTests(unittest.TestCase):
             self.assertIn(f'[role="{role}"]', qss)
 
     def test_section_header_has_its_own_background(self):
-        for theme in THEMES:
+        for theme in ALL_THEMES:
             rule = re.search(r'QLabel\[role="section-header"\] \{(.*?)\}',
                              theme.stylesheet(), re.S)
             self.assertIsNotNone(rule)
             self.assertIn(f"background: {theme.colors.header_bg};", rule.group(1))
 
     def test_colours_are_valid_hex(self):
-        for theme in THEMES:
+        for theme in ALL_THEMES:
             for group in (theme.colors, theme.status):
                 for name, value in dataclasses.asdict(group).items():
                     self.assertRegex(value, r"^#[0-9a-f]{6}$", f"{theme.name}.{name}")
@@ -117,6 +112,100 @@ class AppThemeTests(unittest.TestCase):
         font = LIGHT_THEME.mono_font()
         self.assertEqual(font.styleHint(), QFont.StyleHint.Monospace)
         self.assertEqual(font.pointSizeF(), LIGHT_THEME.fonts.ui_point_size)
+
+
+# The colour tokens a colour-blind variant changes (spec §7.1); every other is its base's.
+CB_COLOURS = {"warning", "diff_added_bg", "diff_added_word", "diff_added_selected_bg",
+              "diff_removed_bg", "diff_removed_word", "diff_removed_selected_bg",
+              "diff_line_button", "diff_line_button_hover", "diff_line_button_border",
+              "diff_line_button_text"}
+# Pairs that must stay apart however the colours are seen, and by how much (CIEDE2000).
+STATUS_PAIRS = (("added", "deleted", 30), ("modified", "renamed", 12),
+                ("modified", "conflict", 12), ("renamed", "conflict", 12))
+DIFF_PAIRS = (("diff_added_bg", "diff_removed_bg"), ("diff_added_word", "diff_removed_word"),
+              ("diff_added_selected_bg", "diff_removed_selected_bg"))
+
+
+class ColourBlindThemeTests(unittest.TestCase):
+    """The colour-blind friendly variants (RZG-33), under simulated colour blindness."""
+
+    def test_a_variant_is_its_base_but_for_the_colours_that_tell_kinds_apart(self):
+        for base, variant in VARIANTS:
+            self.assertEqual(variant.name, f"{base.name}, colour-blind")
+            self.assertEqual((variant.dark, variant.fonts, variant.metrics),
+                             (base.dark, base.fonts, base.metrics))
+            changed = {name for name, value in dataclasses.asdict(variant.colors).items()
+                       if value != getattr(base.colors, name)}
+            self.assertLessEqual(changed, CB_COLOURS, variant.name)
+            for name in ("added", "deleted", "modified", "conflict"):
+                self.assertNotEqual(getattr(variant.status, name), getattr(base.status, name))
+
+    def test_colour_blind_theme_picks_the_variant(self):
+        self.assertIs(colour_blind_theme(LIGHT_THEME), LIGHT_CB_THEME)
+        self.assertIs(colour_blind_theme(DARK_THEME), DARK_CB_THEME)
+        self.assertIs(colour_blind_theme(DARK_CB_THEME), DARK_CB_THEME)
+
+    def test_the_simulation_sees_the_problem_in_the_base_themes(self):
+        # Under deuteranopia the base themes' added and deleted are hard to tell apart.
+        for base in THEMES:
+            self.assertLess(delta_e(base.status.added, base.status.deleted, "deuteranopia"), 12)
+            self.assertLess(min_delta_e(base.colors.diff_added_bg, base.colors.diff_removed_bg),
+                            8)
+
+    def test_kinds_stay_apart_under_every_kind_of_colour_vision(self):
+        for _base, variant in VARIANTS:
+            s, c = variant.status, variant.colors
+            for a, b, minimum in STATUS_PAIRS:
+                for vision in VISIONS:
+                    self.assertGreaterEqual(delta_e(getattr(s, a), getattr(s, b), vision),
+                                            minimum, (variant.name, a, b, vision))
+            for a, b in DIFF_PAIRS:
+                self.assertGreaterEqual(min_delta_e(getattr(c, a), getattr(c, b)), 20,
+                                        (variant.name, a, b))
+            for name in ("diff_added_bg", "diff_removed_bg"):  # a changed line vs context
+                self.assertGreaterEqual(min_delta_e(getattr(c, name), c.content_bg), 8,
+                                        (variant.name, name))
+            self.assertGreaterEqual(min_delta_e(c.warning, c.text_muted), 20, variant.name)
+            for name, colour in dataclasses.asdict(s).items():  # not mistaken for plain text
+                self.assertGreaterEqual(min_delta_e(colour, c.text), 12, (variant.name, name))
+
+    def test_contrast_is_at_least_the_base_themes(self):
+        for base, variant in VARIANTS:
+            s, c, bc = variant.status, variant.colors, base.colors
+            for background in ("sidebar_bg", "content_bg", "selection"):
+                bg = getattr(c, background)
+                floor = max(3, min(contrast(v, bg) for v in dataclasses.asdict(base.status).values()))
+                for name, colour in dataclasses.asdict(s).items():
+                    self.assertGreaterEqual(contrast(colour, bg), floor,
+                                            (variant.name, name, background))
+            for kind in ("bg", "word", "selected_bg"):
+                added, removed = f"diff_added_{kind}", f"diff_removed_{kind}"
+                floor = min(contrast(bc.text, getattr(bc, added)),
+                            contrast(bc.text, getattr(bc, removed)))
+                for name in (added, removed):
+                    self.assertGreaterEqual(contrast(c.text, getattr(c, name)), floor,
+                                            (variant.name, name))
+            self.assertGreaterEqual(contrast(c.warning, c.content_bg),
+                                    contrast(bc.warning, bc.content_bg), variant.name)
+
+    def test_line_buttons_are_readable_and_outlined(self):
+        for _base, variant in VARIANTS:
+            c = variant.colors
+            for fill in (c.diff_line_button, c.diff_line_button_hover):
+                self.assertGreaterEqual(contrast(c.diff_line_button_text, fill), 4,
+                                        (variant.name, fill))
+            for background in (c.content_bg, c.diff_added_bg, c.diff_removed_bg):
+                self.assertGreaterEqual(contrast(c.diff_line_button_border, background), 3,
+                                        (variant.name, background))
+
+    def test_selected_lines_are_a_stronger_shade_and_readable(self):
+        for _base, variant in VARIANTS:
+            c = variant.colors
+            for plain, selected in ((c.diff_added_bg, c.diff_added_selected_bg),
+                                    (c.diff_removed_bg, c.diff_removed_selected_bg)):
+                self.assertGreaterEqual(contrast(plain, selected), 1.1, (variant.name, selected))
+                self.assertLess(contrast(plain, selected), 1.6, (variant.name, selected))
+                self.assertGreaterEqual(contrast(c.text, selected), 4.5, (variant.name, selected))
 
 
 if __name__ == "__main__":

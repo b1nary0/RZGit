@@ -31,6 +31,7 @@ class MainWindow(QMainWindow):
         ctx.actions.side_by_side_diff.setChecked(settings.side_by_side_diff)
         ctx.actions.file_tree.setChecked(settings.file_tree)
         ctx.actions.theme_modes[ctx.theme.mode].setChecked(True)
+        ctx.actions.colour_blind.setChecked(ctx.theme.colour_blind)
         self._build_ui()
         self._build_actions()
 
@@ -74,6 +75,9 @@ class MainWindow(QMainWindow):
         for mode, action in actions.theme_modes.items():
             theme_menu.addAction(action)
             action.triggered.connect(lambda _checked=False, mode=mode: self.ctx.theme.set_mode(mode))
+        theme_menu.addSeparator()
+        theme_menu.addAction(actions.colour_blind)
+        actions.colour_blind.toggled.connect(self.ctx.theme.set_colour_blind)
         view_menu.addSeparator()
         view_menu.addAction(actions.reset_layout)
 
@@ -101,6 +105,7 @@ class MainWindow(QMainWindow):
         self.settings.side_by_side_diff = self.ctx.actions.side_by_side_diff.isChecked()
         self.settings.file_tree = self.ctx.actions.file_tree.isChecked()
         self.settings.theme_mode = self.ctx.theme.mode.value
+        self.settings.colour_blind = self.ctx.theme.colour_blind
         super().closeEvent(event)
 
     def discard_selected(self) -> None:
