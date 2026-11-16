@@ -6,22 +6,34 @@ import dataclasses
 from collections.abc import Mapping
 from types import MappingProxyType
 
-from PySide6.QtCore import Qt, Signal, Slot
-from PySide6.QtWidgets import QSplitter, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QRect, Qt, Signal, Slot
+from PySide6.QtGui import QDrag, QDropEvent
+from PySide6.QtWidgets import (
+    QApplication,
+    QSplitter,
+    QTabBar,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from rzgitclient.ui.layout.layout_model import (
     Anchor,
+    DropZone,
     LayoutNode,
     LayoutState,
     Orientation,
     PanelNode,
     SplitNode,
     TabsNode,
+    drop_zone,
     insert_panel,
+    move_panel,
     normalize,
     panel_ids,
     remove_panel,
 )
+from rzgitclient.ui.layout.drop_indicator import DropIndicator, zone_rect
 from rzgitclient.ui.layout.layout_presets import default_anchor
 from rzgitclient.ui.layout.panel_frame import PanelFrame
 from rzgitclient.ui.panels.panel import Panel, PanelContext
@@ -33,6 +45,9 @@ _QT_ORIENTATION = {
     Orientation.HORIZONTAL: Qt.Orientation.Horizontal,
     Orientation.VERTICAL: Qt.Orientation.Vertical,
 }
+PANEL_MIME = "application/x-rzgitclient-panel"  # a dragged panel's id (§6.2)
+_DRAG_EVENTS = frozenset({QEvent.Type.DragEnter, QEvent.Type.DragMove,
+                          QEvent.Type.DragLeave, QEvent.Type.Drop})
 
 
 class LayoutHost(QWidget):
@@ -58,6 +73,13 @@ class LayoutHost(QWidget):
         self._root: QWidget | None = None
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
+        # Drag and drop (§6.2): the press a drag may start from, whether QDrag.exec
+        # is running, and the tree to apply once it returns.
+        self._press: tuple[QPoint, str] | None = None
+        self._dragging = False
+        self._pending: LayoutNode | None = None
+        self._indicator = DropIndicator(ctx.theme, self)
+        self.setAcceptDrops(True)
 
     @property
     def panels(self) -> Mapping[str, Panel]:
@@ -131,6 +153,123 @@ class LayoutHost(QWidget):
             self._layout.addWidget(self._root)
         self.layout_changed.emit()
 
+    # ---- drag and drop (§6.2) ---------------------------------------------
+
+    def drag_panel(self, panel_id: str) -> None:
+        """Run a drag of ``panel_id``; a drop on a target moves it once the drag ends.
+
+        While it runs, the host filters the application's drag events: Qt sends
+        them only to the deepest widget that accepts drops (a text box), never on
+        to its parents, so the host sees them all this way.
+        """
+        mime = QMimeData()
+        mime.setData(PANEL_MIME, panel_id.encode())
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        self._dragging, self._pending = True, None
+        app = QApplication.instance()
+        app.installEventFilter(self)
+        try:
+            drag.exec(Qt.DropAction.MoveAction)
+        finally:
+            app.removeEventFilter(self)
+            self._dragging = False
+            self._indicator.hide()
+        # Only now: apply deletes the header or tab bar the drag started from.
+        tree, self._pending = self._pending, None
+        if tree is not None:
+            self.apply(tree, self._hidden)
+
+    def drop_target(self, panel_id: str, pos: QPoint) -> tuple[LayoutNode, QRect] | None:
+        """Dropping ``panel_id`` at ``pos`` (host coordinates): the new tree, and the
+        area the panel would take. None if ``pos`` isn't a target or nothing changes."""
+        dragged = self._panels.get(panel_id)
+        root = self.current_layout()
+        if dragged is None or not dragged.movable or root is None:
+            return None
+        pane = self._pane_at(pos, panel_id)
+        if pane is None:
+            return None
+        widget, target, on_tab_bar = pane
+        rect = QRect(widget.mapTo(self, QPoint(0, 0)), widget.size())
+        zone = DropZone.CENTER if on_tab_bar else drop_zone(
+            (pos.x() - rect.x()) / max(rect.width(), 1),
+            (pos.y() - rect.y()) / max(rect.height(), 1))
+        tree = move_panel(root, panel_id, target, zone)
+        return None if tree is root else (tree, zone_rect(rect, zone))
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        """Start a drag from a section header or a tab (installed in ``_build``),
+        and, while one runs, handle the drag events of every widget in the host."""
+        kind = event.type()
+        if kind in _DRAG_EVENTS:
+            if self._dragging and isinstance(watched, QWidget) \
+                    and (watched is self or self.isAncestorOf(watched)):
+                self._on_drag_event(watched, event)
+                return True
+            return False
+        if kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+            point = event.position().toPoint()
+            panel_id = _drag_source(watched, point)
+            self._press = (point, panel_id) if panel_id is not None else None
+        elif kind == QEvent.Type.MouseMove and self._press is not None \
+                and event.buttons() & Qt.MouseButton.LeftButton:
+            start, panel_id = self._press
+            if (event.position().toPoint() - start).manhattanLength() \
+                    >= QApplication.startDragDistance():
+                self._press = None
+                self.drag_panel(panel_id)
+                return True
+        elif kind == QEvent.Type.MouseButtonRelease:
+            self._press = None
+        return super().eventFilter(watched, event)
+
+    def _on_drag_event(self, receiver: QWidget, event: QEvent) -> None:
+        if event.type() == QEvent.Type.DragLeave:
+            self._indicator.hide()
+            return
+        assert isinstance(event, QDropEvent)  # also QDragEnterEvent and QDragMoveEvent
+        mime = event.mimeData()
+        if not mime.hasFormat(PANEL_MIME):
+            event.ignore()
+            return
+        panel_id = bytes(mime.data(PANEL_MIME).data()).decode()
+        pos = receiver.mapTo(self, event.position().toPoint())
+        move = self.drop_target(panel_id, pos)
+        is_drop = event.type() == QEvent.Type.Drop
+        if is_drop or move is None:
+            self._indicator.hide()
+        else:
+            self._indicator.setGeometry(move[1])
+            self._indicator.show()
+            self._indicator.raise_()
+        if move is None and event.type() != QEvent.Type.DragEnter:
+            event.ignore()  # not a target; an enter is still accepted so moves keep coming
+            return
+        event.setDropAction(Qt.DropAction.MoveAction)
+        event.accept()
+        if is_drop and move is not None:
+            self._pending = move[0]  # applied when drag_panel's QDrag.exec returns
+
+    def _pane_at(self, pos: QPoint, dragged: str) -> tuple[QWidget, str, bool] | None:
+        """The pane under ``pos``: its widget, the panel to drop beside, and whether
+        ``pos`` is on a tab bar. None over dividers, empty space or an unmovable panel."""
+        widget, on_tab_bar = self.childAt(pos), False
+        while widget is not None and widget is not self:
+            if isinstance(widget, QTabBar) and isinstance(widget.parentWidget(), _PanelTabs):
+                on_tab_bar = True
+            if isinstance(widget, PanelFrame):
+                panel = widget.panel
+                return (widget, panel.panel_id, False) if panel.movable else None
+            if isinstance(widget, _PanelTabs):
+                ids = [widget.widget(i).panel_id for i in range(widget.count())]
+                current = ids[widget.currentIndex()] if widget.currentIndex() >= 0 else dragged
+                others = [i for i in ids if i != dragged]
+                target = current if current != dragged else (others[0] if others else dragged)
+                return widget, target, on_tab_bar
+            widget = widget.parentWidget()
+        return None
+
     def current_layout(self) -> LayoutNode | None:
         """The applied tree with the splitter sizes and current tabs as they are now."""
         if self._tree is None:
@@ -200,7 +339,10 @@ class LayoutHost(QWidget):
     def _build(self, node: LayoutNode) -> QWidget:
         match node:
             case PanelNode():
-                return PanelFrame(self._panel(node.panel_id))
+                frame = PanelFrame(self._panel(node.panel_id))
+                if frame.panel.movable:
+                    frame.header.installEventFilter(self)
+                return frame
             case SplitNode():
                 splitter = QSplitter(_QT_ORIENTATION[node.orientation])
                 splitter.setChildrenCollapsible(False)
@@ -222,6 +364,7 @@ class LayoutHost(QWidget):
                 return splitter
             case TabsNode():
                 tabs = _PanelTabs()
+                tabs.tabBar().installEventFilter(self)
                 self._containers.append(tabs)
                 for child in node.children:
                     panel = self._panel(child.panel_id)
@@ -231,6 +374,18 @@ class LayoutHost(QWidget):
                 tabs.setCurrentIndex(node.current)
                 return tabs
         raise TypeError(f"not a layout node: {node!r}")
+
+
+def _drag_source(watched: QObject, pos: QPoint) -> str | None:
+    """The movable panel whose header or tab ``watched`` is (the tab at ``pos``)."""
+    parent = watched.parentWidget() if isinstance(watched, QWidget) else None
+    panel: Panel | None = None
+    if isinstance(parent, PanelFrame) and watched is parent.header:
+        panel = parent.panel
+    elif isinstance(watched, QTabBar) and isinstance(parent, _PanelTabs):
+        index = watched.tabAt(pos)
+        panel = parent.widget(index) if index >= 0 else None
+    return panel.panel_id if isinstance(panel, Panel) and panel.movable else None
 
 
 def _lend(sizes: list[int], index: int, size: int) -> list[int] | None:

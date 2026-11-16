@@ -2,10 +2,22 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QEvent, Qt
+from unittest import mock
+
+from PySide6.QtCore import QCoreApplication, QEvent, QMimeData, QPoint, QPointF, Qt
+from PySide6.QtGui import (
+    QColor,
+    QDrag,
+    QDragEnterEvent,
+    QDragLeaveEvent,
+    QDragMoveEvent,
+    QDropEvent,
+    QMouseEvent,
+)
+from PySide6.QtWidgets import QApplication
 from PySide6.QtWidgets import QSplitter, QTabWidget
 
-from rzgitclient.ui.layout.layout_host import LayoutHost
+from rzgitclient.ui.layout.layout_host import PANEL_MIME, LayoutHost
 from rzgitclient.ui.layout.layout_model import (
     LayoutState,
     Orientation,
@@ -343,6 +355,182 @@ class LayoutHostTests(unittest.TestCase):
         self.assertEqual(sum(read.children[1].sizes) + 1, 800)  # the 1px divider takes the rest
         self.assertEqual(sum(read.sizes) + 1, 600)
 
+
+class DragDropTests(unittest.TestCase):
+    """Moving panels by drag and drop (spec §6.2)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = qt_app()
+
+    def setUp(self):
+        self.ctx = make_panel_context()
+        self.host = LayoutHost(self.ctx)
+        self.host.resize(800, 600)
+        self.host.apply(SplitNode(H, (PanelNode("history"), PanelNode("files")), sizes=(400, 400)))
+        self.host.show()
+        self.app.processEvents()
+
+    def tearDown(self):
+        self.host.close()
+        self.host.deleteLater()
+        flush_deletes()
+
+    def pane(self, panel_id):
+        """The pane a panel sits in: its frame, or its tab group."""
+        widget = self.host.panels[panel_id].parentWidget()
+        return widget if isinstance(widget, PanelFrame) else widget.parentWidget()
+
+    def at(self, panel_id, fx, fy):
+        """A point in ``panel_id``'s pane, as fractions of its size, in host coordinates."""
+        pane = self.pane(panel_id)
+        return pane.mapTo(self.host, QPoint(int(pane.width() * fx), int(pane.height() * fy)))
+
+    def mime(self, panel_id):
+        data = QMimeData()
+        data.setData(PANEL_MIME, panel_id.encode())
+        return data
+
+    def send(self, cls, panel_id, pos):
+        """Deliver a drag event to the widget under ``pos``, as Qt does, so it
+        reaches the host by propagation."""
+        child = self.host.childAt(pos) or self.host
+        local = child.mapFrom(self.host, pos)
+        mime = self.mime(panel_id)
+        args = (Qt.DropAction.MoveAction, mime, Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier)
+        event = cls(QPointF(local), *args) if cls is QDropEvent else cls(local, *args)
+        QApplication.sendEvent(child, event)
+        return event
+
+    def drag_to(self, panel_id, pos):
+        self.send(QDragEnterEvent, panel_id, pos)
+        return self.send(QDragMoveEvent, panel_id, pos)
+
+    def drag(self, panel_id, during, result=Qt.DropAction.MoveAction):
+        """Run ``host.drag_panel`` with ``during`` in place of the user's drag."""
+        def run(_action):
+            during()
+            return result
+        with mock.patch.object(QDrag, "exec", side_effect=run):
+            self.host.drag_panel(panel_id)
+
+    def drop(self, panel_id, pos):
+        self.drag(panel_id, lambda: (self.drag_to(panel_id, pos),
+                                     self.send(QDropEvent, panel_id, pos)))
+
+    def body(self):
+        return self.host.current_layout().children[1]  # below the Controls bar
+
+    def test_an_edge_shows_the_indicator_and_the_drop_splits_beside_it(self):
+        history = self.host.panels["history"]
+        pos = self.at("files", 0.5, 0.9)
+        pane = self.pane("files")
+
+        def during():
+            self.assertTrue(self.drag_to("history", pos).isAccepted())
+            indicator = self.host._indicator
+            self.assertTrue(indicator.isVisible())
+            self.assertEqual(indicator.geometry().top(), pane.mapTo(self.host, QPoint(0, 0)).y()
+                             + pane.height() - pane.height() // 2)  # the bottom half
+            self.send(QDropEvent, "history", pos)
+            self.assertFalse(indicator.isVisible())
+            self.assertEqual(self.body().children[0], PanelNode("history"))  # not yet
+
+        self.drag("history", during)
+        # History's old row collapses into Files, so the two stack below Controls.
+        root = self.host.current_layout()
+        self.assertEqual((root.orientation, [c.panel_id for c in root.children]),
+                         (V, ["controls", "files", "history"]))
+        self.assertIs(self.host.panels["history"], history)  # the same panel, state kept
+
+    def test_the_centre_and_the_tab_bar_make_tabs(self):
+        self.drop("history", self.at("files", 0.5, 0.5))
+        self.assertEqual(self.body(), TabsNode((PanelNode("files"), PanelNode("history")), 1))
+        self.host.apply(SplitNode(H, (TABS, PanelNode("branches"))))
+        self.app.processEvents()
+        tab_bar = self.pane("history").tabBar()
+        self.drop("branches", tab_bar.mapTo(self.host, tab_bar.rect().center()))
+        self.assertEqual(self.body(), TabsNode(
+            (PanelNode("history"), PanelNode("files"), PanelNode("branches")), 2))
+
+    def test_controls_is_not_a_target_and_can_not_be_dropped(self):
+        before = self.host.current_layout()
+        controls = self.host.panels["controls"].parentWidget()
+        pos = controls.mapTo(self.host, controls.rect().center())
+
+        def during():
+            self.assertFalse(self.drag_to("history", pos).isAccepted())
+            self.assertFalse(self.host._indicator.isVisible())
+            self.send(QDropEvent, "history", pos)
+
+        self.drag("history", during)
+        self.assertEqual(self.host.current_layout(), before)
+        self.assertIsNone(self.host.drop_target("controls", self.at("files", 0.5, 0.9)))
+        with mock.patch.object(self.host, "drag_panel") as drag:
+            header = self.pane("controls").header
+            self.press_and_move(header, QPoint(5, 5))
+            drag.assert_not_called()
+
+    def test_its_own_pane_is_not_a_target(self):
+        def during():
+            self.assertFalse(self.drag_to("history", self.at("history", 0.9, 0.5)).isAccepted())
+            self.assertFalse(self.host._indicator.isVisible())
+        self.drag("history", during)
+
+    def test_drag_events_are_left_alone_when_no_panel_drag_runs(self):
+        before = self.host.current_layout()
+        self.assertFalse(self.drag_to("history", self.at("files", 0.9, 0.5)).isAccepted())
+        self.send(QDropEvent, "history", self.at("files", 0.9, 0.5))
+        self.assertEqual(self.host.current_layout(), before)
+
+    def test_the_indicator_is_painted_in_the_theme_s_accent(self):
+        seen = {}
+
+        def during():
+            self.drag_to("history", self.at("files", 0.9, 0.5))
+            image = self.host._indicator.grab().toImage()
+            seen["border"] = image.pixelColor(0, image.height() // 2)
+            seen["fill"] = image.pixelColor(image.width() // 2, image.height() // 2)
+
+        self.drag("history", during, Qt.DropAction.IgnoreAction)
+        accent = QColor(self.ctx.theme.current.colors.accent)
+        self.assertEqual(seen["border"].name(), accent.name())
+        self.assertNotEqual(seen["fill"].name(), accent.name())  # the accent, see-through
+        self.assertGreater(seen["fill"].blue(), seen["fill"].red())
+
+    def press_and_move(self, widget, start):
+        for kind, pos in ((QEvent.Type.MouseButtonPress, start),
+                          (QEvent.Type.MouseMove, start + QPoint(40, 0))):
+            QApplication.sendEvent(widget, QMouseEvent(
+                kind, QPointF(pos), QPointF(widget.mapToGlobal(pos)), Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+
+    def test_a_drag_starts_from_a_header_or_a_tab(self):
+        with mock.patch.object(self.host, "drag_panel") as drag:
+            header = self.pane("files").header
+            self.press_and_move(header, header.rect().center())
+            drag.assert_called_once_with("files")
+        self.host.apply(SplitNode(H, (TABS, PanelNode("branches"))))
+        self.app.processEvents()
+        tab_bar = self.pane("history").tabBar()
+        with mock.patch.object(self.host, "drag_panel") as drag:
+            self.press_and_move(tab_bar, tab_bar.tabRect(0).center())
+            drag.assert_called_once_with("history")
+
+    def test_a_cancelled_drag_leaves_the_layout_as_it_was(self):
+        before = self.host.current_layout()
+        changed = mock.Mock()
+        self.host.layout_changed.connect(changed)
+
+        def cancel():  # Escape: Qt sends a leave, and no drop
+            self.drag_to("history", self.at("files", 0.9, 0.5))
+            QApplication.sendEvent(self.host, QDragLeaveEvent())
+
+        self.drag("history", cancel, Qt.DropAction.IgnoreAction)
+        changed.assert_not_called()
+        self.assertEqual(self.host.current_layout(), before)
+        self.assertFalse(self.host._indicator.isVisible())
 
 if __name__ == "__main__":
     unittest.main()

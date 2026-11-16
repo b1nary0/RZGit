@@ -5,6 +5,7 @@ import unittest
 
 from rzgitclient.ui.layout.layout_model import (
     Anchor,
+    DropZone,
     LayoutError,
     LayoutState,
     Orientation,
@@ -12,8 +13,10 @@ from rzgitclient.ui.layout.layout_model import (
     SplitNode,
     TabsNode,
     anchor_of,
+    drop_zone,
     from_dict,
     insert_panel,
+    move_panel,
     normalize,
     remove_panel,
     to_dict,
@@ -267,6 +270,61 @@ class LayeringTests(unittest.TestCase):
         )
         proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0, proc.stderr)
+
+
+class MoveTests(unittest.TestCase):
+    """Drag and drop as an edit (spec §6.1)."""
+
+    ROW = SplitNode(H, (A, B, C), sizes=(100, 200, 300))
+
+    def test_drop_zone_is_the_nearest_edge_within_a_quarter_else_the_centre(self):
+        cases = {(0.1, 0.5): DropZone.LEFT, (0.9, 0.5): DropZone.RIGHT,
+                 (0.5, 0.1): DropZone.TOP, (0.5, 0.95): DropZone.BOTTOM,
+                 (0.5, 0.5): DropZone.CENTER, (0.3, 0.6): DropZone.CENTER,
+                 (0.05, 0.1): DropZone.LEFT}
+        for (x, y), zone in cases.items():
+            with self.subTest(x=x, y=y):
+                self.assertIs(drop_zone(x, y), zone)
+
+    def test_an_edge_in_the_same_direction_splits_the_targets_space_evenly(self):
+        self.assertEqual(move_panel(self.ROW, "a", "c", DropZone.RIGHT),
+                         SplitNode(H, (B, C, A), sizes=(200, 150, 150)))
+        self.assertEqual(move_panel(self.ROW, "a", "b", DropZone.LEFT),
+                         SplitNode(H, (A, B, C), sizes=(100, 100, 300)))
+
+    def test_an_edge_across_makes_a_new_even_split(self):
+        self.assertEqual(move_panel(self.ROW, "a", "c", DropZone.BOTTOM),
+                         SplitNode(H, (B, SplitNode(V, (C, A), sizes=(500, 500))),
+                                   sizes=(200, 300)))
+        self.assertEqual(move_panel(self.ROW, "c", "a", DropZone.TOP),
+                         SplitNode(H, (SplitNode(V, (C, A), sizes=(500, 500)), B),
+                                   sizes=(100, 200)))
+
+    def test_the_centre_makes_tabs_with_the_moved_panel_current(self):
+        self.assertEqual(move_panel(self.ROW, "a", "b", DropZone.CENTER),
+                         SplitNode(H, (TabsNode((B, A), current=1), C), sizes=(200, 300)))
+
+    def test_the_old_place_collapses(self):
+        tree = SplitNode(H, (A, SplitNode(V, (B, C))))
+        self.assertEqual(move_panel(tree, "b", "a", DropZone.TOP),
+                         SplitNode(H, (SplitNode(V, (B, A), sizes=(500, 500)), C)))
+
+    def test_an_edge_of_a_tab_group_goes_beside_the_whole_group(self):
+        tree = SplitNode(H, (TabsNode((A, B)), C))
+        self.assertEqual(move_panel(tree, "c", "a", DropZone.LEFT),
+                         SplitNode(H, (C, TabsNode((A, B))), sizes=(500, 500)))
+        self.assertEqual(move_panel(tree, "a", "b", DropZone.RIGHT),
+                         SplitNode(H, (TabsNode((B,)), A, C)))
+
+    def test_moves_that_change_nothing_return_the_same_tree(self):
+        tabs = SplitNode(H, (TabsNode((A, B)), C))
+        for tree, args in ((self.ROW, ("a", "a", DropZone.LEFT)),
+                           (self.ROW, ("a", "gone", DropZone.LEFT)),
+                           (self.ROW, ("gone", "a", DropZone.LEFT)),
+                           (tabs, ("a", "b", DropZone.CENTER)),
+                           (A, ("a", "a", DropZone.CENTER))):
+            with self.subTest(args):
+                self.assertIs(move_panel(tree, *args), tree)
 
 
 if __name__ == "__main__":

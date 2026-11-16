@@ -103,6 +103,7 @@ src/rzgitclient/
       layout_presets.py         PRESETS, DEFAULT_LAYOUT, restore_layout
       layout_host.py            LayoutHost
       panel_frame.py            PanelFrame: section header + panel
+      drop_indicator.py         DropIndicator: where a dragged panel will land
       layout_menu.py            LayoutMenu: View → Layout (presets, saved layouts)
       manage_layouts_dialog.py  ManageLayoutsDialog: rename and delete saved layouts
       panels_menu.py            PanelsMenu: View → Panels (show and hide)
@@ -326,6 +327,7 @@ class Panel(QWidget):
     show_header: ClassVar[bool] = True             # False: the frame draws no section header
     fixed_height: ClassVar[bool] = False           # True: its pane in a vertical split can't be resized
     always_shown: ClassVar[bool] = False           # True: the layout never leaves it out (§6.6)
+    movable: ClassVar[bool] = True                 # False: can't be dragged, isn't a drop target (§6.2)
     header_changed = Signal(str)                   # emitted by set_header()
     activate_requested = Signal()                  # emitted by request_activation()
     collapsed_changed = Signal(bool)               # emitted by set_collapsed()
@@ -557,6 +559,15 @@ class LayoutState: root: LayoutNode; hidden: Mapping[str, Anchor] = {}   # what'
   never crash the app. It just loses what no longer exists.
 - Immutable: an edit returns a new tree. That makes it simple and safe, and undo and
   presets come almost for free.
+- **Moving a panel** (drag and drop, §6.2): `drop_zone(x, y)` maps a point inside the
+  target pane, as fractions of its width and height, to a `DropZone`: the nearest edge
+  (`LEFT`, `RIGHT`, `TOP`, `BOTTOM`) if it's within the outer quarter (`EDGE = 0.25`),
+  else `CENTER`. `move_panel(root, id, target, zone)` is `remove_panel` (its old
+  neighbours take back its space) and then `insert_panel` at `zone_anchor(target, zone)`:
+  beside the target with `share=0.5`, so the two split the target's space evenly, or for
+  `CENTER` a tab after it (current). A target in a tab group with an edge zone puts the
+  panel beside the whole group. Dropping a panel on itself, or on the centre of the tab
+  group it's already in, returns `root` itself (`is`), which callers treat as "not a target".
 
 - `from_dict` raises `LayoutError(ValueError)` on structural errors: wrong version, unknown
   node type, missing or mistyped fields. `sizes` that don't fit (wrong length, negative)
@@ -609,6 +620,19 @@ Commit are directly below Unstaged Files (`files`), in that order:
   Branches. (If that pane can't spare it, Qt shares it out as usual.) `current_layout()`
   reports the pane at that size, taken from the same pane, so a layout saved meanwhile
   brings it back at that size.
+- **Drag and drop** moves a panel. A drag starts from a panel's section header (in a
+  split) or its tab (in a tab group) once the mouse moves `startDragDistance`, and
+  carries the panel id under its own MIME type. The host accepts the drop: the pane
+  under the cursor (a frame, or a whole tab group, where the tab bar means `CENTER`) and
+  `drop_zone` give the target, and `move_panel` the new tree, which `apply` shows (panels
+  keep their state). A `DropIndicator` overlay (`drop_indicator.py`), transparent to the mouse, fills the half
+  of the pane the panel will take (all of it for tabs) with the theme's `accent` at low
+  opacity and an accent border; it reads `ctx.theme.current` when painting, never a
+  stylesheet. Panels with `movable = False` (Controls) can't be dragged and aren't
+  targets, and a drop that changes nothing isn't a target either (no indicator). Escape
+  or a drop elsewhere cancels (Qt's `QDrag`). The drop is applied after `QDrag.exec`
+  returns, never inside it, because `apply` deletes the header or tab bar the drag
+  started from.
 - An empty tree (everything dropped by `normalize`) shows an empty area. Falling back to
   `DEFAULT_LAYOUT` is the loader's job (§6.3).
 
@@ -667,8 +691,8 @@ The data model supports all of these now; the UI comes in stages:
 2. Sizes and tabs remembered between runs (first phase)
 3. Switching between preset layouts: **View → Layout** (§6.1)
 4. Editing: hide and show panels from **View → Panels** (§6.6), and save the current
-   layout under a name (§6.3, saved layouts). Moving panels by drag and drop comes later
-   (RZG-24).
+   layout under a name (§6.3, saved layouts), and move panels by drag and drop (§6.1,
+   §6.2).
 
 ### 6.5 Why not QDockWidget
 

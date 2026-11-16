@@ -21,6 +21,7 @@ class ControlsPanel(Panel):
     show_header = False
     fixed_height = True
     always_shown = True
+    movable = False
 
     _branch: QLabel
 

@@ -210,6 +210,65 @@ def insert_panel(
                    make_current)
 
 
+class DropZone(StrEnum):
+    """Where a dragged panel lands on the pane under the cursor (spec §6.1, §6.2)."""
+
+    LEFT = "left"
+    RIGHT = "right"
+    TOP = "top"
+    BOTTOM = "bottom"
+    CENTER = "center"  # in tabs with it
+
+
+EDGE = 0.25  # the outer part of a pane, on each side, that is an edge zone
+
+
+def drop_zone(x: float, y: float) -> DropZone:
+    """The zone of a point inside a pane, as fractions of its width and height:
+    the nearest edge if within ``EDGE`` of it, else the centre."""
+    distances = {DropZone.LEFT: x, DropZone.RIGHT: 1 - x,
+                 DropZone.TOP: y, DropZone.BOTTOM: 1 - y}
+    zone = min(distances, key=distances.__getitem__)
+    return zone if distances[zone] < EDGE else DropZone.CENTER
+
+
+_ZONE_SPLITS = {
+    DropZone.LEFT: (Orientation.HORIZONTAL, True),
+    DropZone.RIGHT: (Orientation.HORIZONTAL, False),
+    DropZone.TOP: (Orientation.VERTICAL, True),
+    DropZone.BOTTOM: (Orientation.VERTICAL, False),
+}
+
+
+def zone_anchor(target: str, zone: DropZone) -> Anchor:
+    """Where a panel dropped on ``target``'s ``zone`` goes: beside it, sharing its
+    space evenly, or a tab after it."""
+    if zone is DropZone.CENTER:
+        return Anchor((target,), None, False)
+    orientation, before = _ZONE_SPLITS[zone]
+    return Anchor((target,), orientation, before, 0.5)
+
+
+def move_panel(root: LayoutNode, panel_id: str, target: str, zone: DropZone) -> LayoutNode:
+    """``root`` with ``panel_id`` moved to ``target``'s ``zone``.
+
+    Returns ``root`` itself when nothing would change: either panel isn't
+    shown, it's dropped on itself, or on the centre of its own tab group.
+    """
+    shown = panel_ids(root)
+    if panel_id == target or panel_id not in shown or target not in shown:
+        return root
+    if zone is DropZone.CENTER:
+        mine, theirs = _path(root, panel_id), _path(root, target)
+        if mine and theirs and mine[:-1] == theirs[:-1] \
+                and isinstance(_at(root, mine[:-1]), TabsNode):
+            return root
+    rest = remove_panel(root, panel_id)[0]
+    if rest is None:
+        return root
+    return insert_panel(rest, panel_id, zone_anchor(target, zone))
+
+
 def _insert(
     root: LayoutNode, panel_id: str, anchor: Anchor, present: list[str], make_current: bool
 ) -> LayoutNode:

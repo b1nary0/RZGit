@@ -52,6 +52,7 @@ class Panel(QWidget):
     show_header: ClassVar[bool] = True  # False: the frame draws no section header
     fixed_height: ClassVar[bool] = False  # True: its pane in a vertical split can't be resized
     always_shown: ClassVar[bool] = False  # True: the layout never leaves it out (§6.6)
+    movable: ClassVar[bool] = True  # False: can't be dragged, isn't a drop target (§6.2)
 
     header_changed = Signal(str)
     activate_requested = Signal()  # "bring me to the front": the layout raises my tab
