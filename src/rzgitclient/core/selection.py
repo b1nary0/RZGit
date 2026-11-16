@@ -8,11 +8,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Signal
 
-from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.git.git_models import Commit
+
+if TYPE_CHECKING:  # repo_session imports FileSelection from here
+    from rzgitclient.core.repo_session import RepoSession
 
 
 class FileSource(StrEnum):

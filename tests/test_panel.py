@@ -106,6 +106,13 @@ class PanelTests(unittest.TestCase):
         self.assertEqual(panel.header, "Branches (2)")
         self.assertEqual(rec.events, [("header_changed", "Branches (2)")])
 
+    def test_request_activation_emits(self):
+        panel = BranchNamesPanel(self.ctx)
+        asked = []
+        panel.activate_requested.connect(lambda: asked.append(1))
+        panel.request_activation()
+        self.assertEqual(asked, [1])
+
     # ---- subclass rules -------------------------------------------------
 
     def test_overriding_init_is_rejected(self):

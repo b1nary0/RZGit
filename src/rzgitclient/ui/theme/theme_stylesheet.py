@@ -117,6 +117,10 @@ QLineEdit, QTextEdit, QPlainTextEdit {
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {
     border-color: $accent;
 }
+QPlainTextEdit[role="diff-view"] {
+    border: none;
+    padding: 0;
+}
 QComboBox {
     background: $content_bg;
     border: 1px solid $border;
@@ -148,6 +152,9 @@ QWidget[surface="sidebar"] {
 }
 QWidget[surface="content"] {
     background: $content_bg;
+}
+QLabel[role="placeholder"] {
+    color: $text_muted;
 }
 QLabel[role="section-header"] {
     font-weight: bold;

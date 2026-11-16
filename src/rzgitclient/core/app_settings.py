@@ -18,6 +18,7 @@ log = logging.getLogger(__name__)
 _LAST_REPO = "last_repo"
 _LAYOUT = "layout"
 _WINDOW_GEOMETRY = "window/geometry"
+_SIDE_BY_SIDE_DIFF = "diff/side_by_side"
 
 
 class AppSettings:
@@ -61,6 +62,15 @@ class AppSettings:
     @window_geometry.setter
     def window_geometry(self, geometry: QByteArray | None) -> None:
         self._set(_WINDOW_GEOMETRY, geometry)
+
+    @property
+    def side_by_side_diff(self) -> bool:
+        """Whether the Diff panel shows old and new side by side (default: unified)."""
+        return self._settings.value(_SIDE_BY_SIDE_DIFF, False, bool)
+
+    @side_by_side_diff.setter
+    def side_by_side_diff(self, on: bool) -> None:
+        self._set(_SIDE_BY_SIDE_DIFF, bool(on))
 
     def sync(self) -> None:
         """Write pending changes to disk now (Qt also does this on exit)."""

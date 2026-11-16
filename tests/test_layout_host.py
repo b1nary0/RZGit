@@ -58,7 +58,7 @@ class LayoutHostTests(unittest.TestCase):
 
     def test_builds_the_default_layout(self):
         self.host.apply(DEFAULT_LAYOUT)
-        self.assertEqual(set(self.host.panels), {"controls", "branches", "files", "history"})
+        self.assertEqual(set(self.host.panels), {"controls", "branches", "files", "history", "diff"})
 
         top = self.root()
         self.assertEqual(top.orientation(), Qt.Orientation.Vertical)
@@ -66,14 +66,16 @@ class LayoutHostTests(unittest.TestCase):
         self.assertIsInstance(root, QSplitter)
         self.assertEqual(root.orientation(), Qt.Orientation.Horizontal)
         self.assertFalse(root.childrenCollapsible())
-        sidebar, history = root.widget(0), root.widget(1)
+        sidebar, content = root.widget(0), root.widget(1)
         self.assertEqual(sidebar.orientation(), Qt.Orientation.Vertical)
-        frames = [sidebar.widget(0), sidebar.widget(1), history]
+        frames = [sidebar.widget(0), sidebar.widget(1)]
         self.assertTrue(all(isinstance(f, PanelFrame) for f in frames))
-        self.assertEqual(
-            [f.panel for f in frames],
-            [self.host.panels["branches"], self.host.panels["files"], self.host.panels["history"]],
-        )
+        self.assertEqual([f.panel for f in frames],
+                         [self.host.panels["branches"], self.host.panels["files"]])
+        self.assertIsInstance(content, QTabWidget)  # History and Diff
+        self.assertEqual([content.widget(i) for i in range(2)],
+                         [self.host.panels["history"], self.host.panels["diff"]])
+        self.assertEqual(content.currentIndex(), 0)
 
     def test_tabs_use_the_panel_header_and_follow_it(self):
         self.host.apply(TABS)
@@ -134,7 +136,8 @@ class LayoutHostTests(unittest.TestCase):
         self.host.apply(DEFAULT_LAYOUT)  # back from tabs to frames
         flush_deletes()
         self.app.processEvents()
-        self.assertTrue(all(p.isVisible() for p in self.host.panels.values()))
+        shown = [p for pid, p in self.host.panels.items() if pid != "diff"]  # Diff: History's other tab
+        self.assertTrue(all(p.isVisible() for p in shown))
 
     def test_header_changes_after_moving_out_of_tabs(self):
         self.host.apply(TABS)
@@ -155,7 +158,7 @@ class LayoutHostTests(unittest.TestCase):
         self.show()
         self.host.hide_panel("files")
         flush_deletes()
-        self.assertEqual(set(self.host.panels), {"controls", "branches", "history"})
+        self.assertEqual(set(self.host.panels), {"controls", "branches", "history", "diff"})
         self.assertEqual(set(self.host.hidden), {"files"})
         self.assertEqual(self.host.state().hidden, self.host.hidden)
 
@@ -200,6 +203,25 @@ class LayoutHostTests(unittest.TestCase):
         self.host.show_panel("files")  # never hidden, e.g. new in this version
         self.assertEqual(self.body().widget(0).orientation(), Qt.Orientation.Vertical)
         self.assertEqual(set(self.host.panels), {"controls", "branches", "files", "history"})
+
+    def test_a_panel_asking_to_be_activated_becomes_the_current_tab(self):
+        self.host.apply(DEFAULT_LAYOUT)
+        tabs = self.body().widget(1)
+        self.host.panels["diff"].request_activation()
+        self.assertEqual(tabs.currentWidget(), self.host.panels["diff"])
+        self.host.panels["history"].request_activation()
+        self.assertEqual(tabs.currentWidget(), self.host.panels["history"])
+
+    def test_activation_follows_a_panel_into_new_tabs_and_is_harmless_in_a_split(self):
+        self.host.apply(DEFAULT_LAYOUT)
+        self.host.apply(SplitNode(H, (PanelNode("history"), TabsNode(
+            (PanelNode("files"), PanelNode("diff"), PanelNode("branches"))))))
+        flush_deletes()  # the old tabs, and their connections, are gone
+        tabs = self.body().widget(1)
+        self.host.panels["diff"].request_activation()
+        self.assertEqual(tabs.currentIndex(), 1)
+        self.host.panels["history"].request_activation()  # in a split: nothing to do
+        self.assertEqual(tabs.currentIndex(), 1)
 
     def test_apply_keeps_hidden_only_for_panels_not_shown(self):
         _, anchor = remove_panel(DEFAULT_LAYOUT, "files")

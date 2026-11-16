@@ -7,11 +7,22 @@ credential helpers, SSH keys and hooks all behave exactly as in a terminal.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
+from collections.abc import Collection
 from datetime import datetime
 from pathlib import Path
 
-from rzgitclient.git.git_models import Branch, Commit, FileStatus
+from rzgitclient.git.git_models import (
+    Branch,
+    Commit,
+    DiffLine,
+    DiffSource,
+    FileDiff,
+    FileStatus,
+    Hunk,
+    LineKind,
+)
 
 
 class GitError(Exception):
@@ -33,20 +44,32 @@ def _git_env() -> dict[str, str]:
     return env
 
 
-def run_git(cwd: str | Path, *args: str) -> str:
+def run_git(cwd: str | Path, *args: str, ok_codes: Collection[int] = (0,)) -> str:
+    """git's output as text (newlines normalised). Raises GitError for any
+    exit code not in ``ok_codes``."""
+    return _run(cwd, args, ok_codes, text=True)
+
+
+def run_git_bytes(cwd: str | Path, *args: str, ok_codes: Collection[int] = (0,)) -> bytes:
+    """git's output exactly as written, e.g. a diff whose CRLF line ends matter."""
+    return _run(cwd, args, ok_codes, text=False)
+
+
+def _run(cwd: str | Path, args: tuple[str, ...], ok_codes: Collection[int], *, text: bool):
     try:
         proc = subprocess.run(
             ["git", *args],
             cwd=cwd,
             env=_git_env(),
             capture_output=True,
-            text=True,
+            text=text,
         )
     except OSError as exc:  # missing cwd, git not installed, …
         raise GitError(f"Can't run git in {cwd}: {exc.strerror or exc}") from exc
-    if proc.returncode != 0:
+    if proc.returncode not in ok_codes:
+        stderr = proc.stderr if text else proc.stderr.decode("utf-8", "replace")
         raise GitError(
-            proc.stderr.strip() or f"git {' '.join(args)} failed",
+            stderr.strip() or f"git {' '.join(args)} failed",
             proc.returncode,
         )
     return proc.stdout
@@ -138,3 +161,124 @@ class Repo:
                 i += 1
             result.append(FileStatus(x, y, path, orig))
         return result
+
+    def diff(
+        self,
+        path: str,
+        source: DiffSource,
+        *,
+        commit: str | None = None,
+        old_path: str | None = None,
+        max_bytes: int | None = None,
+        max_lines: int | None = None,
+    ) -> FileDiff:
+        """The changes to ``path`` that ``source`` names.
+
+        ``commit`` is needed for ``DiffSource.COMMIT``. ``old_path`` (a staged
+        or committed rename's source) lets git show the change as a rename.
+        Output over ``max_bytes`` or ``max_lines`` isn't parsed: the result
+        is ``too_large`` and has no hunks.
+        """
+        paths = (old_path, path) if old_path else (path,)
+        ok_codes = (0,)
+        match source:
+            case DiffSource.WORKTREE:
+                args = ["diff", *_DIFF_OPTIONS, "--", path]
+            case DiffSource.INDEX:
+                args = ["diff", "--cached", *_DIFF_OPTIONS, "--", *paths]
+            case DiffSource.UNTRACKED:
+                # --no-index exits with 1 when the files differ, which they do.
+                args = ["diff", "--no-index", *_DIFF_OPTIONS, "--", "/dev/null", path]
+                ok_codes = (0, 1)
+            case DiffSource.COMMIT:
+                if commit is None:
+                    raise ValueError("a commit diff needs the commit")
+                args = ["show", "--format=", "--diff-merges=first-parent", *_DIFF_OPTIONS,
+                        commit, "--", *paths]
+            case _:
+                raise ValueError(f"not a diff source: {source!r}")
+        raw = run_git_bytes(self.root, *args, ok_codes=ok_codes)
+        if source is DiffSource.UNTRACKED and not raw:
+            # Exit code 1 also means "can't read it"; a readable file always has a header.
+            raise GitError(f"Can't read {path}", 1)
+        return parse_diff(raw, path, max_bytes=max_bytes, max_lines=max_lines)
+
+
+# Plain output whatever the user's config says; -M: show renames as renames.
+_DIFF_OPTIONS = ("--no-color", "--no-ext-diff", "-M")
+_HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def parse_diff(
+    raw: bytes, path: str, *, max_bytes: int | None = None, max_lines: int | None = None
+) -> FileDiff:
+    """Parse ``git diff`` output for one file (several file sections are merged).
+
+    Hunks are read by their line counts, so a removed line that starts with
+    "--" can't be taken for a header. Text is UTF-8; bytes that aren't are
+    replaced.
+    """
+    line_count = raw.count(b"\n")
+    if (max_bytes is not None and len(raw) > max_bytes) or (
+        max_lines is not None and line_count > max_lines
+    ):
+        return FileDiff(path, too_large=True, line_count=line_count)
+
+    hunks: list[Hunk] = []
+    old_path: str | None = None
+    binary = False
+    lines: list[DiffLine] = []
+    header = ""
+    old_start = new_start = old_no = new_no = old_left = new_left = 0
+
+    def end_hunk() -> None:
+        if header:
+            hunks.append(Hunk(header, old_start, new_start, tuple(lines)))
+
+    for line in raw.decode("utf-8", "replace").split("\n"):
+        if old_left > 0 or new_left > 0:  # inside a hunk
+            kind = line[:1]
+            if kind == "+":
+                lines.append(DiffLine(LineKind.ADDED, None, new_no, line[1:]))
+                new_no, new_left = new_no + 1, new_left - 1
+                continue
+            if kind == "-":
+                lines.append(DiffLine(LineKind.REMOVED, old_no, None, line[1:]))
+                old_no, old_left = old_no + 1, old_left - 1
+                continue
+            if kind == " " or line == "":  # some tools strip the space of a blank line
+                lines.append(DiffLine(LineKind.CONTEXT, old_no, new_no, line[1:]))
+                old_no, new_no = old_no + 1, new_no + 1
+                old_left, new_left = old_left - 1, new_left - 1
+                continue
+        if line.startswith("\\"):  # "\ No newline at end of file"
+            if lines:
+                last = lines[-1]
+                lines[-1] = DiffLine(last.kind, last.old_no, last.new_no, last.text, True)
+            continue
+        if m := _HUNK_HEADER.match(line):
+            end_hunk()
+            lines = []
+            header = line
+            old_start, new_start = int(m[1]), int(m[3])
+            old_left = int(m[2]) if m[2] is not None else 1
+            new_left = int(m[4]) if m[4] is not None else 1
+            old_no, new_no = old_start, new_start
+            continue
+        if line.startswith("diff "):  # another file section: close this one's hunk
+            end_hunk()
+            header, lines = "", []
+        elif line.startswith(("rename from ", "copy from ")):
+            old_path = _unquote(line.split(" ", 2)[2])
+        elif line.startswith("Binary files ") or line == "GIT binary patch":
+            binary = True
+    end_hunk()
+    return FileDiff(path, tuple(hunks), old_path, binary, line_count=line_count)
+
+
+def _unquote(name: str) -> str:
+    """A path as git prints it in headers: C-quoted if it has unusual characters."""
+    if not (len(name) >= 2 and name[0] == name[-1] == '"'):
+        return name
+    raw = name[1:-1].encode("latin-1", "backslashreplace").decode("unicode_escape")
+    return raw.encode("latin-1", "replace").decode("utf-8", "replace")

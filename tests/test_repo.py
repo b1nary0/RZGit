@@ -3,7 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rzgitclient.git.repo import GitError, Repo
+from rzgitclient.git.git_models import DiffLine, DiffSource, LineKind
+from rzgitclient.git.repo import GitError, Repo, parse_diff
 from tests.support import commit_file, git, make_repo
 
 
@@ -90,6 +91,135 @@ class RepoTests(unittest.TestCase):
         self.assertTrue(status["new file.txt"].is_untracked)
         self.assertEqual(status["renamed.txt"].index, "R")
         self.assertEqual(status["renamed.txt"].orig_path, "old.txt")
+
+
+class RepoDiffTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        commit_file(self.path, "a.txt", "one\ntwo\nthree\n", "first")
+        self.repo = Repo(self.path)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def write(self, name, data):
+        target = self.path / name
+        if isinstance(data, bytes):
+            target.write_bytes(data)
+        else:
+            target.write_text(data)
+
+    def test_unstaged_change_with_line_numbers(self):
+        self.write("a.txt", "one\n2\nthree\nfour\n")
+        diff = self.repo.diff("a.txt", DiffSource.WORKTREE)
+        self.assertEqual(diff.path, "a.txt")
+        self.assertFalse(diff.binary or diff.too_large)
+        (hunk,) = diff.hunks
+        self.assertEqual((hunk.old_start, hunk.new_start), (1, 1))
+        self.assertTrue(hunk.header.startswith("@@ -1,3 +1,4 @@"))
+        self.assertEqual(hunk.lines, (
+            DiffLine(LineKind.CONTEXT, 1, 1, "one"),
+            DiffLine(LineKind.REMOVED, 2, None, "two"),
+            DiffLine(LineKind.ADDED, None, 2, "2"),
+            DiffLine(LineKind.CONTEXT, 3, 3, "three"),
+            DiffLine(LineKind.ADDED, None, 4, "four"),
+        ))
+
+    def test_staged_and_unstaged_are_separate(self):
+        self.write("a.txt", "one\ntwo\nthree\nstaged\n")
+        git(self.path, "add", "a.txt")
+        self.write("a.txt", "one\ntwo\nthree\nstaged\nunstaged\n")
+        staged = self.repo.diff("a.txt", DiffSource.INDEX)
+        unstaged = self.repo.diff("a.txt", DiffSource.WORKTREE)
+        self.assertEqual([l.text for l in staged.hunks[0].lines if l.kind is LineKind.ADDED],
+                         ["staged"])
+        self.assertEqual([l.text for l in unstaged.hunks[0].lines if l.kind is LineKind.ADDED],
+                         ["unstaged"])
+
+    def test_no_changes_gives_no_hunks(self):
+        diff = self.repo.diff("a.txt", DiffSource.WORKTREE)
+        self.assertEqual(diff.hunks, ())
+        self.assertFalse(diff.binary)
+
+    def test_untracked_file_is_all_added(self):
+        self.write("new.txt", "x\ny\n")
+        diff = self.repo.diff("new.txt", DiffSource.UNTRACKED)  # git exits 1: not an error
+        (hunk,) = diff.hunks
+        self.assertEqual(hunk.lines, (DiffLine(LineKind.ADDED, None, 1, "x"),
+                                      DiffLine(LineKind.ADDED, None, 2, "y")))
+
+    def test_staged_rename(self):
+        commit_file(self.path, "old.txt", "a\nb\nc\nd\ne\n", "add old")
+        git(self.path, "mv", "old.txt", "new.txt")
+        self.write("new.txt", "a\nb\nc\nd\nE\n")
+        git(self.path, "add", "new.txt")
+        diff = self.repo.diff("new.txt", DiffSource.INDEX, old_path="old.txt")
+        self.assertEqual(diff.old_path, "old.txt")
+        self.assertEqual(len(diff.hunks), 1)
+
+    def test_binary_file(self):
+        commit_file(self.path, "b.bin", "x", "add binary")
+        self.write("b.bin", b"\x00\x01\x02 binary")
+        diff = self.repo.diff("b.bin", DiffSource.WORKTREE)
+        self.assertTrue(diff.binary)
+        self.assertEqual(diff.hunks, ())
+
+    def test_no_newline_at_end_of_file(self):
+        self.write("a.txt", "one\ntwo\nthree")
+        lines = self.repo.diff("a.txt", DiffSource.WORKTREE).hunks[0].lines
+        self.assertEqual(lines[-2], DiffLine(LineKind.REMOVED, 3, None, "three"))
+        self.assertEqual(lines[-1], DiffLine(LineKind.ADDED, None, 3, "three", no_newline=True))
+
+    def test_crlf_line_ends_are_kept(self):
+        self.write("a.txt", b"one\r\ntwo\nthree\n")
+        lines = self.repo.diff("a.txt", DiffSource.WORKTREE).hunks[0].lines
+        self.assertIn(DiffLine(LineKind.ADDED, None, 1, "one\r"), lines)
+        self.assertIn(DiffLine(LineKind.REMOVED, 1, None, "one"), lines)
+
+    def test_removed_lines_that_look_like_headers(self):
+        commit_file(self.path, "h.txt", "-- x\n++ y\nkeep\n", "dashes")
+        self.write("h.txt", "keep\n")
+        lines = self.repo.diff("h.txt", DiffSource.WORKTREE).hunks[0].lines
+        self.assertEqual([(l.kind, l.text) for l in lines], [
+            (LineKind.REMOVED, "-- x"), (LineKind.REMOVED, "++ y"), (LineKind.CONTEXT, "keep")])
+
+    def test_commit_diff_including_the_root_commit(self):
+        commit_file(self.path, "a.txt", "one\ntwo\n", "second")
+        root = git(self.path, "rev-list", "--max-parents=0", "HEAD").strip()
+        first = self.repo.diff("a.txt", DiffSource.COMMIT, commit=root)
+        self.assertEqual([l.kind for l in first.hunks[0].lines], [LineKind.ADDED] * 3)
+        second = self.repo.diff("a.txt", DiffSource.COMMIT, commit="HEAD")
+        self.assertEqual([l.text for l in second.hunks[0].lines if l.kind is LineKind.REMOVED],
+                         ["three"])
+        with self.assertRaises(ValueError):
+            self.repo.diff("a.txt", DiffSource.COMMIT)
+
+    def test_limits_skip_parsing(self):
+        self.write("a.txt", "".join(f"{n}\n" for n in range(100)))
+        diff = self.repo.diff("a.txt", DiffSource.WORKTREE, max_lines=50)
+        self.assertTrue(diff.too_large)
+        self.assertEqual(diff.hunks, ())
+        self.assertGreater(diff.line_count, 100)
+        self.assertTrue(self.repo.diff("a.txt", DiffSource.WORKTREE, max_bytes=100).too_large)
+        self.assertFalse(self.repo.diff("a.txt", DiffSource.WORKTREE, max_lines=1000).too_large)
+
+    def test_git_failure_raises(self):
+        with self.assertRaises(GitError):
+            self.repo.diff("missing.txt", DiffSource.UNTRACKED)
+
+
+class ParseDiffTests(unittest.TestCase):
+    def test_hunk_without_counts_and_invalid_utf8(self):
+        raw = b"diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+caf\xe9\n"
+        (hunk,) = parse_diff(raw, "f").hunks
+        self.assertEqual(hunk.lines, (DiffLine(LineKind.REMOVED, 1, None, "old"),
+                                      DiffLine(LineKind.ADDED, None, 1, "caf\ufffd")))
+
+    def test_quoted_rename_source(self):
+        raw = (b"diff --git a/x b/y\nsimilarity index 90%\n"
+               b'rename from "sp\\303\\251cial.txt"\nrename to y\n')
+        self.assertEqual(parse_diff(raw, "y").old_path, "sp\u00e9cial.txt")
 
 
 if __name__ == "__main__":

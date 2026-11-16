@@ -7,12 +7,15 @@ from types import MappingProxyType
 
 from rzgitclient.ui.panels.branches_panel import BranchesPanel
 from rzgitclient.ui.panels.controls_panel import ControlsPanel
+from rzgitclient.ui.panels.diff_panel import DiffPanel
 from rzgitclient.ui.panels.files_panel import FilesPanel
 from rzgitclient.ui.panels.history_panel import HistoryPanel
 from rzgitclient.ui.panels.panel import Panel
 
 # Explicit on purpose: one place to see every panel, no import-time magic.
-PANEL_TYPES: tuple[type[Panel], ...] = (ControlsPanel, BranchesPanel, HistoryPanel, FilesPanel)
+PANEL_TYPES: tuple[type[Panel], ...] = (
+    ControlsPanel, BranchesPanel, HistoryPanel, FilesPanel, DiffPanel
+)
 
 
 def index_panel_types(types: Iterable[type[Panel]]) -> Mapping[str, type[Panel]]:

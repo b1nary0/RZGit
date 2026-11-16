@@ -96,7 +96,7 @@ class MainWindowTests(unittest.TestCase):
         self.quit(window)
 
         again = self.start()
-        self.assertEqual(set(again.layout_host.panels), {"controls", "files", "history"})
+        self.assertEqual(set(again.layout_host.panels), {"controls", "files", "history", "diff"})
         again.layout_host.show_panel("branches")  # and comes back where it was
         self.assertEqual(strip_sizes(again.layout_host.current_layout()), strip_sizes(DEFAULT_LAYOUT))
 
@@ -111,13 +111,23 @@ class MainWindowTests(unittest.TestCase):
         window = self.start()
         view = next(a.menu() for a in window.menuBar().actions() if a.text() == "&View")
         self.assertEqual([a.text() for a in view.actions()],
-                         ["&Layout", "&Panels", "", "&Reset Layout"])
+                         ["&Layout", "&Panels", "", "&Side by Side Diff", "", "&Reset Layout"])
+
+    def test_side_by_side_diff_is_remembered(self):
+        window = self.start()
+        self.assertFalse(window.ctx.actions.side_by_side_diff.isChecked())
+        window.ctx.actions.side_by_side_diff.setChecked(True)
+        self.quit(window)
+        again = self.start()
+        self.assertTrue(again.ctx.actions.side_by_side_diff.isChecked())
+        diff = again.layout_host.panels["diff"]
+        self.assertIs(diff._stack.currentWidget(), diff._message_page)  # no file yet
 
     def test_reset_layout_shows_hidden_panels(self):
         window = self.start()
         window.layout_host.hide_panel("files")
         window.ctx.actions.reset_layout.trigger()
-        self.assertEqual(set(window.layout_host.panels), {"controls", "branches", "files", "history"})
+        self.assertEqual(set(window.layout_host.panels), {"controls", "branches", "files", "history", "diff"})
         self.assertEqual(window.layout_host.hidden, {})
 
     def test_status_bar_counts_every_commit_not_just_the_loaded_page(self):

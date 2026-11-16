@@ -41,6 +41,11 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(bytes(again.window_geometry), b"\x01\x02geometry")
         self.assertTrue(self.path.exists())  # really the given file
 
+    def test_side_by_side_diff_defaults_to_off_and_survives_a_reopen(self):
+        self.assertFalse(self.settings.side_by_side_diff)
+        self.settings.side_by_side_diff = True
+        self.assertTrue(self.reopen().side_by_side_diff)
+
     def test_none_removes_a_value(self):
         self.settings.last_repo = "/repos/one"
         self.settings.layout = {"version": 1}

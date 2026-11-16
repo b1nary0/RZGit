@@ -29,6 +29,8 @@ class AppActions(QObject):
             "application-exit", "&Quit", QKeySequence.StandardKey.Quit
         )
         self.reset_layout = self._action("view-restore", "&Reset Layout")
+        self.side_by_side_diff = self._action("view-split-left-right", "&Side by Side Diff")
+        self.side_by_side_diff.setCheckable(True)
 
         # triggered(bool) would land in refresh's `parts` argument.
         self.refresh.triggered.connect(lambda: session.refresh())

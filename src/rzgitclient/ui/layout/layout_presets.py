@@ -26,7 +26,9 @@ log = logging.getLogger(__name__)
 
 H, V = Orientation.HORIZONTAL, Orientation.VERTICAL
 BRANCHES, FILES, HISTORY = PanelNode("branches"), PanelNode("files"), PanelNode("history")
-CONTROLS = PanelNode("controls")
+CONTROLS, DIFF = PanelNode("controls"), PanelNode("diff")
+# History and the diff of the selected file share one tab group in every preset.
+CONTENT = TabsNode((HISTORY, DIFF))
 
 
 @dataclass(frozen=True)
@@ -40,19 +42,19 @@ def _below_controls(root: LayoutNode) -> SplitNode:
     return SplitNode(V, (CONTROLS, root))
 
 
-# Branches above Files in a left sidebar; History on the right.
+# Branches above Files in a left sidebar; History and Diff on the right.
 DEFAULT_LAYOUT = _below_controls(
-    SplitNode(H, (SplitNode(V, (BRANCHES, FILES), sizes=(300, 400)), HISTORY), sizes=(220, 880))
+    SplitNode(H, (SplitNode(V, (BRANCHES, FILES), sizes=(300, 400)), CONTENT), sizes=(220, 880))
 )
 
 PRESETS = (
     Preset("Standard", DEFAULT_LAYOUT),
     # Branches and Files as tabs, each with the sidebar's full height.
     Preset("Sidebar Tabs", _below_controls(
-        SplitNode(H, (TabsNode((BRANCHES, FILES)), HISTORY), sizes=(220, 880)))),
-    # History across the top; Branches and Files side by side below it.
+        SplitNode(H, (TabsNode((BRANCHES, FILES)), CONTENT), sizes=(220, 880)))),
+    # History and Diff across the top; Branches and Files side by side below.
     Preset("Stacked", _below_controls(
-        SplitNode(V, (HISTORY, SplitNode(H, (BRANCHES, FILES), sizes=(400, 700))),
+        SplitNode(V, (CONTENT, SplitNode(H, (BRANCHES, FILES), sizes=(400, 700))),
                   sizes=(450, 250)))),
 )
 
@@ -86,5 +88,6 @@ def restore_layout(saved: Any) -> LayoutState:
     hidden = {pid: a for pid, a in state.hidden.items() if pid in known and pid not in shown}
     for pid in known:
         if pid not in shown and pid not in hidden:  # added in a newer version
-            root = insert_panel(root, pid, default_anchor(pid))
+            # The tab the user had current stays current.
+            root = insert_panel(root, pid, default_anchor(pid), make_current=False)
     return LayoutState(root, hidden)

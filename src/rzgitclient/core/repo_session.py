@@ -15,7 +15,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QThreadPool, Signal
 
-from rzgitclient.git.git_models import Branch, Commit, FileStatus
+from rzgitclient.core.diff_request import DiffRequest, load_diff
+from rzgitclient.core.selection import FileSelection
+from rzgitclient.git.git_models import Branch, Commit, FileDiff, FileStatus
 from rzgitclient.git.repo import GitError, Repo
 
 HISTORY_PAGE = 500  # commits per page of history (spec §4.1)
@@ -52,6 +54,7 @@ class RepoSession(QObject):
     history_changed = Signal(object)  # tuple[Commit, ...]
     status_changed = Signal(object)  # tuple[FileStatus, ...]
     commit_count_changed = Signal(object)  # int | None  (None: not counted yet)
+    diff_changed = Signal(object, object)  # FileSelection | None, FileDiff | None
     error_occurred = Signal(str)
     busy_changed = Signal(bool)  # True while git work is queued or running
 
@@ -66,6 +69,12 @@ class RepoSession(QObject):
         self._history_complete = True  # nothing to page in until a load says otherwise
         self._more_pending = False  # a history page waits for the next job
         self._loading_more = False  # the running job loads a history page
+        # The diff target (spec §4.1). Each request bumps the counter, so the
+        # results of older requests are dropped.
+        self._diff_request: DiffRequest | None = None
+        self._diff_generation = 0
+        self._diff_pending = False  # the target waits for the next job
+        self._diff: tuple[FileSelection | None, FileDiff | None] = (None, None)
         # One thread: git commands on a repo can clash on index.lock, and
         # in-order jobs can't deliver results out of order.
         self._pool = QThreadPool(self)
@@ -122,6 +131,16 @@ class RepoSession(QObject):
         """True once ``history`` reaches the first commit (and with no repo)."""
         return self._history_complete
 
+    @property
+    def diff_file(self) -> FileSelection | None:
+        """The file the latest ``diff_changed`` was for."""
+        return self._diff[0]
+
+    @property
+    def diff(self) -> FileDiff | None:
+        """The latest diff, of ``diff_file``; None if it couldn't be read."""
+        return self._diff[1]
+
     # ---- opening and closing ------------------------------------------------
 
     def open(self, path: str | Path) -> bool:
@@ -142,6 +161,7 @@ class RepoSession(QObject):
         self._more_pending = False
         self._history_complete = True
         self._forced = Refresh.ALL
+        self._drop_diff()
         self.repo_changed.emit(repo)
         self.refresh()
         return True
@@ -154,6 +174,7 @@ class RepoSession(QObject):
         self._pending = Refresh(0)
         self._more_pending = False
         self._forced = Refresh.ALL
+        self._drop_diff()
         self.repo_changed.emit(None)
         self._store_forced_as_empty()
 
@@ -162,6 +183,7 @@ class RepoSession(QObject):
         self._generation += 1
         self._pending = Refresh(0)
         self._more_pending = False
+        self._diff_pending = False
         self._pool.waitForDone()
 
     # ---- loading ------------------------------------------------------------
@@ -192,16 +214,43 @@ class RepoSession(QObject):
         if not self._running:
             self._start_next()
 
+    def request_diff(self, file: FileSelection | None, full: bool = False) -> None:
+        """Make ``file`` the diff target and read its diff in the background.
+
+        The result comes as ``diff_changed``; results of older requests are
+        dropped. ``None`` clears the target. ``full`` reads a diff over the
+        size limit whole. Jobs that load the status read the target again.
+        """
+        self._diff_generation += 1
+        self._diff_request = DiffRequest(file, full) if file is not None else None
+        self._diff_pending = file is not None and self._repo is not None
+        if file is None:
+            self._store_diff(None, None)
+        elif self._diff_pending and not self._running:
+            self._start_next()
+
+    def _drop_diff(self) -> None:
+        """Forget the target and its diff (the repo changes)."""
+        self._diff_generation += 1
+        self._diff_request = None
+        self._diff_pending = False
+        self._store_diff(None, None)
+
     def _start_next(self) -> None:
         parts, self._pending = self._pending, Refresh(0)
         more, self._more_pending = self._more_pending, False
+        diff = self._diff_request
+        if not (self._diff_pending or (Refresh.STATUS in parts and diff and diff.follows_status)):
+            diff = None
+        self._diff_pending = False
         if Refresh.COUNT in parts and (Refresh.HISTORY in parts or more):
             # Count in the next job, so it doesn't delay the history.
             parts &= ~Refresh.COUNT
             self._pending |= Refresh.COUNT
         # The first load of a repo starts from nothing, not the old repo's history.
         loaded = () if Refresh.HISTORY in self._forced else self.history
-        job = _Job(self._repo, self._generation, parts, loaded, more)  # type: ignore[arg-type]
+        job = _Job(self._repo, self._generation, parts, loaded, more,  # type: ignore[arg-type]
+                   diff, self._diff_generation, self.status)
         relay = self._relay
         self._running = True
         self._loading_more = more
@@ -218,17 +267,24 @@ class RepoSession(QObject):
                 self._history_complete = result.history_complete
             for part, value in result.values:
                 self._store(part, value)
+            # After the parts: a listener of status_changed may have changed the target.
+            if result.diff_generation == self._diff_generation and self._diff_request:
+                if result.diff_read:
+                    self._store_diff(self._diff_request.file, result.diff)
+                elif result.diff_wanted:  # an earlier part failed: read it by itself
+                    self._diff_pending = True
             if result.error is not None:
                 self.error_occurred.emit(result.error)
                 # A count queued behind a failed job would fail too: one error is enough.
                 self._pending &= ~Refresh.COUNT
             self._store_forced_as_empty()  # parts a failed first load left behind
         self._running = False
-        if (self._pending or self._more_pending) and self._repo is not None:
+        if (self._pending or self._more_pending or self._diff_pending) and self._repo is not None:
             self._start_next()
         else:
             self._pending = Refresh(0)
             self._more_pending = False
+            self._diff_pending = False
             self._set_busy(False)
 
     def _set_busy(self, busy: bool) -> None:
@@ -243,6 +299,12 @@ class RepoSession(QObject):
             return
         self._values[part] = value
         self._signals[part].emit(value)
+
+    def _store_diff(self, file: FileSelection | None, diff: FileDiff | None) -> None:
+        if (file, diff) == self._diff:
+            return
+        self._diff = (file, diff)
+        self.diff_changed.emit(file, diff)
 
     def _store_forced_as_empty(self) -> None:
         for part in _PARTS:
@@ -262,6 +324,9 @@ class _Job:
     parts: Refresh
     loaded: tuple[Commit, ...]  # history so far; shared safely, it's immutable
     more: bool  # add a page of history
+    diff: DiffRequest | None  # read after the parts
+    diff_generation: int
+    status: tuple[FileStatus, ...]  # the latest status, for the diff, unless STATUS loads
 
 
 @dataclass(frozen=True)
@@ -270,6 +335,10 @@ class _JobResult:
     values: tuple[tuple[Refresh, object], ...]  # in _PARTS order
     history_complete: bool | None = None  # None: history wasn't loaded
     error: str | None = None
+    diff_generation: int = 0
+    diff_wanted: bool = False  # the job was to read the diff
+    diff_read: bool = False  # it tried; ``diff`` is None if that failed
+    diff: FileDiff | None = None
 
 
 class _Relay(QObject):
@@ -281,6 +350,7 @@ class _Relay(QObject):
 def _run_job(job: _Job) -> _JobResult:
     values: list[tuple[Refresh, object]] = []
     complete: bool | None = None
+    diff = {"diff_generation": job.diff_generation, "diff_wanted": job.diff is not None}
     for part in _PARTS:
         wanted = part in job.parts or (part is Refresh.HISTORY and job.more)
         if not wanted:
@@ -290,14 +360,26 @@ def _run_job(job: _Job) -> _JobResult:
                 value, complete = _load_history(job)
             else:
                 value = _load(job.repo, part)
-        except GitError as exc:
-            return _JobResult(job.generation, tuple(values), complete, str(exc))
-        except Exception as exc:  # a bug must not leave the session busy forever
-            log.exception("Loading %s failed", part)
-            return _JobResult(job.generation, tuple(values), complete,
-                              f"Unexpected error: {exc}")
+        except Exception as exc:
+            return _JobResult(job.generation, tuple(values), complete, _error(exc, part), **diff)
         values.append((part, value))
-    return _JobResult(job.generation, tuple(values), complete)
+    if job.diff is None:
+        return _JobResult(job.generation, tuple(values), complete, **diff)
+    status = dict(values).get(Refresh.STATUS, job.status)
+    try:
+        value = load_diff(job.repo, job.diff, status)  # type: ignore[arg-type]
+    except Exception as exc:
+        return _JobResult(job.generation, tuple(values), complete, _error(exc, "the diff"),
+                          **diff, diff_read=True)
+    return _JobResult(job.generation, tuple(values), complete, **diff, diff_read=True, diff=value)
+
+
+def _error(exc: Exception, what: object) -> str:
+    """The message for a failed load. A bug must not leave the session busy forever."""
+    if isinstance(exc, GitError):
+        return str(exc)
+    log.exception("Loading %s failed", what, exc_info=exc)
+    return f"Unexpected error: {exc}"
 
 
 def _load(repo: Repo, part: Refresh) -> object:

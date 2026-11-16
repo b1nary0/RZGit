@@ -46,6 +46,8 @@ class ThemeColors:
     diff_removed_word: str
     diff_filler_bg: str
     diff_gutter_text: str
+    diff_hunk_bg: str  # the "@@ -1,4 +1,5 @@" row
+    diff_hunk_text: str
 
 
 @dataclass(frozen=True)
@@ -176,6 +178,8 @@ LIGHT_THEME = AppTheme(
         diff_removed_word="#e79a9a",
         diff_filler_bg="#f0f0f0",
         diff_gutter_text="#9a9a9a",
+        diff_hunk_bg="#e8eef6",
+        diff_hunk_text="#5a6f8a",
     ),
     status=StatusColors(
         modified="#4a7fc1",

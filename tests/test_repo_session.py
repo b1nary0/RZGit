@@ -6,6 +6,7 @@ import threading
 from unittest import mock
 
 from rzgitclient.core.repo_session import Refresh, RepoSession
+from rzgitclient.core.selection import FileSelection, FileSource
 from rzgitclient.git.repo import GitError, Repo
 from tests.support import SignalRecorder, commit_file, git, make_repo, qt_app, wait_idle
 
@@ -434,6 +435,141 @@ class HistoryPagingTests(unittest.TestCase):
         self.session.close()
         self.assertTrue(self.session.history_complete)
         self.assertEqual(self.session.history, ())
+
+
+class RepoSessionDiffTests(unittest.TestCase):
+    """Diffs are asked for (spec §4.1)."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        commit_file(self.path, "a.txt", "1\n", "first")
+        commit_file(self.path, "b.txt", "1\n", "second")
+        (self.path / "a.txt").write_text("2\n")
+        self.session = RepoSession()
+        self.diffs = []
+        self.session.diff_changed.connect(lambda f, d: self.diffs.append((f, d)))
+        self.errors = []
+        self.session.error_occurred.connect(self.errors.append)
+        self.assertTrue(self.session.open(self.path))
+        wait_idle(self.session)
+        self.diffs.clear()
+
+    def tearDown(self):
+        self.session.shutdown()
+        self._tmp.cleanup()
+
+    def added(self, diff):
+        return [l.text for h in diff.hunks for l in h.lines if l.kind.value == "+"]
+
+    def test_request_reads_the_diff_off_the_ui_thread(self):
+        a = FileSelection("a.txt", FileSource.WORKTREE)
+        self.session.request_diff(a)
+        self.assertEqual(self.diffs, [])  # not yet: it runs on the worker
+        self.assertTrue(self.session.busy)
+        wait_idle(self.session)
+        ((file, diff),) = self.diffs
+        self.assertEqual(file, a)
+        self.assertEqual(self.added(diff), ["2"])
+        self.assertEqual((self.session.diff_file, self.session.diff), (a, diff))
+
+    def test_a_newer_request_drops_the_older_result(self):
+        a = FileSelection("a.txt", FileSource.WORKTREE)
+        b = FileSelection("b.txt", FileSource.WORKTREE)
+        self.session.request_diff(a)
+        self.session.request_diff(b)
+        wait_idle(self.session)
+        self.assertEqual([f for f, _ in self.diffs], [b])
+
+    def test_none_clears_the_target_at_once(self):
+        a = FileSelection("a.txt", FileSource.WORKTREE)
+        self.session.request_diff(a)
+        wait_idle(self.session)
+        self.session.request_diff(None)
+        self.assertEqual(self.diffs[-1], (None, None))
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertEqual(self.diffs[-1], (None, None))  # nothing read for no target
+
+    def test_a_refresh_reads_the_diff_again_and_sends_only_changes(self):
+        a = FileSelection("a.txt", FileSource.WORKTREE)
+        self.session.request_diff(a)
+        wait_idle(self.session)
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertEqual(len(self.diffs), 1)  # the same diff: not sent again
+        (self.path / "a.txt").write_text("3\n")  # still "modified": status doesn't change
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertEqual(len(self.diffs), 2)
+        self.assertEqual(self.added(self.diffs[-1][1]), ["3"])
+
+    def test_a_refresh_without_status_leaves_the_diff(self):
+        self.session.request_diff(FileSelection("a.txt", FileSource.WORKTREE))
+        wait_idle(self.session)
+        (self.path / "a.txt").write_text("3\n")
+        self.session.refresh(Refresh.BRANCHES)
+        wait_idle(self.session)
+        self.assertEqual(len(self.diffs), 1)
+
+    def test_a_listener_of_status_can_change_the_target_first(self):
+        # The Files panel does this when the selected file disappears.
+        self.session.request_diff(FileSelection("a.txt", FileSource.WORKTREE))
+        wait_idle(self.session)
+        self.session.status_changed.connect(lambda _s: self.session.request_diff(None))
+        git(self.path, "checkout", "--", "a.txt")
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertEqual(self.diffs[-1], (None, None))
+        self.assertEqual(self.session.diff_file, None)
+
+    def test_full_reads_a_diff_over_the_limit(self):
+        a = FileSelection("a.txt", FileSource.WORKTREE)
+        (self.path / "a.txt").write_text("".join(f"{n}\n" for n in range(40)))
+        with mock.patch("rzgitclient.core.diff_request.DIFF_MAX_LINES", 10):
+            self.session.request_diff(a)
+            wait_idle(self.session)
+            self.assertTrue(self.diffs[-1][1].too_large)
+            self.session.request_diff(a, full=True)
+            wait_idle(self.session)
+            self.assertFalse(self.diffs[-1][1].too_large)
+            self.session.refresh()  # stays full
+            wait_idle(self.session)
+            self.assertFalse(self.session.diff.too_large)
+
+    def test_a_failed_diff_is_an_error_and_none(self):
+        gone = FileSelection("gone.txt", FileSource.WORKTREE)
+        (self.path / "gone.txt").write_text("x")
+        self.session.refresh()
+        wait_idle(self.session)
+        (self.path / "gone.txt").unlink()  # status still says untracked
+        self.session.request_diff(gone)
+        wait_idle(self.session)
+        self.assertEqual(self.diffs[-1], (gone, None))
+        self.assertEqual(len(self.errors), 1)
+
+    def test_a_part_failing_queues_the_diff_by_itself(self):
+        a = FileSelection("a.txt", FileSource.WORKTREE)
+        self.session.request_diff(a)
+        wait_idle(self.session)
+        (self.path / "a.txt").write_text("3\n")
+        with mock.patch.object(Repo, "branches", side_effect=GitError("boom")):
+            self.session.refresh()
+            wait_idle(self.session)
+        self.assertEqual(self.errors, ["boom"])
+        self.assertEqual(self.added(self.session.diff), ["3"])
+
+    def test_open_and_close_forget_the_diff(self):
+        self.session.request_diff(FileSelection("a.txt", FileSource.WORKTREE))
+        wait_idle(self.session)
+        self.session.close()
+        self.assertEqual(self.diffs[-1], (None, None))
+        self.session.request_diff(FileSelection("a.txt", FileSource.WORKTREE))  # no repo
+        self.assertFalse(self.session.busy)
 
 
 if __name__ == "__main__":

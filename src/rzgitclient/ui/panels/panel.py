@@ -52,6 +52,7 @@ class Panel(QWidget):
     always_shown: ClassVar[bool] = False  # True: the layout never leaves it out (§6.6)
 
     header_changed = Signal(str)
+    activate_requested = Signal()  # "bring me to the front": the layout raises my tab
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -91,3 +92,10 @@ class Panel(QWidget):
             return
         self._header = text
         self.header_changed.emit(text)
+
+    def request_activation(self) -> None:
+        """Ask the layout to show this panel: in tabs, its tab becomes current.
+
+        Only in answer to something the user did, never on a refresh (§5.1).
+        """
+        self.activate_requested.emit()

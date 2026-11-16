@@ -19,7 +19,7 @@ H, V = Orientation.HORIZONTAL, Orientation.VERTICAL
 # A user's layout: the same panels as the default, arranged differently.
 CUSTOM = SplitNode(
     V,
-    (PanelNode("controls"), PanelNode("history"),
+    (PanelNode("controls"), SplitNode(H, (PanelNode("history"), PanelNode("diff"))),
      TabsNode((PanelNode("branches"), PanelNode("files")), current=1)),
     sizes=(30, 500, 200),
 )
@@ -62,18 +62,34 @@ class RestoreLayoutTests(unittest.TestCase):
                          LayoutState(rest, {"files": anchor}))
 
     def test_a_panel_new_in_this_version_goes_to_its_default_place(self):
-        # Saved by a version without the Files and Controls panels: the user's
-        # arrangement is kept, Files joins Branches, Controls goes across the top.
+        # Saved by a version without the Files, Controls and Diff panels: the
+        # user's arrangement is kept, Files joins Branches, Controls goes across
+        # the top, Diff becomes History's second tab.
         older = SplitNode(H, (PanelNode("branches"), PanelNode("history")), sizes=(100, 500))
         restored = restore_layout(saved(older))
         self.assertEqual(restored.root, SplitNode(V, (
             PanelNode("controls"),
             SplitNode(H, (
                 SplitNode(V, (PanelNode("branches"), PanelNode("files")), sizes=(429, 571)),
-                PanelNode("history"),
+                TabsNode((PanelNode("history"), PanelNode("diff"))),
             ), sizes=(100, 500)),
         )))
         self.assertEqual(restored.hidden, {})
+
+    def test_the_default_layout_before_the_diff_panel_migrates_to_today_s(self):
+        before_rzg_18 = SplitNode(V, (PanelNode("controls"), SplitNode(H, (
+            SplitNode(V, (PanelNode("branches"), PanelNode("files")), sizes=(300, 400)),
+            PanelNode("history"),
+        ), sizes=(220, 880))))
+        self.assertEqual(restore_layout(saved(before_rzg_18)), LayoutState(DEFAULT_LAYOUT))
+
+    def test_a_new_tab_leaves_the_current_tab_current(self):
+        older = SplitNode(V, (PanelNode("controls"), SplitNode(H, (
+            PanelNode("branches"),
+            TabsNode((PanelNode("files"), PanelNode("history")), current=1)))))
+        tabs = restore_layout(saved(older)).root.children[1].children[1]
+        self.assertEqual(tabs, TabsNode(
+            (PanelNode("files"), PanelNode("history"), PanelNode("diff")), current=1))
 
     def test_version_1_files_load(self):
         self.assertEqual(restore_layout({"version": 1, "root": saved(CUSTOM)["root"]}),
@@ -83,7 +99,7 @@ class RestoreLayoutTests(unittest.TestCase):
         newer = SplitNode(V, (*CUSTOM.children, PanelNode("retired")), sizes=(30, 400, 200, 100))
         retired_anchor = Anchor(("history",), V, True)
         restored = restore_layout(saved(newer, {"gone": retired_anchor}))
-        self.assertEqual(sorted(panel_ids(restored.root)), ["branches", "controls", "files", "history"])
+        self.assertEqual(sorted(panel_ids(restored.root)), ["branches", "controls", "diff", "files", "history"])
         self.assertIsNone(restored.root.sizes)  # children changed, so sizes no longer fit
         self.assertEqual(restored.hidden, {})
 

@@ -65,10 +65,11 @@ into each other.
 src/rzgitclient/
   app.py                        composition root
   git/
-    git_models.py               Commit, Branch, FileStatus
+    git_models.py               Commit, Branch, FileStatus, FileDiff, Hunk, DiffLine
     repo.py                     Repo: runs git, returns models
   core/
     repo_session.py             RepoSession: the open repo, its data, git commands
+    diff_request.py             DiffRequest, the size limit, load_diff (the worker side of diffs)
     selection.py                Selection: what the user has selected (commit, file)
     app_settings.py             AppSettings: typed wrapper over QSettings (last_repo, layout)
   ui/
@@ -89,6 +90,9 @@ src/rzgitclient/
       history_panel.py          HistoryPanel
       history_model.py          HistoryModel: the commit table's Qt model, paged
       files_panel.py            FilesPanel
+      diff_panel.py             DiffPanel
+      diff_view.py              DiffView: read-only text with a line-number gutter
+      diff_rows.py              DiffRow, unified_rows, split_rows (plain Python, no Qt)
     layout/
       layout_model.py           PanelNode / SplitNode / TabsNode, (de)serialisation, normalize
       layout_presets.py         PRESETS, DEFAULT_LAYOUT, restore_layout
@@ -124,6 +128,7 @@ class RepoSession(QObject):
     history_changed  = Signal(object)  # tuple[Commit, ...]
     status_changed   = Signal(object)  # tuple[FileStatus, ...]
     commit_count_changed = Signal(object)  # int | None  (commits reachable from HEAD)
+    diff_changed     = Signal(object, object)  # FileSelection | None, FileDiff | None
     error_occurred   = Signal(str)
     busy_changed     = Signal(bool)  # True while git work is queued or running
 
@@ -131,9 +136,10 @@ class RepoSession(QObject):
     def close(self) -> None
     def refresh(self, parts: Refresh = Refresh.ALL) -> None   # Flag: HEAD|BRANCHES|HISTORY|STATUS|COUNT
     def load_more_history(self) -> None   # the next page of history, in the background
+    def request_diff(self, file: FileSelection | None, full: bool = False) -> None
 
     # Latest values, so a panel created later renders at once (read-only properties):
-    repo, head, branches, history, status, commit_count, history_complete
+    repo, head, branches, history, status, commit_count, history_complete, diff_file, diff
 
     # Future git commands (stage, commit, checkout…) are methods here. Each one ends with
     # refresh(<only the parts it changes>).
@@ -193,6 +199,24 @@ class RepoSession(QObject):
   are due, the count waits for the next job, so the first page isn't delayed by it (0.1 s
   for 200k commits). `commit_count` is None until it arrives; parts still queued aren't
   reported as empty after a job.
+- **Diffs are asked for.** Unlike the parts above, a diff is for one file, the one the
+  Diff panel shows. `request_diff(file)` makes `file` the session's **diff target** and
+  queues it on the same worker, so a diff is never read between two parts of a refresh.
+  - The result arrives as `diff_changed(file, diff)`, after the parts of its job, and only
+    when it differs from the last one. `diff` is None when nothing is selected or the
+    diff couldn't be read (the error goes through `error_occurred` as usual).
+  - A newer request makes older ones stale: a diff counter, bumped by every request and by
+    `open()` and `close()`, drops their results. `request_diff(None)` clears the target.
+  - **The diff follows refreshes.** Every job that loads `STATUS` reads the target's diff
+    again, after the status, when the target is a worktree or index file. Equal results
+    aren't emitted, so the panel only redraws when the file changed. If an earlier part of
+    the job fails, the diff is queued again by itself.
+  - The worker side is `core/diff_request.py`. It picks the git source from the latest
+    status: a worktree file that status calls untracked is diffed against nothing, and a
+    staged rename passes its old path too, so git shows it as a rename.
+  - **Size limit:** a diff of more than `DIFF_MAX_BYTES` (1 MB) or `DIFF_MAX_LINES`
+    (20,000 lines) comes back as `FileDiff(too_large=True)` with no hunks, and isn't parsed.
+    `request_diff(file, full=True)` reads it whole; the target keeps `full` across refreshes.
 - **Growth:** when the session gains many commands (stage, commit, checkout, fetch…), they
   can move to a separate `core/git_commands.py` that the session delegates to. Not before.
 
@@ -218,12 +242,15 @@ class Selection(QObject):
     file_changed   = Signal(object)  # FileSelection | None
 ```
 
-History sets `selection.commit`, and a future Diff panel listens to it. Setters emit only
-when the value changes. This is the mediator pattern: panels share state, not references.
+History sets `selection.commit` and Files sets `selection.file`; the Diff panel listens to
+`file_changed`. Setters emit only when the value changes. This is the mediator pattern:
+panels share state, not references.
 
-Selection is cleared when the repo changes. What happens when a selected commit or file
-disappears (after an amend, or staging) is decided with the Diff and Files panels that
-care about it.
+Selection is cleared when the repo changes. When the selected file disappears after a
+refresh, the Files panel sets `selection.file = None` and the Diff panel shows its empty
+state. When the same file moves between unstaged and staged, the Files panel selects it
+with its new source. What happens to a selected commit that disappears (after an amend)
+is decided with RZG-21.
 
 ## 5. Panels
 
@@ -245,13 +272,20 @@ class Panel(QWidget):
     fixed_height: ClassVar[bool] = False           # True: its pane in a vertical split can't be resized
     always_shown: ClassVar[bool] = False           # True: the layout never leaves it out (§6.6)
     header_changed = Signal(str)                   # emitted by set_header()
+    activate_requested = Signal()                  # emitted by request_activation()
 
     def __init__(self, ctx: PanelContext, parent=None): ...   # final: panels don't override it
     def _setup(self) -> None: ...                         # the panel builds its widgets here
     def apply_theme(self, theme: AppTheme) -> None: ...   # default no-op; the base wires theme_changed
     header: str                                           # read-only; `title` until set_header()
     def set_header(self, text: str) -> None: ...          # e.g. "Modified files (19)"; emits on change
+    def request_activation(self) -> None: ...             # "bring me to the front" (a tab)
 ```
+
+`request_activation()` asks the layout to make the panel visible; the panel doesn't know
+whether it sits in a tab group. The host raises its tab (§6.2); in a split it is visible
+already, so nothing happens. A panel asks for this only in answer to something the user
+did (the Diff panel, when the user selects another file), never on a refresh.
 
 The panel keeps its current header text, so a frame built later (when `LayoutHost` reuses
 a panel, §6.2) shows the latest one instead of falling back to `title`. Header text is
@@ -305,8 +339,8 @@ Every panel follows these rules:
 
 ### 5.3 Registry
 
-`panels/panel_registry.py` has an explicit `PANEL_TYPES = (BranchesPanel, HistoryPanel,
-FilesPanel)` and a `panel_type(panel_id)` lookup that raises `KeyError` for an unknown id.
+`panels/panel_registry.py` has an explicit `PANEL_TYPES = (ControlsPanel, BranchesPanel,
+HistoryPanel, FilesPanel, DiffPanel)` and a `panel_type(panel_id)` lookup that raises `KeyError` for an unknown id.
 **Why explicit:** no import-time side effects or decorator magic, and one place to see
 every panel. The lookup table is built at import by `index_panel_types()`, which raises
 `ValueError` on a duplicate id, so a clash fails at startup and in every test run.
@@ -322,6 +356,7 @@ The first three are extracted from the original `main_window.py` with the same b
 | BranchesPanel | `branches` | sidebar | branches, current in bold | (later: checkout) |
 | HistoryPanel | `history` | content | commit table | `selection.commit` |
 | FilesPanel | `files` | sidebar | working tree changes, staged/unstaged, status colours | `selection.file` |
+| DiffPanel | `diff` | content | the diff of `selection.file`, unified or side by side | (later: stage hunks) |
 
 FilesPanel is the original "Working Tree Changes" list; its header shows the count,
 e.g. "Files (24)".
@@ -356,8 +391,31 @@ re-selects the same item (a commit by sha, a file by path and source). It writes
 another panel (a future Diff) is showing. `apply_theme` recolours existing rows rather
 than rebuilding them.
 
-Planned feature panels (commit
-message, diff, controls) plug in the same way, with no architecture changes.
+**DiffPanel** shows the diff of the selected file (`selection.file`), read through
+`session.request_diff` (§4.1).
+- **Views:** unified (one column, old and new line numbers in the gutter) or side by side
+  (old on the left, new on the right, with filler rows so the sides line up). The
+  checkable **Side by Side Diff** action (§8) switches between them, from the View menu or
+  the panel's own button.
+- **Rows** come from `diff_rows.py`, plain Python tested without Qt: `unified_rows(diff)`
+  and `split_rows(diff)` turn a `FileDiff` into `DiffRow`s (hunk header, context, added,
+  removed, filler, note) with their line numbers. In side by side, a run of removed lines
+  is paired with the run of added lines after it, and the shorter side is padded with
+  filler. "No newline at end of file" is a note row after its line.
+- **DiffView** (`diff_view.py`) is a read-only, non-wrapping `QPlainTextEdit`, so large
+  text costs little: its layout is lazy. The text goes in with one `setPlainText`. Row
+  backgrounds are painted for the visible rows only, under the text, from the row kinds;
+  hunk headers also get the hunk text colour. The gutter is drawn like Qt's code-editor
+  example. Colours are `diff_*` tokens, the font is `theme.mono_font()`, and a trailing
+  carriage return shows as `␍`.
+- **States:** "Select a file to see its diff", "No changes to show", "Binary file", "Large
+  diff (N lines) [Show anyway]" and "Couldn't read this diff" are a muted message instead
+  of the view (`Role.PLACEHOLDER`). If a diff takes more than 150 ms, "Loading…" is shown.
+- **Updates:** a new diff of the same file keeps the scroll position; another file starts
+  at the top. Selecting a file at another path calls `request_activation()`, so the Diff
+  tab comes to the front; a refresh never does.
+
+Planned feature panels (commit message) plug in the same way, with no architecture changes.
 
 ## 6. Layout
 
@@ -402,13 +460,14 @@ class LayoutState: root: LayoutNode; hidden: Mapping[str, Anchor] = {}   # what'
   "share": 0.3}` (`share` optional, dropped if it isn't between 0 and 1).
 
 **Presets** (`layout_presets.py`, `PRESETS`) are named trees that show every panel. Each
-has the Controls panel across the top, above the arrangement described:
-- **Standard** (`DEFAULT_LAYOUT`): Branches above Files in a left sidebar, History on the
-  right: `Split(V, [controls, Split(H, [Split(V, [branches, files], sizes=(300, 400)),
-  history], sizes=(220, 880))])`.
+has the Controls panel across the top, above the arrangement described. In every preset,
+History and Diff are tabs of one group, with History current:
+- **Standard** (`DEFAULT_LAYOUT`): Branches above Files in a left sidebar, History and Diff
+  on the right: `Split(V, [controls, Split(H, [Split(V, [branches, files], sizes=(300,
+  400)), Tabs([history, diff])], sizes=(220, 880))])`.
 - **Sidebar Tabs:** Branches and Files as tabs on the left, each with the full height;
-  History on the right.
-- **Stacked:** History across the top; Branches and Files side by side below it.
+  History and Diff on the right.
+- **Stacked:** History and Diff across the top; Branches and Files side by side below.
 
 ### 6.2 LayoutHost
 
@@ -422,7 +481,8 @@ has the Controls panel across the top, above the arrangement described:
   every change, which the menus follow.
 - In a split, each panel is wrapped in a `PanelFrame` (`layout/panel_frame.py`): a section
   header plus the panel, with the panel's `surface` set as a style property. In tabs, the
-  tab label is the panel's `header` instead, and follows `header_changed`.
+  tab label is the panel's `header` instead, and follows `header_changed`. A tab group
+  also follows each panel's `activate_requested` and makes that tab current.
 - The host owns the panels (a read-only `panels` mapping by id); frames and containers are
   rebuilt on every `apply`. Panes can't be collapsed to nothing by dragging a divider
   (`setChildrenCollapsible(False)`): with 1px dividers a collapsed pane is hard to find.
@@ -432,7 +492,7 @@ has the Controls panel across the top, above the arrangement described:
 ### 6.3 Persistence
 
 `AppSettings` (`core/app_settings.py`) is the only code that touches `QSettings`. It has
-typed accessors (`last_repo`, `layout`, `window_geometry`) and takes a file path for tests.
+typed accessors (`last_repo`, `layout`, `window_geometry`, `side_by_side_diff`) and takes a file path for tests.
 `app.py` creates it and passes it to `MainWindow`; panels don't get it.
 
 On close, the window saves the host's `state()` (as JSON, so the format is ours) and its
@@ -444,7 +504,9 @@ returns the `LayoutState` to apply:
 - a panel the user hid stays hidden (anchors of panels this version no longer has are
   dropped);
 - a panel that is neither shown nor hidden is new in this version: it's inserted at its
-  place in `DEFAULT_LAYOUT` (§6.6), and the rest of the user's layout is kept.
+  place in `DEFAULT_LAYOUT` (§6.6), and the rest of the user's layout is kept. When it
+  joins a tab group, the tab the user had current stays current (a Diff tab added beside
+  History doesn't hide History on the first start).
 
 **View → Reset Layout** applies `DEFAULT_LAYOUT` at once, showing every panel.
 
@@ -476,12 +538,13 @@ Edits are pure functions in `layout_model.py`, tested without Qt:
   where it sat: the panels of the node beside it (the next one, or the previous one if it
   was last), whether they were side by side, stacked or tabs, which side it was on, and
   its share of the space the two had.
-- `insert_panel(root, id, anchor, fallback)`: finds the smallest node holding the anchor's
+- `insert_panel(root, id, anchor, fallback, make_current=True)`: finds the smallest node holding the anchor's
   neighbours that are still shown, and puts the panel on the recorded side of it, taking
   its share of that node's space. If that node sits in a split of the same orientation,
   the panel joins that split; otherwise the node is wrapped in a new split (or tabs). If
   none of the neighbours is shown, it uses `fallback` (the panel's anchor in
-  `DEFAULT_LAYOUT`), and failing that the right-hand edge.
+  `DEFAULT_LAYOUT`), and failing that the right-hand edge. A panel added to tabs becomes
+  the current tab, unless `make_current` is False (migration, §6.3).
 
 **Panels that are always shown** (`always_shown`, the Controls panel): `LayoutHost.apply`
 inserts one at its `DEFAULT_LAYOUT` place whenever a tree lacks it, so no preset, saved
@@ -505,7 +568,7 @@ back where the user had it. The default place is only the fallback.
 @dataclass(frozen=True)
 class ThemeColors:   menubar_bg: str; toolbar_bg: str; sidebar_bg: str; content_bg: str; border: str;
                      text: str; text_muted: str; hover: str; selection: str; content_selection: str;
-                     accent: str; button_*: str; scroll_*: str; diff_*: str; …
+                     accent: str; button_*: str; scroll_*: str; diff_*: str (incl. diff_hunk_bg, diff_hunk_text); …
 @dataclass(frozen=True)
 class StatusColors:  modified, added, deleted, renamed, copied, type_changed, conflict, untracked: str
                      def for_code(self, code: str) -> str | None   # porcelain letter → colour; None if unknown
@@ -538,7 +601,8 @@ LIGHT_THEME = AppTheme(...)
 
 ### 7.2 Semantic roles
 
-`style_roles.py` defines `Surface` (SIDEBAR, CONTENT, CHROME) and `Role` (SECTION_HEADER).
+`style_roles.py` defines `Surface` (SIDEBAR, CONTENT, CHROME) and `Role` (SECTION_HEADER,
+PLACEHOLDER for a muted "nothing to show" message, DIFF_VIEW for the borderless diff text).
 Widgets get them as Qt dynamic properties through `set_surface()` / `set_role()`, and the
 stylesheet targets those (`QWidget[surface="sidebar"]`). The theme decides what "sidebar"
 looks like; panels only say what they are.
@@ -567,6 +631,9 @@ Per-widget sheets are slow to apply and scatter the rules.
 - **`AppActions`** (`ui/app_actions.py`) defines every `QAction` once: text, icon, shortcut
   and enabled state (e.g. Refresh is disabled with no repo open, driven by `repo_changed`).
   The menu bar, context menus and the Controls panel all show the same objects.
+  **Side by Side Diff** is checkable: the Diff panel follows its `toggled`. MainWindow sets
+  it from `AppSettings.side_by_side_diff` before the panels are built, and saves it on close
+  with the layout, so panels never touch settings.
 - **`MainWindow`** is a thin shell: menus built from `AppActions`, the status
   bar summary (from session signals: path · branch · commits · changed files), error dialogs (from `error_occurred`), and a
   `LayoutHost` as the central widget. The Open, Quit and Reset Layout handlers live here
@@ -603,7 +670,8 @@ cheap to fix **later**, without paying for them now:
   latest values on temp repos), `test_app_theme` / `test_theme_manager` (the stylesheet
   builds, and every role it uses exists), `test_layout_model` (round-trip and `normalize`
   edge cases), `test_layout_host` (build, panel reuse, reading sizes back),
-  `test_<name>_panel` (each panel renders a temp repo and the empty state), and
+  `test_<name>_panel` (each panel renders a temp repo and the empty state),
+  `test_diff_request` and `test_diff_rows` (the diff's worker side and its rows), and
   `test_architecture` (§2 import rules, unique panel ids).
 - Stays on stdlib `unittest`: there are no extra dependencies, and VS Code's test panel is
   already set up for it.

@@ -186,12 +186,17 @@ def _without(node: LayoutNode, panel_id: str) -> LayoutNode | None:
 
 
 def insert_panel(
-    root: LayoutNode | None, panel_id: str, anchor: Anchor | None, fallback: Anchor | None = None
+    root: LayoutNode | None,
+    panel_id: str,
+    anchor: Anchor | None,
+    fallback: Anchor | None = None,
+    make_current: bool = True,
 ) -> LayoutNode:
     """``root`` with ``panel_id`` placed by ``anchor`` (spec §6.6).
 
     Uses ``fallback`` if none of the anchor's neighbours is shown, and the
     right-hand edge if neither fits. A panel already shown is left where it is.
+    Added to tabs, it becomes the current tab unless ``make_current`` is False.
     """
     if root is None:
         return PanelNode(panel_id)
@@ -200,11 +205,14 @@ def insert_panel(
         return root
     for a in (anchor, fallback):
         if a is not None and (present := [n for n in a.neighbors if n in shown]):
-            return _insert(root, panel_id, a, present)
-    return _insert(root, panel_id, Anchor(tuple(shown), Orientation.HORIZONTAL, False), shown)
+            return _insert(root, panel_id, a, present, make_current)
+    return _insert(root, panel_id, Anchor(tuple(shown), Orientation.HORIZONTAL, False), shown,
+                   make_current)
 
 
-def _insert(root: LayoutNode, panel_id: str, anchor: Anchor, present: list[str]) -> LayoutNode:
+def _insert(
+    root: LayoutNode, panel_id: str, anchor: Anchor, present: list[str], make_current: bool
+) -> LayoutNode:
     new = PanelNode(panel_id)
     path = _common_prefix([_path(root, n) or () for n in present])
     node = _at(root, path)
@@ -214,13 +222,15 @@ def _insert(root: LayoutNode, panel_id: str, anchor: Anchor, present: list[str])
         if isinstance(node, PanelNode) and isinstance(parent, TabsNode):
             i = path[-1] + (0 if anchor.before else 1)
             tabs = parent.children[:i] + (new,) + parent.children[i:]
-            return _replace(root, path[:-1], TabsNode(tabs, i))
+            current = parent.current + (1 if i <= parent.current else 0)
+            return _replace(root, path[:-1], TabsNode(tabs, i if make_current else current))
         if isinstance(node, PanelNode):
             pair = (new, node) if anchor.before else (node, new)
-            return _replace(root, path, TabsNode(pair, pair.index(new)))
+            return _replace(root, path, TabsNode(pair, pair.index(new if make_current else node)))
         if isinstance(node, TabsNode):
             tabs = (new, *node.children) if anchor.before else (*node.children, new)
-            return _replace(root, path, TabsNode(tabs, tabs.index(new)))
+            current = node.current + (1 if anchor.before else 0)
+            return _replace(root, path, TabsNode(tabs, tabs.index(new) if make_current else current))
         # Its neighbours are now spread over a split: go beside them instead.
         anchor = Anchor(anchor.neighbors, Orientation.HORIZONTAL, anchor.before, anchor.share)
     orientation = anchor.orientation

@@ -24,6 +24,8 @@ class MainWindow(QMainWindow):
         self.resize(1100, 700)
         if (geometry := settings.window_geometry) is not None:
             self.restoreGeometry(geometry)
+        # Before the panels are built, so the Diff panel starts in the saved view.
+        ctx.actions.side_by_side_diff.setChecked(settings.side_by_side_diff)
         self._build_ui()
         self._build_actions()
 
@@ -51,6 +53,8 @@ class MainWindow(QMainWindow):
         view_menu.addMenu(LayoutMenu(self.layout_host, view_menu))
         view_menu.addMenu(PanelsMenu(self.layout_host, view_menu))
         view_menu.addSeparator()
+        view_menu.addAction(actions.side_by_side_diff)
+        view_menu.addSeparator()
         view_menu.addAction(actions.reset_layout)
 
     def _build_ui(self) -> None:
@@ -72,6 +76,7 @@ class MainWindow(QMainWindow):
         state = self.layout_host.state()
         self.settings.layout = to_dict(state) if state is not None else None
         self.settings.window_geometry = self.saveGeometry()
+        self.settings.side_by_side_diff = self.ctx.actions.side_by_side_diff.isChecked()
         super().closeEvent(event)
 
     def choose_repo(self) -> None:

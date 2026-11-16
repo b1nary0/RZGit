@@ -119,7 +119,7 @@ class SerialisationTests(unittest.TestCase):
 
 class NormalizeTests(unittest.TestCase):
     def test_valid_tree_is_unchanged(self):
-        known = {"controls", "branches", "files", "history"}
+        known = {"controls", "branches", "files", "history", "diff"}
         self.assertEqual(normalize(DEFAULT_LAYOUT, known), DEFAULT_LAYOUT)
 
     def test_drops_unknown_panels(self):
@@ -221,6 +221,19 @@ class EditTests(unittest.TestCase):
         # Its tab neighbour is now alone outside tabs: they become tabs again.
         self.assertEqual(insert_panel(SplitNode(H, (C, D)), "b", anchor),
                          SplitNode(H, (TabsNode((B, C), current=0), D)))
+
+    def test_make_current_false_keeps_the_current_tab(self):
+        tabs = SplitNode(H, (TabsNode((A, C), current=1), D))
+        before_c = Anchor(("c",), None, True)
+        self.assertEqual(insert_panel(tabs, "b", before_c, make_current=False),
+                         SplitNode(H, (TabsNode((A, B, C), current=2), D)))  # still C
+        group = SplitNode(H, (TabsNode((A, C), current=1), D))  # the group itself is the node
+        self.assertEqual(insert_panel(group, "b", Anchor(("a", "c"), None, True),
+                                      make_current=False),
+                         SplitNode(H, (TabsNode((B, A, C), current=2), D)))
+        self.assertEqual(insert_panel(SplitNode(H, (C, D)), "b", Anchor(("c",), None, False),
+                                      make_current=False),
+                         SplitNode(H, (TabsNode((C, B), current=0), D)))
 
     def test_a_tab_can_not_be_split_so_it_goes_beside_the_group(self):
         tree = SplitNode(V, (TabsNode((A, B)), C))

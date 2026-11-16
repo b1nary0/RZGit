@@ -28,6 +28,8 @@ class Role(StrEnum):
     """What a single widget is for."""
 
     SECTION_HEADER = "section-header"
+    PLACEHOLDER = "placeholder"  # a muted "nothing to show" message
+    DIFF_VIEW = "diff-view"  # the diff's text: no frame, rows reach the edges
 
 
 def set_surface(widget: QWidget, surface: Surface) -> None:

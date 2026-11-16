@@ -205,12 +205,19 @@ class _PanelTabs(QTabWidget):
 
     def add_panel(self, panel: Panel) -> None:
         self.addTab(panel, panel.header)
-        # A bound slot: Qt drops the connection when these tabs are deleted.
+        # Bound slots: Qt drops the connections when these tabs are deleted.
         panel.header_changed.connect(self._retitle)
+        panel.activate_requested.connect(self._activate)
 
     @Slot(str)
     def _retitle(self, text: str) -> None:
         index = self.indexOf(self.sender())
         if index >= 0:  # the panel may have moved to another container
             self.setTabText(index, text)
+
+    @Slot()
+    def _activate(self) -> None:
+        index = self.indexOf(self.sender())
+        if index >= 0:
+            self.setCurrentIndex(index)
 
