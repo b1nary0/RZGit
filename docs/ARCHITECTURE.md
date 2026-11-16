@@ -70,6 +70,7 @@ src/rzgitclient/
   core/
     repo_session.py             RepoSession: the open repo, its data, git commands
     diff_request.py             DiffRequest, the size limit, load_diff (the worker side of diffs)
+    git_commands.py             GitCommand, run_command (the worker side of commands: stage, …)
     selection.py                Selection: what the user has selected (commit, file)
     app_settings.py             AppSettings: typed wrapper over QSettings (last_repo, layout)
   ui/
@@ -138,11 +139,15 @@ class RepoSession(QObject):
     def load_more_history(self) -> None   # the next page of history, in the background
     def request_diff(self, file: FileSelection | None, full: bool = False) -> None
 
+    # Commands: they change the repository (§4.1, "Commands").
+    def stage(self, paths) -> None        # git add
+    def unstage(self, paths) -> None      # git restore --staged (git rm --cached before the first commit)
+    def stage_all(self) -> None
+    def unstage_all(self) -> None
+    def discard(self, paths) -> None      # unstaged changes; untracked files go to the trash
+
     # Latest values, so a panel created later renders at once (read-only properties):
     repo, head, branches, history, status, commit_count, history_complete, diff_file, diff
-
-    # Future git commands (stage, commit, checkout…) are methods here. Each one ends with
-    # refresh(<only the parts it changes>).
 ```
 
 - **Push, not pull.** Panels never ask for data and wait for a return value. They read the
@@ -217,8 +222,25 @@ class RepoSession(QObject):
   - **Size limit:** a diff of more than `DIFF_MAX_BYTES` (1 MB) or `DIFF_MAX_LINES`
     (20,000 lines) comes back as `FileDiff(too_large=True)` with no hunks, and isn't parsed.
     `request_diff(file, full=True)` reads it whole; the target keeps `full` across refreshes.
-- **Growth:** when the session gains many commands (stage, commit, checkout, fetch…), they
-  can move to a separate `core/git_commands.py` that the session delegates to. Not before.
+- **Commands** change the repository. A command is a `GitCommand` (`core/git_commands.py`)
+  queued on the same worker as refreshes, so commands and loads never overlap and run in the
+  order they were asked for.
+  - A command adds the parts it changes to its job (staging changes only `STATUS`), and the
+    job loads them after running its commands, so every command is followed by a refresh
+    of what it changed, and the diff target's diff with it. Commands asked for while a job
+    runs go into the next job, still in order. A command asked for with no repo does nothing.
+  - A failing command sends its error through `error_occurred`, and the job skips the
+    commands after it but still loads its parts, so the window shows what really happened.
+  - `open()`, `close()` and `shutdown()` drop commands that haven't run: they were meant for
+    the repository that was open.
+  - `busy` covers commands like any other job.
+  - The worker side, `run_command(repo, command)`, reads the status itself where a command
+    depends on it (a staged rename unstages its old path too; discard tells untracked files
+    from tracked ones), so a stale status in the window can't make it act on the wrong file.
+  - **Discard** restores the worktree from the index (`git restore`), so staged work is
+    kept. Untracked files are moved to the trash (`QFile.moveToTrash`), never deleted; if the
+    trash can't be used, that is an error. The confirmation is the window's job (§8).
+  - Paths are passed with `--literal-pathspecs`, so a file named `:x` or `*.c` means itself.
 
 ### 4.2 Selection
 
@@ -239,17 +261,20 @@ class FileSelection:
 
 class Selection(QObject):
     commit_changed = Signal(object)  # Commit | None
-    file_changed   = Signal(object)  # FileSelection | None
+    file_changed   = Signal(object)  # FileSelection | None: the current row, what Diff shows
+    files_changed  = Signal(object)  # tuple[FileSelection, ...]: every selected row
 ```
 
-History sets `selection.commit` and Files sets `selection.file`; the Diff panel listens to
+History sets `selection.commit`. Files sets `selection.files` (every selected row, which
+the stage actions act on) and `selection.file` (the current row); the Diff panel listens to
 `file_changed`. Setters emit only when the value changes. This is the mediator pattern:
 panels share state, not references.
 
 Selection is cleared when the repo changes. When the selected file disappears after a
 refresh, the Files panel sets `selection.file = None` and the Diff panel shows its empty
 state. When the same file moves between unstaged and staged, the Files panel selects it
-with its new source. What happens to a selected commit that disappears (after an amend)
+with its new source; after Stage or Unstage it selects the side the file was moved to
+(§5.4). What happens to a selected commit that disappears (after an amend)
 is decided with RZG-21.
 
 ## 5. Panels
@@ -355,11 +380,21 @@ The first three are extracted from the original `main_window.py` with the same b
 | ControlsPanel | `controls` | chrome | Open, Refresh (`ctx.actions`), current branch | (later: fetch/pull/push, switch branch) |
 | BranchesPanel | `branches` | sidebar | branches, current in bold | (later: checkout) |
 | HistoryPanel | `history` | content | commit table | `selection.commit` |
-| FilesPanel | `files` | sidebar | working tree changes, staged/unstaged, status colours | `selection.file` |
+| FilesPanel | `files` | sidebar | working tree changes in Unstaged and Staged groups, status colours | `selection.files`, `selection.file`; stages and unstages |
 | DiffPanel | `diff` | content | the diff of `selection.file`, unified or side by side | (later: stage hunks) |
 
-FilesPanel is the original "Working Tree Changes" list; its header shows the count,
-e.g. "Files (24)".
+FilesPanel lists the working tree changes in two groups, as in Sublime Merge:
+**Unstaged** (unstaged changes and untracked files, labelled "Untracked") and **Staged**. A
+file with both appears in both, and each row is one `FileSelection` (worktree or index).
+Its header shows the number of changed files, e.g. "Files (24)".
+- **Selecting:** extended selection (Ctrl and Shift). Group rows can't be selected.
+- **Staging:** the context menu shows the stage actions (§8), which act on every selected
+  row. Double-click, or Enter, toggles staging: an unstaged row is staged, a staged one
+  unstaged.
+- **The selection follows the action:** after Stage the files' Staged rows are selected,
+  after Unstage their Unstaged rows. The panel remembers the target until a status has it
+  (an older refresh may arrive first) or the user selects something else. Without a target,
+  a refresh keeps each selected row, or the same path in the other group if its row is gone.
 
 HistoryPanel is a `QTableView` over `HistoryModel` (`QAbstractTableModel`), because item
 widgets for 100k commits are too slow to build. The model creates nothing per row: `data()`
@@ -634,6 +669,12 @@ Per-widget sheets are slow to apply and scatter the rules.
   **Side by Side Diff** is checkable: the Diff panel follows its `toggled`. MainWindow sets
   it from `AppSettings.side_by_side_diff` before the panels are built, and saves it on close
   with the layout, so panels never touch settings.
+- **Staging actions:** Stage (Ctrl+S) and Unstage (Ctrl+U) act on the selected rows of
+  that kind (`selection.files`), Discard Changes… (Ctrl+Backspace) on the selected unstaged
+  rows, Stage All (Ctrl+Shift+S) and Unstage All (Ctrl+Shift+U) on the whole status. Each is
+  enabled only when it has something to act on. They're in the **Repository** menu and the
+  Files panel's context menu. Discard is connected by MainWindow, which asks for
+  confirmation first (listing the files, and that untracked ones go to the trash).
 - **`MainWindow`** is a thin shell: menus built from `AppActions`, the status
   bar summary (from session signals: path · branch · commits · changed files), error dialogs (from `error_occurred`), and a
   `LayoutHost` as the central widget. The Open, Quit and Reset Layout handlers live here
@@ -671,7 +712,8 @@ cheap to fix **later**, without paying for them now:
   builds, and every role it uses exists), `test_layout_model` (round-trip and `normalize`
   edge cases), `test_layout_host` (build, panel reuse, reading sizes back),
   `test_<name>_panel` (each panel renders a temp repo and the empty state),
-  `test_diff_request` and `test_diff_rows` (the diff's worker side and its rows), and
+  `test_diff_request` and `test_diff_rows` (the diff's worker side and its rows),
+  `test_git_commands` (commands on temp repos), and
   `test_architecture` (§2 import rules, unique panel ids).
 - Stays on stdlib `unittest`: there are no extra dependencies, and VS Code's test panel is
   already set up for it.

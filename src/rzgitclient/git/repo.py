@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -161,6 +161,42 @@ class Repo:
                 i += 1
             result.append(FileStatus(x, y, path, orig))
         return result
+
+    # ---- commands: they change the repository ------------------------------
+
+    def stage(self, paths: Sequence[str]) -> None:
+        """Stage ``paths`` as they are now: changes, new files and deletions."""
+        if paths:
+            self._literal("add", "-A", "--", *paths)
+
+    def unstage(self, paths: Sequence[str]) -> None:
+        """Take ``paths`` out of the index, back to HEAD (or untracked, before
+        the first commit). The working tree is left alone."""
+        if not paths:
+            return
+        if self.has_commits():
+            self._literal("restore", "--staged", "--", *paths)
+        else:
+            self._literal("rm", "--cached", "-r", "-q", "--ignore-unmatch", "--", *paths)
+
+    def stage_all(self) -> None:
+        self.git("add", "-A")
+
+    def unstage_all(self) -> None:
+        if self.has_commits():
+            self.git("reset", "-q")
+        else:
+            self.git("rm", "--cached", "-r", "-q", "--ignore-unmatch", "--", ".")
+
+    def restore(self, paths: Sequence[str]) -> None:
+        """Throw away the unstaged changes to tracked ``paths``: the working
+        tree goes back to the index, so staged changes are kept."""
+        if paths:
+            self._literal("restore", "--worktree", "--", *paths)
+
+    def _literal(self, *args: str) -> str:
+        """Run git with paths that mean themselves: ":x" or "*.c" aren't patterns."""
+        return self.git("--literal-pathspecs", *args)
 
     def diff(
         self,

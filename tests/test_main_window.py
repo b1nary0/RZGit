@@ -7,6 +7,7 @@ from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QToolBar, QToolButton
 
 from rzgitclient.core.app_settings import AppSettings
+from rzgitclient.core.selection import FileSelection, FileSource
 from rzgitclient.ui.layout.layout_model import SplitNode
 from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
 from rzgitclient.ui.main_window import MainWindow, commit_summary
@@ -122,6 +123,61 @@ class MainWindowTests(unittest.TestCase):
         self.assertTrue(again.ctx.actions.side_by_side_diff.isChecked())
         diff = again.layout_host.panels["diff"]
         self.assertIs(diff._stack.currentWidget(), diff._message_page)  # no file yet
+
+    def test_repository_menu_has_the_staging_actions(self):
+        window = self.start()
+        menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "&Repository")
+        actions = window.ctx.actions
+        self.assertEqual([a for a in menu.actions() if not a.isSeparator()],
+                         [actions.stage, actions.unstage, actions.discard,
+                          actions.stage_all, actions.unstage_all])
+
+    def test_discard_asks_first_and_acts_only_on_unstaged_rows(self):
+        window = self.start()
+        repo = make_repo(self.tmp / "repo")
+        commit_file(repo, "a.txt", "1", "first")
+        (repo / "a.txt").write_text("2")
+        window.session.open(repo)
+        wait_idle(window.session)
+        window.ctx.selection.files = (FileSelection("a.txt", FileSource.WORKTREE),
+                                      FileSelection("b.txt", FileSource.INDEX))
+        with mock.patch.object(window, "confirm_discard", return_value=False) as confirm, \
+                mock.patch.object(window.session, "discard") as discard:
+            window.ctx.actions.discard.trigger()
+            confirm.assert_called_once_with(("a.txt",))
+            discard.assert_not_called()
+            confirm.return_value = True
+            window.ctx.actions.discard.trigger()
+            discard.assert_called_once_with(("a.txt",))
+
+    def test_the_discard_confirmation_names_the_files_and_defaults_to_cancel(self):
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QApplication, QMessageBox
+        window = self.start()
+        paths = tuple(f"f{n}.txt" for n in range(12))
+        seen = {}
+
+        def answer(discard):
+            box = QApplication.activeModalWidget()
+            try:
+                seen["text"], seen["info"] = box.text(), box.informativeText()
+                seen["default_is_cancel"] = (
+                    box.defaultButton() is box.button(QMessageBox.StandardButton.Cancel))
+                if discard:
+                    next(b for b in box.buttons()
+                         if box.buttonRole(b) is QMessageBox.ButtonRole.DestructiveRole).click()
+            finally:
+                if box.isVisible():
+                    box.reject()  # never leave the test waiting on a dialog
+
+        QTimer.singleShot(0, lambda: answer(False))
+        self.assertFalse(window.confirm_discard(paths))
+        self.assertEqual(seen["text"], "Discard the unstaged changes to 12 files?")
+        self.assertIn("f9.txt\n… and 2 more", seen["info"])
+        self.assertIn("trash", seen["info"])
+        self.assertTrue(seen["default_is_cancel"])
+        QTimer.singleShot(0, lambda: answer(True))
+        self.assertTrue(window.confirm_discard(paths[:1]))
 
     def test_reset_layout_shows_hidden_panels(self):
         window = self.start()

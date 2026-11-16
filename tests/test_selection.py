@@ -58,6 +58,15 @@ class SelectionTests(unittest.TestCase):
         self.assertIsNone(self.selection.file)
         self.assertEqual(self.rec.events, [("commit_changed", None), ("file_changed", None)])
 
+    def test_files_emit_on_change_and_clear_with_the_repo(self):
+        rec = SignalRecorder(self.selection, "files_changed")
+        files = (FileSelection("a.py", FileSource.WORKTREE), FileSelection("b.py", FileSource.INDEX))
+        self.selection.files = files
+        self.selection.files = list(files)  # equal
+        self.assertEqual(rec.events, [("files_changed", files)])
+        self.selection.clear()
+        self.assertEqual(self.selection.files, ())
+
     def test_clear_when_empty_emits_nothing(self):
         self.selection.clear()
         self.assertEqual(self.rec.events, [])

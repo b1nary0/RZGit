@@ -572,5 +572,79 @@ class RepoSessionDiffTests(unittest.TestCase):
         self.assertFalse(self.session.busy)
 
 
+class RepoSessionCommandTests(unittest.TestCase):
+    """Commands change the repository (spec §4.1)."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        commit_file(self.path, "a.txt", "1", "first")
+        (self.path / "a.txt").write_text("2")
+        (self.path / "b.txt").write_text("new")
+        self.session = RepoSession()
+        self.rec = SignalRecorder(self.session, *ALL_SIGNALS)
+        self.assertTrue(self.session.open(self.path))
+        wait_idle(self.session)
+        self.rec.clear()
+
+    def tearDown(self):
+        self.session.shutdown()
+        self._tmp.cleanup()
+
+    def codes(self):
+        return {f.path: f.index + f.worktree for f in self.session.status}
+
+    def test_a_command_runs_in_the_background_then_the_status_reloads(self):
+        self.session.stage(["a.txt"])
+        self.assertTrue(self.session.busy)
+        self.assertEqual(self.codes(), {"a.txt": " M", "b.txt": "??"})  # not yet
+        wait_idle(self.session)
+        self.assertEqual(self.codes(), {"a.txt": "M ", "b.txt": "??"})
+        self.assertEqual(self.rec.names(), ["status_changed"])  # only what it changed
+
+    def test_commands_run_in_order(self):
+        self.session.stage(["a.txt", "b.txt"])
+        self.session.unstage(["b.txt"])
+        self.session.stage_all()
+        self.session.unstage_all()
+        self.session.stage(["b.txt"])
+        wait_idle(self.session)
+        self.assertEqual(self.codes(), {"a.txt": " M", "b.txt": "A "})
+
+    def test_a_failed_command_is_one_error_and_the_status_still_loads(self):
+        git(self.path, "add", "a.txt")  # outside the app
+        self.session.refresh()  # the worker is busy, so both commands share the next job
+        self.session.stage(["missing.txt"])
+        self.session.stage(["b.txt"])  # skipped after the failure
+        wait_idle(self.session)
+        self.assertEqual(len(self.rec.values("error_occurred")), 1)
+        self.assertEqual(self.codes(), {"a.txt": "M ", "b.txt": "??"})
+
+    def test_the_diff_target_is_read_again_after_a_command(self):
+        target = FileSelection("a.txt", FileSource.INDEX)
+        diffs = []
+        self.session.diff_changed.connect(lambda f, d: diffs.append(d))
+        self.session.request_diff(target)
+        wait_idle(self.session)
+        self.assertEqual(diffs[-1].hunks, ())  # nothing staged yet
+        self.session.stage(["a.txt"])
+        wait_idle(self.session)
+        self.assertEqual(len(diffs[-1].hunks), 1)
+
+    def test_close_drops_commands_that_have_not_run(self):
+        with mock.patch("rzgitclient.core.repo_session.run_command") as run:
+            self.session.refresh()  # keeps the worker busy, so the command waits
+            self.session.stage(["a.txt"])
+            self.session.close()
+            wait_idle(self.session)
+        run.assert_not_called()
+        self.session.stage(["a.txt"])  # no repo: nothing happens
+        self.assertFalse(self.session.busy)
+
+
 if __name__ == "__main__":
     unittest.main()

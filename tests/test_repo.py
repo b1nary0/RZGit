@@ -222,5 +222,69 @@ class ParseDiffTests(unittest.TestCase):
         self.assertEqual(parse_diff(raw, "y").old_path, "sp\u00e9cial.txt")
 
 
+class RepoCommandTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        self.repo = Repo(self.path)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def status(self):
+        return {f.path: f.index + f.worktree for f in self.repo.status()}
+
+    def test_before_the_first_commit(self):
+        (self.path / "a.txt").write_text("a")
+        (self.path / "b.txt").write_text("b")
+        self.repo.stage(["a.txt"])
+        self.assertEqual(self.status(), {"a.txt": "A ", "b.txt": "??"})
+        self.repo.unstage(["a.txt"])
+        self.assertEqual(self.status(), {"a.txt": "??", "b.txt": "??"})
+        self.repo.stage_all()
+        self.assertEqual(self.status(), {"a.txt": "A ", "b.txt": "A "})
+        self.repo.unstage_all()
+        self.assertEqual(self.status(), {"a.txt": "??", "b.txt": "??"})
+        self.repo.unstage_all()  # nothing staged: still fine
+
+    def test_modified_deleted_and_untracked(self):
+        commit_file(self.path, "m.txt", "1", "first")
+        commit_file(self.path, "d.txt", "1", "second")
+        (self.path / "m.txt").write_text("2")
+        (self.path / "d.txt").unlink()
+        (self.path / "u.txt").write_text("new")
+        self.repo.stage(["m.txt", "d.txt", "u.txt"])
+        self.assertEqual(self.status(), {"m.txt": "M ", "d.txt": "D ", "u.txt": "A "})
+        self.repo.unstage(["m.txt", "d.txt", "u.txt"])
+        self.assertEqual(self.status(), {"m.txt": " M", "d.txt": " D", "u.txt": "??"})
+        self.repo.stage_all()
+        self.repo.unstage_all()
+        self.assertEqual(self.status(), {"m.txt": " M", "d.txt": " D", "u.txt": "??"})
+
+    def test_restore_keeps_staged_changes(self):
+        commit_file(self.path, "a.txt", "1", "first")
+        commit_file(self.path, "d.txt", "1", "second")
+        (self.path / "a.txt").write_text("staged")
+        self.repo.stage(["a.txt"])
+        (self.path / "a.txt").write_text("unstaged")
+        (self.path / "d.txt").unlink()
+        self.repo.restore(["a.txt", "d.txt"])
+        self.assertEqual((self.path / "a.txt").read_text(), "staged")
+        self.assertEqual((self.path / "d.txt").read_text(), "1")
+        self.assertEqual(self.status(), {"a.txt": "M "})
+
+    def test_paths_mean_themselves(self):
+        commit_file(self.path, "base.txt", "1", "first")
+        for name in (":x", "*.c", "b.c"):
+            (self.path / name).write_text(name)
+        self.repo.stage([":x", "*.c"])
+        self.assertEqual(self.status(), {":x": "A ", "*.c": "A ", "b.c": "??"})
+
+    def test_failure_raises(self):
+        commit_file(self.path, "a.txt", "1", "first")
+        with self.assertRaises(GitError):
+            self.repo.stage(["no-such-file"])
+
+
 if __name__ == "__main__":
     unittest.main()

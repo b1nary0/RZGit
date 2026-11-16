@@ -6,8 +6,11 @@ from unittest import mock
 from PySide6.QtGui import QKeySequence
 
 from rzgitclient.core.repo_session import RepoSession
+from rzgitclient.core.selection import FileSelection, FileSource, Selection
 from rzgitclient.ui.app_actions import AppActions
-from tests.support import make_repo, qt_app, wait_idle
+from tests.support import commit_file, git, make_repo, qt_app, wait_idle
+
+W, I = FileSource.WORKTREE, FileSource.INDEX
 
 
 class AppActionsTests(unittest.TestCase):
@@ -19,10 +22,17 @@ class AppActionsTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.repo = make_repo(Path(self._tmp.name) / "repo")
         self.session = RepoSession()
-        self.actions = AppActions(self.session)
+        self.selection = Selection(self.session)
+        self.actions = AppActions(self.session, self.selection)
 
     def tearDown(self):
+        self.session.shutdown()
         self._tmp.cleanup()
+
+    def enabled(self):
+        a = self.actions
+        return {name for name in ("stage", "unstage", "discard", "stage_all", "unstage_all")
+                if getattr(a, name).isEnabled()}
 
     def test_refresh_enabled_only_with_a_repo(self):
         self.assertFalse(self.actions.refresh.isEnabled())
@@ -35,7 +45,7 @@ class AppActionsTests(unittest.TestCase):
     def test_enabled_state_matches_a_session_opened_earlier(self):
         self.session.open(self.repo)
         wait_idle(self.session)
-        actions = AppActions(self.session)
+        actions = AppActions(self.session, self.selection)
         self.assertTrue(actions.refresh.isEnabled())
 
     def test_refresh_refreshes_everything(self):
@@ -59,6 +69,44 @@ class AppActionsTests(unittest.TestCase):
         for action, key in expected.items():
             with self.subTest(action.text()):
                 self.assertEqual(action.shortcuts(), QKeySequence.keyBindings(key))
+
+    # ---- staging ---------------------------------------------------------
+
+    def test_staging_actions_follow_the_selection_and_the_status(self):
+        self.assertEqual(self.enabled(), set())
+        commit_file(self.repo, "a.txt", "1", "first")
+        (self.repo / "a.txt").write_text("2")
+        (self.repo / "b.txt").write_text("new")
+        git(self.repo, "add", "b.txt")
+        self.session.open(self.repo)
+        wait_idle(self.session)
+        self.assertEqual(self.enabled(), {"stage_all", "unstage_all"})
+        self.selection.files = (FileSelection("a.txt", W),)
+        self.assertEqual(self.enabled(), {"stage", "discard", "stage_all", "unstage_all"})
+        self.selection.files = (FileSelection("b.txt", I),)
+        self.assertEqual(self.enabled(), {"unstage", "stage_all", "unstage_all"})
+
+    def test_stage_and_unstage_act_on_the_selected_rows_of_their_kind(self):
+        self.selection.files = (FileSelection("a", W), FileSelection("b", I), FileSelection("c", W))
+        with mock.patch.object(self.session, "stage") as stage, \
+                mock.patch.object(self.session, "unstage") as unstage:
+            self.actions.stage.trigger()
+            self.actions.unstage.trigger()
+        stage.assert_called_once_with(("a", "c"))
+        unstage.assert_called_once_with(("b",))
+
+    def test_discard_is_left_to_the_window(self):
+        self.selection.files = (FileSelection("a", W),)
+        with mock.patch.object(self.session, "discard") as discard:
+            self.actions.discard.trigger()
+        discard.assert_not_called()
+
+    def test_staging_shortcuts(self):
+        keys = {"stage": "Ctrl+S", "unstage": "Ctrl+U", "discard": "Ctrl+Backspace",
+                "stage_all": "Ctrl+Shift+S", "unstage_all": "Ctrl+Shift+U"}
+        for name, key in keys.items():
+            with self.subTest(name):
+                self.assertEqual(getattr(self.actions, name).shortcut(), QKeySequence(key))
 
 
 if __name__ == "__main__":

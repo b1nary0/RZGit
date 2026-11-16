@@ -39,12 +39,14 @@ class FileSelection:
 
 class Selection(QObject):
     commit_changed = Signal(object)  # Commit | None
-    file_changed = Signal(object)  # FileSelection | None
+    file_changed = Signal(object)  # FileSelection | None: the current row, what Diff shows
+    files_changed = Signal(object)  # tuple[FileSelection, ...]: every selected row
 
     def __init__(self, session: RepoSession, parent: QObject | None = None):
         super().__init__(parent)
         self._commit: Commit | None = None
         self._file: FileSelection | None = None
+        self._files: tuple[FileSelection, ...] = ()
         session.repo_changed.connect(self._on_repo_changed)
 
     @property
@@ -69,8 +71,22 @@ class Selection(QObject):
         self._file = file
         self.file_changed.emit(file)
 
+    @property
+    def files(self) -> tuple[FileSelection, ...]:
+        """Every selected file, in list order; what the stage actions act on."""
+        return self._files
+
+    @files.setter
+    def files(self, files: tuple[FileSelection, ...]) -> None:
+        files = tuple(files)
+        if files == self._files:
+            return
+        self._files = files
+        self.files_changed.emit(files)
+
     def clear(self) -> None:
         self.commit = None
+        self.files = ()
         self.file = None
 
     def _on_repo_changed(self, _repo: object) -> None:

@@ -25,11 +25,12 @@ def main(argv: list[str] | None = None) -> int:
     theme = ThemeManager(app, LIGHT_THEME)
     session = RepoSession()
 
+    selection = Selection(session)
     ctx = PanelContext(
         session=session,
-        selection=Selection(session),
+        selection=selection,
         theme=theme,
-        actions=AppActions(session),
+        actions=AppActions(session, selection),
     )
 
     settings = AppSettings()

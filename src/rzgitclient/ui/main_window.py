@@ -4,6 +4,7 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QFileDialog, QLabel, QMainWindow, QMessageBox
 
 from rzgitclient.core.app_settings import AppSettings
+from rzgitclient.core.selection import FileSource
 from rzgitclient.git.repo import Repo
 from rzgitclient.ui.layout.layout_host import LayoutHost
 from rzgitclient.ui.layout.layout_menu import LayoutMenu
@@ -48,6 +49,12 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(actions.quit)
 
+        actions.discard.triggered.connect(self.discard_selected)
+        repo_menu = self.menuBar().addMenu("&Repository")
+        repo_menu.addActions([actions.stage, actions.unstage, actions.discard])
+        repo_menu.addSeparator()
+        repo_menu.addActions([actions.stage_all, actions.unstage_all])
+
         actions.reset_layout.triggered.connect(self.reset_layout)
         view_menu = self.menuBar().addMenu("&View")
         view_menu.addMenu(LayoutMenu(self.layout_host, view_menu))
@@ -79,6 +86,29 @@ class MainWindow(QMainWindow):
         self.settings.side_by_side_diff = self.ctx.actions.side_by_side_diff.isChecked()
         super().closeEvent(event)
 
+    def discard_selected(self) -> None:
+        """Discard the unstaged changes of the selected files, once confirmed."""
+        paths = self.ctx.actions.selected(FileSource.WORKTREE)
+        if paths and self.confirm_discard(paths):
+            self.session.discard(paths)
+
+    def confirm_discard(self, paths: tuple[str, ...]) -> bool:
+        shown = "\n".join(paths[:_LISTED])
+        if len(paths) > _LISTED:
+            shown += f"\n… and {len(paths) - _LISTED:,} more"
+        files = "1 file" if len(paths) == 1 else f"{len(paths):,} files"
+        box = QMessageBox(QMessageBox.Icon.Warning, "Discard Changes",
+                          f"Discard the unstaged changes to {files}?", parent=self)
+        box.setInformativeText(
+            f"{shown}\n\nThis can't be undone. Staged changes are kept, and new "
+            "(untracked) files are moved to the trash."
+        )
+        discard = box.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        return box.clickedButton() is discard
+
     def choose_repo(self) -> None:
         repo = self.session.repo
         start = str(repo.root) if repo else ""
@@ -107,6 +137,9 @@ class MainWindow(QMainWindow):
             f"{s.repo.root}  ·  {s.head or 'detached HEAD'}  ·  "
             f"{commits}  ·  {len(s.status)} changed files"
         )
+
+
+_LISTED = 10  # files named in the discard confirmation
 
 
 def commit_summary(loaded: int, complete: bool, count: int | None) -> str:

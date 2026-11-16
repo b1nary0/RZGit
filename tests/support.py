@@ -112,9 +112,10 @@ def make_panel_context() -> PanelContext:
     from rzgitclient.ui.theme.theme_manager import ThemeManager
 
     session = RepoSession()
+    selection = Selection(session)
     return PanelContext(
         session=session,
-        selection=Selection(session),
+        selection=selection,
         theme=ThemeManager(qt_app(), LIGHT_THEME),
-        actions=AppActions(session),
+        actions=AppActions(session, selection),
     )

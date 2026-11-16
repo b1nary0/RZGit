@@ -8,7 +8,9 @@ on the main thread.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Flag, auto
 from pathlib import Path
@@ -16,6 +18,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QThreadPool, Signal
 
 from rzgitclient.core.diff_request import DiffRequest, load_diff
+from rzgitclient.core.git_commands import CommandKind, GitCommand, run_command
 from rzgitclient.core.selection import FileSelection
 from rzgitclient.git.git_models import Branch, Commit, FileDiff, FileStatus
 from rzgitclient.git.repo import GitError, Repo
@@ -75,6 +78,7 @@ class RepoSession(QObject):
         self._diff_generation = 0
         self._diff_pending = False  # the target waits for the next job
         self._diff: tuple[FileSelection | None, FileDiff | None] = (None, None)
+        self._commands: list[GitCommand] = []  # waiting for the next job, in order
         # One thread: git commands on a repo can clash on index.lock, and
         # in-order jobs can't deliver results out of order.
         self._pool = QThreadPool(self)
@@ -161,6 +165,7 @@ class RepoSession(QObject):
         self._more_pending = False
         self._history_complete = True
         self._forced = Refresh.ALL
+        self._commands = []
         self._drop_diff()
         self.repo_changed.emit(repo)
         self.refresh()
@@ -174,6 +179,7 @@ class RepoSession(QObject):
         self._pending = Refresh(0)
         self._more_pending = False
         self._forced = Refresh.ALL
+        self._commands = []
         self._drop_diff()
         self.repo_changed.emit(None)
         self._store_forced_as_empty()
@@ -184,6 +190,7 @@ class RepoSession(QObject):
         self._pending = Refresh(0)
         self._more_pending = False
         self._diff_pending = False
+        self._commands = []
         self._pool.waitForDone()
 
     # ---- loading ------------------------------------------------------------
@@ -229,6 +236,34 @@ class RepoSession(QObject):
         elif self._diff_pending and not self._running:
             self._start_next()
 
+    # ---- commands (spec §4.1) ------------------------------------------------
+
+    def stage(self, paths: Iterable[str]) -> None:
+        """Stage ``paths`` (changes, new files, deletions) in the background."""
+        self._command(GitCommand(CommandKind.STAGE, tuple(paths)))
+
+    def unstage(self, paths: Iterable[str]) -> None:
+        """Unstage ``paths``; the working tree keeps its changes."""
+        self._command(GitCommand(CommandKind.UNSTAGE, tuple(paths)))
+
+    def stage_all(self) -> None:
+        self._command(GitCommand(CommandKind.STAGE_ALL))
+
+    def unstage_all(self) -> None:
+        self._command(GitCommand(CommandKind.UNSTAGE_ALL))
+
+    def discard(self, paths: Iterable[str]) -> None:
+        """Throw away the unstaged changes to ``paths``; staged ones are kept.
+        Untracked files are moved to the trash. Callers confirm first."""
+        self._command(GitCommand(CommandKind.DISCARD, tuple(paths)))
+
+    def _command(self, command: GitCommand, parts: Refresh = Refresh.STATUS) -> None:
+        """Queue ``command``; its job then loads ``parts``, what it changes."""
+        if self._repo is None:
+            return
+        self._commands.append(command)
+        self.refresh(parts)
+
     def _drop_diff(self) -> None:
         """Forget the target and its diff (the repo changes)."""
         self._diff_generation += 1
@@ -243,6 +278,7 @@ class RepoSession(QObject):
         if not (self._diff_pending or (Refresh.STATUS in parts and diff and diff.follows_status)):
             diff = None
         self._diff_pending = False
+        commands, self._commands = tuple(self._commands), []
         if Refresh.COUNT in parts and (Refresh.HISTORY in parts or more):
             # Count in the next job, so it doesn't delay the history.
             parts &= ~Refresh.COUNT
@@ -250,7 +286,7 @@ class RepoSession(QObject):
         # The first load of a repo starts from nothing, not the old repo's history.
         loaded = () if Refresh.HISTORY in self._forced else self.history
         job = _Job(self._repo, self._generation, parts, loaded, more,  # type: ignore[arg-type]
-                   diff, self._diff_generation, self.status)
+                   diff, self._diff_generation, self.status, commands)
         relay = self._relay
         self._running = True
         self._loading_more = more
@@ -275,8 +311,9 @@ class RepoSession(QObject):
                     self._diff_pending = True
             if result.error is not None:
                 self.error_occurred.emit(result.error)
-                # A count queued behind a failed job would fail too: one error is enough.
-                self._pending &= ~Refresh.COUNT
+                if not result.command_failed:
+                    # A count queued behind a failed load would fail too: one error is enough.
+                    self._pending &= ~Refresh.COUNT
             self._store_forced_as_empty()  # parts a failed first load left behind
         self._running = False
         if (self._pending or self._more_pending or self._diff_pending) and self._repo is not None:
@@ -327,6 +364,7 @@ class _Job:
     diff: DiffRequest | None  # read after the parts
     diff_generation: int
     status: tuple[FileStatus, ...]  # the latest status, for the diff, unless STATUS loads
+    commands: tuple[GitCommand, ...] = ()  # run first, in order
 
 
 @dataclass(frozen=True)
@@ -339,6 +377,7 @@ class _JobResult:
     diff_wanted: bool = False  # the job was to read the diff
     diff_read: bool = False  # it tried; ``diff`` is None if that failed
     diff: FileDiff | None = None
+    command_failed: bool = False  # ``error`` is a command's; the parts still loaded
 
 
 class _Relay(QObject):
@@ -350,7 +389,17 @@ class _Relay(QObject):
 def _run_job(job: _Job) -> _JobResult:
     values: list[tuple[Refresh, object]] = []
     complete: bool | None = None
-    diff = {"diff_generation": job.diff_generation, "diff_wanted": job.diff is not None}
+    diff: dict[str, object] = {"diff_generation": job.diff_generation,
+                               "diff_wanted": job.diff is not None}
+    for command in job.commands:
+        try:
+            run_command(job.repo, command)
+        except Exception as exc:
+            # Skip the commands after it, but load the parts: show what really happened.
+            loaded = _run_job(dataclasses.replace(job, commands=()))
+            # The command's error comes first: it happened first.
+            return dataclasses.replace(loaded, error=_error(exc, command.kind),
+                                       command_failed=True)
     for part in _PARTS:
         wanted = part in job.parts or (part is Refresh.HISTORY and job.more)
         if not wanted:
