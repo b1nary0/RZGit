@@ -159,7 +159,7 @@ class MainWindowTests(unittest.TestCase):
         self.quit(window)
 
         again = self.start()
-        self.assertEqual(set(again.layout_host.panels), {"controls", "files", "history", "diff", "staged", "commit", "commit_files"})
+        self.assertEqual(set(again.layout_host.panels), {"controls", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files"})
         again.layout_host.show_panel("branches")  # and comes back where it was
         self.assertEqual(strip_sizes(again.layout_host.current_layout()), strip_sizes(DEFAULT_LAYOUT))
 
@@ -267,10 +267,17 @@ class MainWindowTests(unittest.TestCase):
         self.app.processEvents()
         first = window.ctx.selection.commit
         self.assertEqual(first.subject, "first")
-        # Commit Files takes the place of the working tree's panels.
-        self.assertEqual([pid for pid in ("files", "staged", "commit", "commit_files")
-                          if not panels[pid].collapsed], ["commit_files"])
+        # Commit Details and Commit Files take the place of the working tree's panels,
+        # sharing their space evenly.
+        swapped = ("files", "staged", "commit", "commit_details", "commit_files")
+        self.assertEqual([pid for pid in swapped if not panels[pid].collapsed],
+                         ["commit_details", "commit_files"])
         self.assertTrue(panels["commit_files"].isVisible())
+        self.assertTrue(panels["commit_details"].isVisible())
+        details, files = (sidebar.sizes()[sidebar.indexOf(panels[p].parentWidget())]
+                          for p in ("commit_details", "commit_files"))
+        self.assertLessEqual(abs(details - files), 1)
+        self.assertEqual(panels["commit_details"]._summary.text(), "first")
         self.assertFalse(panels["files"].isVisible())
         self.assertEqual(sidebar.sizes()[0], branches_height)
         tree = panels["commit_files"]._list._tree
@@ -282,6 +289,7 @@ class MainWindowTests(unittest.TestCase):
         history._view.setCurrentIndex(history._model.index(0, 0))  # back to Uncommitted
         self.app.processEvents()
         self.assertTrue(panels["commit_files"].collapsed)
+        self.assertTrue(panels["commit_details"].collapsed)
         self.assertTrue(panels["files"].isVisible())
         self.assertEqual(sidebar.sizes()[0], branches_height)
         self.assertIsNone(window.ctx.selection.file)
@@ -457,7 +465,7 @@ class MainWindowTests(unittest.TestCase):
         window = self.start()
         window.layout_host.hide_panel("files")
         window.ctx.actions.reset_layout.trigger()
-        self.assertEqual(set(window.layout_host.panels), {"controls", "branches", "files", "history", "diff", "staged", "commit", "commit_files"})
+        self.assertEqual(set(window.layout_host.panels), {"controls", "branches", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files"})
         self.assertEqual(window.layout_host.hidden, {})
 
     def test_status_bar_counts_every_commit_not_just_the_loaded_page(self):

@@ -21,7 +21,14 @@ from rzgitclient.core.diff_patch import Line
 from rzgitclient.core.diff_request import DiffRequest, load_diff
 from rzgitclient.core.git_commands import CommandKind, GitCommand, run_command
 from rzgitclient.core.selection import FileSelection
-from rzgitclient.git.git_models import Branch, Commit, FileDiff, FileStatus, LastCommit
+from rzgitclient.git.git_models import (
+    Branch,
+    Commit,
+    CommitDetails,
+    FileDiff,
+    FileStatus,
+    LastCommit,
+)
 from rzgitclient.git.repo import GitError, Repo
 
 HISTORY_PAGE = 500  # commits per page of history (spec §4.1)
@@ -68,6 +75,7 @@ class RepoSession(QObject):
     diff_changed = Signal(object, object)  # FileSelection | None, FileDiff | None
     commit_files_changed = Signal(object, object)  # sha | None, tuple[FileStatus, ...] | None
     last_commit_changed = Signal(object)  # LastCommit | None  (asked for: Refresh.LAST_COMMIT)
+    commit_details_changed = Signal(object, object)  # sha | None, CommitDetails | None
     command_finished = Signal(object, bool)  # GitCommand, whether it ran without error
     error_occurred = Signal(str)
     busy_changed = Signal(bool)  # True while git work is queued or running
@@ -94,6 +102,11 @@ class RepoSession(QObject):
         self._files_generation = 0
         self._files_pending = False
         self._commit_files: tuple[str | None, tuple[FileStatus, ...] | None] = (None, None)
+        # The commit details target, the same way; read again for its refs (spec §4.1).
+        self._details_sha: str | None = None
+        self._details_generation = 0
+        self._details_pending = False
+        self._commit_details: tuple[str | None, CommitDetails | None] = (None, None)
         self._commands: list[GitCommand] = []  # waiting for the next job, in order
         self._job_commands: tuple[GitCommand, ...] = ()  # the running job's
         # One thread: git commands on a repo can clash on index.lock, and
@@ -179,6 +192,16 @@ class RepoSession(QObject):
         return self._commit_files[1]
 
     @property
+    def commit_details_sha(self) -> str | None:
+        """The commit the latest ``commit_details_changed`` was for."""
+        return self._commit_details[0]
+
+    @property
+    def commit_details(self) -> CommitDetails | None:
+        """``commit_details_sha`` in full; None if it couldn't be read."""
+        return self._commit_details[1]
+
+    @property
     def commands_in_flight(self) -> tuple[GitCommand, ...]:
         """Commands queued or running, a job's until its ``command_finished``
         signals have gone out (the watcher tells the app's own changes by it)."""
@@ -208,6 +231,7 @@ class RepoSession(QObject):
         self._commands = []
         self._drop_diff()
         self._drop_commit_files()
+        self._drop_commit_details()
         self.repo_changed.emit(repo)
         self.refresh()
         return True
@@ -223,6 +247,7 @@ class RepoSession(QObject):
         self._commands = []
         self._drop_diff()
         self._drop_commit_files()
+        self._drop_commit_details()
         self.repo_changed.emit(None)
         self._store_forced_as_empty()
 
@@ -233,6 +258,7 @@ class RepoSession(QObject):
         self._more_pending = False
         self._diff_pending = False
         self._files_pending = False
+        self._details_pending = False
         self._commands = []
         self._pool.waitForDone()
 
@@ -291,6 +317,21 @@ class RepoSession(QObject):
         if sha is None:
             self._store_commit_files(None, None)
         elif self._files_pending and not self._running:
+            self._start_next()
+
+    def request_commit_details(self, sha: str | None) -> None:
+        """Make ``sha`` the commit details target and read it in full in the
+        background. The result comes as ``commit_details_changed``; results of
+        older requests are dropped. ``None`` clears the target. Jobs that load
+        the branches or history read it again, for its refs."""
+        if sha == self._details_sha:
+            return
+        self._details_generation += 1
+        self._details_sha = sha
+        self._details_pending = sha is not None and self._repo is not None
+        if sha is None:
+            self._store_commit_details(None, None)
+        elif self._details_pending and not self._running:
             self._start_next()
 
     # ---- commands (spec §4.1) ------------------------------------------------
@@ -396,6 +437,12 @@ class RepoSession(QObject):
         self._files_pending = False
         self._store_commit_files(None, None)
 
+    def _drop_commit_details(self) -> None:
+        self._details_generation += 1
+        self._details_sha = None
+        self._details_pending = False
+        self._store_commit_details(None, None)
+
     def _start_next(self) -> None:
         parts, self._pending = self._pending, Refresh(0)
         more, self._more_pending = self._more_pending, False
@@ -405,6 +452,9 @@ class RepoSession(QObject):
         self._diff_pending = False
         files_sha = self._files_sha if self._files_pending else None
         self._files_pending = False
+        refs_may_change = bool(parts & (Refresh.BRANCHES | Refresh.HISTORY))
+        details_sha = self._details_sha if self._details_pending or refs_may_change else None
+        self._details_pending = False
         commands, self._commands = tuple(self._commands), []
         self._job_commands = commands
         if Refresh.COUNT in parts and (Refresh.HISTORY in parts or more):
@@ -416,7 +466,8 @@ class RepoSession(QObject):
         known = self.commit_files or ()
         job = _Job(self._repo, self._generation, parts, loaded, more,  # type: ignore[arg-type]
                    diff, self._diff_generation, self.status, commands,
-                   files_sha, self._files_generation, known)
+                   files_sha, self._files_generation, known,
+                   details_sha, self._details_generation)
         relay = self._relay
         self._running = True
         self._loading_more = more
@@ -438,6 +489,11 @@ class RepoSession(QObject):
                     self._store_commit_files(self._files_sha, result.files)
                 elif result.files_wanted:  # an earlier part failed: read them by themselves
                     self._files_pending = True
+            if result.details_generation == self._details_generation and self._details_sha:
+                if result.details_read:
+                    self._store_commit_details(self._details_sha, result.details)
+                elif result.details_wanted:  # an earlier part failed: read it by itself
+                    self._details_pending = True
             # After the parts: a listener of status_changed may have changed the target.
             if result.diff_generation == self._diff_generation and self._diff_request:
                 if result.diff_read:
@@ -455,13 +511,14 @@ class RepoSession(QObject):
         self._job_commands = ()
         self._running = False
         if (self._pending or self._more_pending or self._diff_pending
-                or self._files_pending) and self._repo is not None:
+                or self._files_pending or self._details_pending) and self._repo is not None:
             self._start_next()
         else:
             self._pending = Refresh(0)
             self._more_pending = False
             self._diff_pending = False
             self._files_pending = False
+            self._details_pending = False
             self._set_busy(False)
 
     def _set_busy(self, busy: bool) -> None:
@@ -490,6 +547,12 @@ class RepoSession(QObject):
         self._commit_files = (sha, files)
         self.commit_files_changed.emit(sha, files)
 
+    def _store_commit_details(self, sha: str | None, details: CommitDetails | None) -> None:
+        if (sha, details) == self._commit_details:
+            return
+        self._commit_details = (sha, details)
+        self.commit_details_changed.emit(sha, details)
+
     def _store_forced_as_empty(self) -> None:
         for part in _PARTS:
             if part in self._forced and part not in self._pending:  # queued: still coming
@@ -515,6 +578,8 @@ class _Job:
     files_sha: str | None = None  # the commit whose files to read, after the parts
     files_generation: int = 0
     commit_files: tuple[FileStatus, ...] = ()  # the latest, for a commit file's diff
+    details_sha: str | None = None  # the commit to read in full, after its files
+    details_generation: int = 0
 
 
 @dataclass(frozen=True)
@@ -534,6 +599,10 @@ class _JobResult:
     files_wanted: bool = False  # the job was to read a commit's files
     files_read: bool = False  # it tried; ``files`` is None if that failed
     files: tuple[FileStatus, ...] | None = None
+    details_generation: int = 0
+    details_wanted: bool = False  # the job was to read a commit's details
+    details_read: bool = False  # it tried; ``details`` is None if that failed
+    details: CommitDetails | None = None
 
 
 class _Relay(QObject):
@@ -548,7 +617,9 @@ def _run_job(job: _Job) -> _JobResult:
     diff: dict[str, object] = {"diff_generation": job.diff_generation,
                                "diff_wanted": job.diff is not None,
                                "files_generation": job.files_generation,
-                               "files_wanted": job.files_sha is not None}
+                               "files_wanted": job.files_sha is not None,
+                               "details_generation": job.details_generation,
+                               "details_wanted": job.details_sha is not None}
     for ran, command in enumerate(job.commands):
         try:
             run_command(job.repo, command)
@@ -582,6 +653,13 @@ def _run_job(job: _Job) -> _JobResult:
             return _JobResult(job.generation, tuple(values), complete,
                               _error(exc, "the commit's files"), **diff, files_read=True)
         diff.update(files_read=True, files=commit_files)
+    if job.details_sha is not None:
+        try:
+            details = job.repo.commit_details(job.details_sha)
+        except Exception as exc:
+            return _JobResult(job.generation, tuple(values), complete,
+                              _error(exc, "the commit's details"), **diff, details_read=True)
+        diff.update(details_read=True, details=details)
     if job.diff is None:
         return _JobResult(job.generation, tuple(values), complete, **diff)
     status = dict(values).get(Refresh.STATUS, job.status)

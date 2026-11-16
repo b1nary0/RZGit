@@ -49,6 +49,7 @@ class HistoryPanel(Panel):
         bar = self._view.verticalScrollBar()
         bar.valueChanged.connect(self._load_more_near_the_end)
         bar.rangeChanged.connect(self._load_more_near_the_end)
+        self.ctx.selection.commit_changed.connect(self._follow_selection)
         session = self.ctx.session
         session.history_changed.connect(self._render)
         session.status_changed.connect(self._show_uncommitted)
@@ -142,6 +143,26 @@ class HistoryPanel(Panel):
         # commit selected is silent.
         if not self._quiet:
             self.ctx.selection.commit = self._current_commit()
+
+    def _follow_selection(self, commit: Commit | None) -> None:
+        """``selection.commit`` changed elsewhere (a parent link in Commit Details):
+        select its row, and scroll to it if it's off screen. A commit that isn't
+        loaded leaves the view as it is."""
+        if commit == self._current_commit():
+            return
+        if commit is None:
+            row = 0 if self._model.has_uncommitted else -1
+        else:
+            row = self._model.row_of(commit.sha)
+        if row < 0:
+            return
+        index = self._model.index(row, 0)
+        self._quiet = True
+        try:
+            self._view.setCurrentIndex(index)
+        finally:
+            self._quiet = False
+        self._view.scrollTo(index, QAbstractItemView.ScrollHint.EnsureVisible)
 
     def _current_commit(self) -> Commit | None:
         return self._model.commit_at(self._view.currentIndex().row())

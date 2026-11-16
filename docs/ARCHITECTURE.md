@@ -101,6 +101,7 @@ src/rzgitclient/
       file_list.py              FileList: one source's changed files, the body of both
       file_tree.py              FileTree: changed files grouped by folder (plain Python, no Qt)
       commit_files_panel.py     CommitFilesPanel: the files the selected commit changed
+      commit_details_panel.py   CommitDetailsPanel: the selected commit's message, people, SHA, parents, refs
       diff_panel.py             DiffPanel
       diff_view.py              DiffView: read-only diff text, row backgrounds, hunk header links
       diff_gutter.py            DiffGutter: line buttons, line numbers and +/− marks beside a DiffView
@@ -147,6 +148,7 @@ class RepoSession(QObject):
     diff_changed     = Signal(object, object)  # FileSelection | None, FileDiff | None
     commit_files_changed = Signal(object, object)  # sha | None, tuple[FileStatus, ...] | None
     last_commit_changed = Signal(object)   # LastCommit | None  (asked for: Refresh.LAST_COMMIT)
+    commit_details_changed = Signal(object, object)  # sha | None, CommitDetails | None
     command_finished = Signal(object, bool)    # GitCommand, whether it ran without error
     error_occurred   = Signal(str)
     busy_changed     = Signal(bool)  # True while git work is queued or running
@@ -157,6 +159,7 @@ class RepoSession(QObject):
     def load_more_history(self) -> None   # the next page of history, in the background
     def request_diff(self, file: FileSelection | None, full: bool = False) -> None
     def request_commit_files(self, sha: str | None) -> None   # the files a commit changed
+    def request_commit_details(self, sha: str | None) -> None # its message, people, parents, refs
 
     # Commands: they change the repository (§4.1, "Commands").
     def stage(self, paths) -> None        # git add
@@ -179,7 +182,7 @@ class RepoSession(QObject):
 
     # Latest values, so a panel created later renders at once (read-only properties):
     repo, head, branches, history, status, commit_count, history_complete, diff_file, diff,
-    commit_files_sha, commit_files, last_commit
+    commit_files_sha, commit_files, commit_details_sha, commit_details, last_commit
 ```
 
 - **Push, not pull.** Panels never ask for data and wait for a return value. They read the
@@ -275,6 +278,20 @@ class RepoSession(QObject):
   - A commit file's diff (`DiffSource.COMMIT`, `git show --diff-merges=first-parent`)
     passes a rename's old path, found in the latest commit files, so git shows it as a
     rename.
+- **A commit's details are asked for** the same way (RZG-26):
+  `request_commit_details(sha)` makes `sha` the **commit details target**, read in the
+  same job after the commit's files, and the result arrives as
+  `commit_details_changed(sha, details)`, only when it differs. Its own counter makes
+  older results stale; `None` clears the target. The message and people never change,
+  but the refs do, so **a job that loads `BRANCHES` or `HISTORY` reads the target again**.
+  If an earlier part of the job fails, it is queued again by itself.
+  - `Repo.commit_details(sha)` runs `git show -s --no-color` with a NUL-separated format
+    (`%H %P %an %ae %aI %cn %ce %cI %D %B`) and returns a `CommitDetails` (`git_models.py`):
+    `sha`, `parents` (none for the first commit, two or more for a merge), `author`,
+    `author_email`, `author_date`, `committer`, `committer_email`, `committer_date`,
+    `refs` (as `%D` gives them: `"HEAD -> main"`, `"origin/main"`, `"tag: v1.0"`) and
+    `message` (the full message, trailing newlines stripped), with `summary` (its first
+    line) and `body` (the rest, without the blank line) properties.
 - **Commands** change the repository. A command is a `GitCommand` (`core/git_commands.py`)
   queued on the same worker as refreshes, so commands and loads never overlap and run in the
   order they were asked for.
@@ -589,7 +606,8 @@ Every panel follows these rules:
 ### 5.3 Registry
 
 `panels/panel_registry.py` has an explicit `PANEL_TYPES = (ControlsPanel, BranchesPanel,
-HistoryPanel, FilesPanel, StagedPanel, DiffPanel, CommitPanel)` and a `panel_type(panel_id)` lookup that raises `KeyError` for an unknown id.
+HistoryPanel, FilesPanel, StagedPanel, DiffPanel, CommitPanel, CommitFilesPanel,
+CommitDetailsPanel)` and a `panel_type(panel_id)` lookup that raises `KeyError` for an unknown id.
 **Why explicit:** no import-time side effects or decorator magic, and one place to see
 every panel. The lookup table is built at import by `index_panel_types()`, which raises
 `ValueError` on a duplicate id, so a clash fails at startup and in every test run.
@@ -604,6 +622,7 @@ The first three are extracted from the original `main_window.py` with the same b
 | ControlsPanel | `controls` | chrome | Open, Refresh (`ctx.actions`), current branch | (later: fetch/pull/push, switch branch) |
 | BranchesPanel | `branches` | sidebar | branches, current in bold | branch operations, through `actions.request_branch` |
 | HistoryPanel | `history` | content | Uncommitted changes, then the commit table | `selection.commit` |
+| CommitDetailsPanel | `commit_details` | sidebar | "Commit Details": the selected commit's message, author, committer, SHA, parents and refs; collapsed for Uncommitted changes | `selection.commit` (a parent link) |
 | CommitFilesPanel | `commit_files` | sidebar | "Commit Files": the selected commit's changed files, in place of Unstaged Files, Staged Files and Commit; collapsed for Uncommitted changes | `selection.select()` |
 | FilesPanel | `files` | sidebar | "Unstaged Files": unstaged and untracked files, status colours | `selection.select()`; stages |
 | StagedPanel | `staged` | sidebar | "Staged Files": the index's changes; collapsed when empty | `selection.select()`; unstages |
@@ -640,6 +659,27 @@ it's the other way round. Each panel collapses by itself from `selection.commit`
 knows another), and it sits directly below Commit in every preset, so the host's swap
 rule (§6.2) gives it their space. Like Staged Files it builds its list the first time a
 commit is selected; Commit keeps its draft while collapsed.
+
+**Commit Details** (CommitDetailsPanel, RZG-26) shows the commit selected in History. It
+asks `session.request_commit_details` when `selection.commit` changes, and collapses by
+itself while it is None, like Commit Files: it sits directly above Commit Files in every
+preset, so the swap gives the two the working tree's space, in equal shares. It builds its
+widgets the first time a commit is selected; uncollapsed with no commit (a layout where it
+can't collapse), it shows the placeholder "No commit selected".
+- **Content**, in a scroll area: the summary in bold and the body below it, then a grid
+  of muted labels (`Role.HINT`) and values: **SHA** (the full sha, monospace, with a small
+  **Copy** button), **Parents** (short shas, monospace), **Refs** (one muted line, as git
+  writes them; the row is left out when there are none), **Author** (name, email and
+  date) and **Committer** (only when name, email or date differ from the author's).
+  Dates are local time as `2026-11-16 21:50`; the tooltip has the full time and offset.
+  Until the details arrive, the summary and sha of the `Commit` are shown. The content
+  never scrolls sideways: a value too long for the panel (the SHA in a narrow sidebar)
+  is cut off, and the SHA's tooltip and Copy still give it whole.
+- **Copying:** every text is selectable with the mouse and copied with Ctrl+C. Copy puts
+  the full sha on the clipboard. Right-clicking a parent offers *Copy SHA* (its full sha).
+- **Parents** are links when that commit is loaded in `session.history`: a click sets
+  `selection.commit` to it, and History selects and scrolls to it. Others are plain text.
+  The links are worked out again on `history_changed`.
 - **Selecting:** extended selection (Ctrl and Shift) within a panel. One panel holds the
   selection at a time: selecting in one clears the other, since each shows only the rows
   of `selection.files` that are its own.
@@ -687,6 +727,9 @@ asks, so a theme change is one `dataChanged`.
   selected by default, and selecting it sets `selection.commit` to None. Commits start at
   row 1: `commit_at(row)` and `row_of(sha)` account for it, and an appended page
   inserts after it. A reset that can't find the selected commit selects it.
+- **Follows the selection:** when `selection.commit` is changed elsewhere (a parent link
+  in Commit Details), History selects that commit's row, or Uncommitted changes for None,
+  and scrolls to it if it's off screen. A commit that isn't loaded leaves History as it is.
 - **Paging:** when the view is scrolled to within a screen of the end, the panel asks the
   session for the next page (§4.1). It watches its scroll bar rather than using Qt's
   `canFetchMore` / `fetchMore`, which Qt also calls while laying rows out, before they have
@@ -891,17 +934,18 @@ class LayoutState: root: LayoutNode; hidden: Mapping[str, Anchor] = {}   # what'
 
 **Presets** (`layout_presets.py`, `PRESETS`) are named trees that show every panel. Each
 has the Controls panel across the top, above the arrangement described. In every preset,
-History and Diff are tabs of one group, with History current, and Staged Files, Commit
-and Commit Files are directly below Unstaged Files (`files`), in that order:
-- **Standard** (`DEFAULT_LAYOUT`): Branches, Unstaged Files, Staged Files, Commit and
-  Commit Files stacked in a left sidebar, History and Diff on the right: `Split(V,
-  [controls, Split(H, [Split(V, [branches, files, staged, commit, commit_files],
-  sizes=(200, 220, 120, 160, 0)), Tabs([history, diff])], sizes=(220, 880))])`. Commit
-  Files' size is 0 in every preset: it has no space of its own (§6.2, swaps).
+History and Diff are tabs of one group, with History current, and Staged Files, Commit,
+Commit Details and Commit Files are directly below Unstaged Files (`files`), in that order:
+- **Standard** (`DEFAULT_LAYOUT`): Branches, Unstaged Files, Staged Files, Commit,
+  Commit Details and Commit Files stacked in a left sidebar, History and Diff on the
+  right: `Split(V, [controls, Split(H, [Split(V, [branches, files, staged, commit,
+  commit_details, commit_files], sizes=(200, 220, 120, 160, 0, 0)), Tabs([history,
+  diff])], sizes=(220, 880))])`. Commit Details' and Commit Files' sizes are 0 in every
+  preset: they have no space of their own (§6.2, swaps).
 - **Sidebar Tabs:** Branches and Unstaged Files as tabs on the left, Staged Files and
   Commit below the tabs; History and Diff on the right.
 - **Stacked:** History and Diff across the top; below, Branches beside Unstaged Files,
-  with Staged Files, Commit and Commit Files below it.
+  with Staged Files, Commit, Commit Details and Commit Files below it.
 
 ### 6.2 LayoutHost
 

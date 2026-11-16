@@ -373,6 +373,64 @@ class RepoCommandTests(unittest.TestCase):
             self.repo.stage(["no-such-file"])
 
 
+class RepoCommitDetailsTests(unittest.TestCase):
+    """One commit in full (RZG-26, spec §4.1)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        self.repo = Repo(self.path)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def sha(self, rev="HEAD"):
+        return git(self.path, "rev-parse", rev).strip()
+
+    def test_the_first_commit(self):
+        commit_file(self.path, "a.txt", "1", "First line\n\nThe body,\nover two lines.\n")
+        details = self.repo.commit_details(self.sha())
+        self.assertEqual(details.sha, self.sha())
+        self.assertEqual(details.parents, ())
+        self.assertEqual((details.author, details.author_email), ("Test User", "test@example.com"))
+        self.assertEqual(details.committer, "Test User")
+        self.assertIsNotNone(details.author_date.tzinfo)
+        self.assertEqual(details.summary, "First line")
+        self.assertEqual(details.body, "The body,\nover two lines.")
+        self.assertEqual(details.refs, ("HEAD -> main",))
+
+    def test_parents_refs_and_a_different_committer(self):
+        commit_file(self.path, "a.txt", "1", "one")
+        git(self.path, "tag", "v1.0")
+        git(self.path, "branch", "side")
+        git(self.path, "-c", "user.name=Someone Else", "-c", "user.email=else@example.com",
+            "commit", "--allow-empty", "-m", "two", "--author", "Author <a@example.com>")
+        details = self.repo.commit_details(self.sha())
+        self.assertEqual(details.parents, (self.sha("HEAD~1"),))
+        self.assertEqual((details.author, details.author_email), ("Author", "a@example.com"))
+        self.assertEqual((details.committer, details.committer_email),
+                         ("Someone Else", "else@example.com"))
+        self.assertEqual(details.body, "")
+        old = self.repo.commit_details(self.sha("HEAD~1"))
+        self.assertEqual(set(old.refs), {"tag: v1.0", "side"})
+
+    def test_a_merge_has_both_parents(self):
+        commit_file(self.path, "a.txt", "1", "one")
+        git(self.path, "switch", "-q", "-c", "side")
+        commit_file(self.path, "b.txt", "2", "side")
+        git(self.path, "switch", "-q", "main")
+        commit_file(self.path, "c.txt", "3", "main")
+        git(self.path, "merge", "-q", "--no-edit", "side")
+        details = self.repo.commit_details(self.sha())
+        self.assertEqual(details.parents, (self.sha("HEAD^1"), self.sha("HEAD^2")))
+        self.assertTrue(details.summary.startswith("Merge branch"))
+
+    def test_an_unknown_commit_raises(self):
+        commit_file(self.path, "a.txt", "1", "one")
+        with self.assertRaises(GitError):
+            self.repo.commit_details("0" * 40)
+
+
 
 def add_hook(repo: Path, name: str, script: str) -> None:
     hook = repo / ".git" / "hooks" / name

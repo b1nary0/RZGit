@@ -16,6 +16,7 @@ from pathlib import Path
 from rzgitclient.git.git_models import (
     Branch,
     Commit,
+    CommitDetails,
     DiffLine,
     DiffSource,
     FileDiff,
@@ -225,6 +226,18 @@ class Repo:
                 i += 1
             result.append(FileStatus(code[0], " ", path, orig))
         return result
+
+    def commit_details(self, sha: str) -> CommitDetails:
+        """Commit ``sha`` in full: message, author, committer, parents and the
+        refs that point at it (spec §4.1)."""
+        fmt = "%x00".join(("%H", "%P", "%an", "%ae", "%aI", "%cn", "%ce", "%cI", "%D", "%B"))
+        out = self.git("show", "-s", "--no-color", "--no-show-signature", "--decorate=short",
+                       f"--format={fmt}", sha, "--")
+        full, parents, an, ae, ad, cn, ce, cd, refs, message = out.split("\0", 9)
+        return CommitDetails(
+            full, tuple(parents.split()), an, ae, datetime.fromisoformat(ad),
+            cn, ce, datetime.fromisoformat(cd),
+            tuple(r for r in refs.split(", ") if r), message.rstrip("\n"))
 
     # ---- for the repo watcher (spec §4.3) ----------------------------------
 

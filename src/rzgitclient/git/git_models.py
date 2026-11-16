@@ -29,6 +29,32 @@ class LastCommit:
 
 
 @dataclass(frozen=True)
+class CommitDetails:
+    """One commit in full, for Commit Details (spec §4.1)."""
+
+    sha: str
+    parents: tuple[str, ...]  # none for the first commit, two or more for a merge
+    author: str
+    author_email: str
+    author_date: datetime
+    committer: str
+    committer_email: str
+    committer_date: datetime
+    refs: tuple[str, ...]  # as git's %D: "HEAD -> main", "origin/main", "tag: v1.0"
+    message: str  # the full message, trailing newlines stripped
+
+    @property
+    def summary(self) -> str:
+        return self.message.split("\n", 1)[0]
+
+    @property
+    def body(self) -> str:
+        """The message after the summary, without the blank line between."""
+        rest = self.message.split("\n", 1)[1] if "\n" in self.message else ""
+        return rest.lstrip("\n")
+
+
+@dataclass(frozen=True)
 class Branch:
     name: str
     is_current: bool

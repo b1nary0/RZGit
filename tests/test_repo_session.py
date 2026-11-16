@@ -655,6 +655,103 @@ class RepoSessionCommitFilesTests(unittest.TestCase):
         self.assertFalse(self.session.busy)
 
 
+class RepoSessionCommitDetailsTests(unittest.TestCase):
+    """A commit's details are asked for, and follow its refs (RZG-26, spec §4.1)."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        commit_file(self.path, "a.txt", "1\n", "first")
+        commit_file(self.path, "b.txt", "1\n", "second\n\nwith a body")
+        self.session = RepoSession()
+        self.events = []
+        self.session.commit_details_changed.connect(lambda sha, d: self.events.append((sha, d)))
+        self.errors = []
+        self.session.error_occurred.connect(self.errors.append)
+        self.assertTrue(self.session.open(self.path))
+        wait_idle(self.session)
+        self.first, self.second = (c.sha for c in reversed(self.session.history))
+
+    def tearDown(self):
+        self.session.shutdown()
+        self._tmp.cleanup()
+
+    def test_request_reads_it_off_the_ui_thread(self):
+        self.session.request_commit_details(self.second)
+        self.assertEqual(self.events, [])  # not yet: it runs on the worker
+        wait_idle(self.session)
+        [(sha, details)] = self.events
+        self.assertEqual((sha, details.sha, details.parents), (self.second, self.second,
+                                                               (self.first,)))
+        self.assertEqual(details.body, "with a body")
+        self.assertEqual((self.session.commit_details_sha, self.session.commit_details),
+                         (self.second, details))
+
+    def test_with_the_commit_files_in_one_job(self):
+        files = []
+        self.session.commit_files_changed.connect(lambda sha, f: files.append(sha))
+        self.session.request_commit_files(self.first)
+        self.session.request_commit_details(self.first)
+        wait_idle(self.session)
+        self.assertEqual(files, [self.first])
+        self.assertEqual([sha for sha, _ in self.events], [self.first])
+
+    def test_a_newer_request_drops_the_older_result(self):
+        self.session.request_commit_details(self.second)
+        self.session.request_commit_details(self.first)
+        wait_idle(self.session)
+        self.assertEqual([sha for sha, _ in self.events], [self.first])
+
+    def test_a_branch_change_reads_the_refs_again(self):
+        self.session.request_commit_details(self.first)
+        wait_idle(self.session)
+        self.assertEqual(self.events[-1][1].refs, ())
+        git(self.path, "tag", "v1", self.first)
+        self.session.refresh(Refresh.BRANCHES)
+        wait_idle(self.session)
+        self.assertEqual(self.events[-1][1].refs, ("tag: v1",))
+        self.events.clear()
+        self.session.refresh(Refresh.STATUS)  # refs can't change: not read
+        wait_idle(self.session)
+        self.session.refresh(Refresh.HISTORY)  # read, but the same: not sent
+        wait_idle(self.session)
+        self.assertEqual(self.events, [])
+
+    def test_a_failure_is_an_error_and_none(self):
+        with mock.patch.object(Repo, "commit_details", side_effect=GitError("bad commit")):
+            self.session.request_commit_details(self.second)
+            wait_idle(self.session)
+        self.assertEqual(self.errors, ["bad commit"])
+        self.assertEqual(self.events, [(self.second, None)])
+
+    def test_after_an_earlier_part_fails_it_is_read_by_itself(self):
+        self.session.request_commit_details(self.first)
+        wait_idle(self.session)
+        self.events.clear()
+        git(self.path, "tag", "v2", self.first)
+        with mock.patch.object(Repo, "branches", side_effect=GitError("no branches")):
+            self.session.refresh(Refresh.BRANCHES)
+            wait_idle(self.session)
+        self.assertEqual(self.errors, ["no branches"])
+        self.assertEqual(self.events[-1][1].refs, ("tag: v2",))
+
+    def test_none_clears_the_target_and_open_and_close_forget_it(self):
+        self.session.request_commit_details(self.second)
+        wait_idle(self.session)
+        self.session.request_commit_details(None)
+        self.assertEqual(self.events[-1], (None, None))
+        self.session.request_commit_details(self.second)
+        wait_idle(self.session)
+        self.session.close()
+        self.assertEqual(self.events[-1], (None, None))
+        self.session.request_commit_details(self.first)  # no repo
+        self.assertFalse(self.session.busy)
+
+
 class RepoSessionCommandTests(unittest.TestCase):
     """Commands change the repository (spec §4.1)."""
 

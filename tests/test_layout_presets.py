@@ -27,7 +27,8 @@ CUSTOM = SplitNode(
     V,
     (PanelNode("controls"),
      SplitNode(H, (PanelNode("history"), PanelNode("diff"), PanelNode("staged"),
-                   PanelNode("commit"), PanelNode("commit_files"))),
+                   PanelNode("commit"), PanelNode("commit_details"),
+                   PanelNode("commit_files"))),
      TabsNode((PanelNode("branches"), PanelNode("files")), current=1)),
     sizes=(30, 500, 200),
 )
@@ -77,8 +78,8 @@ class RestoreLayoutTests(unittest.TestCase):
 
     def test_a_panel_new_in_this_version_goes_to_its_default_place(self):
         # Saved by a version without the Files, Controls, Diff, Staged, Commit
-        # and Commit Files panels: the user's arrangement is kept, Files joins
-        # Branches with Staged, Commit and Commit Files below it (at the default
+        # Commit Details and Commit Files panels: the user's arrangement is kept, Files
+        # joins Branches with Staged, Commit, Commit Details and Commit Files below it (at the default
         # sizes: that split is the default's now), Controls goes across the top,
         # and Diff becomes History's second tab.
         older = SplitNode(H, (PanelNode("branches"), PanelNode("history")), sizes=(100, 500))
@@ -87,8 +88,9 @@ class RestoreLayoutTests(unittest.TestCase):
             PanelNode("controls"),
             SplitNode(H, (
                 SplitNode(V, (PanelNode("branches"), PanelNode("files"), PanelNode("staged"),
-                              PanelNode("commit"), PanelNode("commit_files")),
-                          sizes=(200, 220, 120, 160, 0)),
+                              PanelNode("commit"), PanelNode("commit_details"),
+                              PanelNode("commit_files")),
+                          sizes=(200, 220, 120, 160, 0, 0)),
                 TabsNode((PanelNode("history"), PanelNode("diff"))),
             ), sizes=(100, 500)),
         )))
@@ -115,7 +117,7 @@ class RestoreLayoutTests(unittest.TestCase):
         ), sizes=(700, 300))))
         sidebar = restore_layout(saved(mine)).root.children[1].children[1]
         self.assertEqual(panel_ids(sidebar),
-                         ["files", "staged", "commit", "commit_files", "branches"])
+                         ["files", "staged", "commit", "commit_details", "commit_files", "branches"])
         self.assertEqual(sidebar.sizes[-1], 100)  # Branches keeps its own
 
     def test_a_new_tab_leaves_the_current_tab_current(self):
@@ -136,7 +138,7 @@ class RestoreLayoutTests(unittest.TestCase):
         retired_anchor = Anchor(("history",), V, True)
         restored = restore_layout(saved(newer, {"gone": retired_anchor}))
         self.assertEqual(sorted(panel_ids(restored.root)),
-                         ["branches", "commit", "commit_files", "controls", "diff", "files",
+                         ["branches", "commit", "commit_details", "commit_files", "controls", "diff", "files",
                           "history", "staged"])
         self.assertIsNone(restored.root.sizes)  # children changed, so sizes no longer fit
         self.assertEqual(restored.hidden, {})
@@ -198,9 +200,9 @@ class BuiltInLayoutTests(unittest.TestCase):
 
     def test_a_custom_layout_stays_as_it_is(self):
         restored = restore_layout(saved(self.OLD_STANDARD), None)
-        self.assertEqual(panel_ids(restored.root)[:7],
-                         ["controls", "branches", "files", "staged", "commit", "commit_files",
-                          "history"])
+        self.assertEqual(panel_ids(restored.root)[:8],
+                         ["controls", "branches", "files", "staged", "commit",
+                          "commit_details", "commit_files", "history"])
         self.assertIn(SplitNode(V, (PanelNode("history"), PanelNode("diff")), sizes=(400, 300)),
                       restored.root.children[1].children)  # Diff still below History
 

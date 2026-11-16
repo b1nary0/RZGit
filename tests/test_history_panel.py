@@ -110,6 +110,22 @@ class HistoryPanelTests(unittest.TestCase):
         self.select(2)
         self.assertEqual(self.ctx.selection.commit.subject, "first")
 
+    def test_follows_a_commit_selected_elsewhere(self):
+        self.open()
+        first = self.ctx.session.history[-1]
+        self.ctx.selection.commit = first  # as a parent link in Commit Details does
+        self.assertEqual(self.current_subject(), "first")
+        self.ctx.selection.commit = None
+        self.assertEqual(self.view.currentIndex().row(), 0)  # Uncommitted changes
+        self.assertEqual(self.rec.values("commit_changed"), [first, None])  # each change once
+
+    def test_a_commit_that_isnt_loaded_leaves_it_as_it_is(self):
+        self.open()
+        self.select(1)
+        gone = dataclasses.replace(self.ctx.session.history[0], sha="0" * 40)
+        self.ctx.selection.commit = gone
+        self.assertEqual(self.current_subject(), "second")
+
     def test_selection_survives_refresh_silently(self):
         self.open()
         self.select(2)
@@ -228,6 +244,18 @@ class HistoryPanelPagingTests(unittest.TestCase):
         bar.setValue(bar.maximum())  # at the end again: nothing more to ask for
         self.assertFalse(self.ctx.session.busy)
         self.assertEqual(self.model.rowCount(), 11)
+
+    def test_a_commit_selected_elsewhere_is_scrolled_to(self):
+        while self.model.rowCount() < 11:
+            self.scroll_to_end()
+        self.view.verticalScrollBar().setValue(0)
+        self.app.processEvents()
+        self.ctx.selection.commit = self.ctx.session.history[-1]  # c1, far below
+        self.app.processEvents()
+        row = self.view.currentIndex().row()
+        self.assertEqual(self.model.commit_at(row).subject, "c1")
+        self.assertTrue(self.view.viewport().rect().intersects(
+            self.view.visualRect(self.model.index(row, 0))))
 
     def test_refresh_keeps_the_top_commit_in_place(self):
         self.scroll_to_end()

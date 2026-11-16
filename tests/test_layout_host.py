@@ -70,7 +70,7 @@ class LayoutHostTests(unittest.TestCase):
 
     def test_builds_the_default_layout(self):
         self.host.apply(DEFAULT_LAYOUT)
-        self.assertEqual(set(self.host.panels), {"controls", "branches", "files", "history", "diff", "staged", "commit", "commit_files"})
+        self.assertEqual(set(self.host.panels), {"controls", "branches", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files"})
 
         top = self.root()
         self.assertEqual(top.orientation(), Qt.Orientation.Vertical)
@@ -88,8 +88,8 @@ class LayoutHostTests(unittest.TestCase):
         self.assertEqual([content.widget(i) for i in range(2)],
                          [self.host.panels["history"], self.host.panels["diff"]])
         self.assertEqual(content.currentIndex(), 0)
-        self.assertEqual([sidebar.widget(i).panel.panel_id for i in range(2, 5)],
-                         ["staged", "commit", "commit_files"])
+        self.assertEqual([sidebar.widget(i).panel.panel_id for i in range(2, 6)],
+                         ["staged", "commit", "commit_details", "commit_files"])
 
     def test_tabs_use_the_panel_header_and_follow_it(self):
         self.host.apply(TABS)
@@ -174,7 +174,7 @@ class LayoutHostTests(unittest.TestCase):
         self.show()
         self.host.hide_panel("files")
         flush_deletes()
-        self.assertEqual(set(self.host.panels), {"controls", "branches", "history", "diff", "staged", "commit", "commit_files"})
+        self.assertEqual(set(self.host.panels), {"controls", "branches", "history", "diff", "staged", "commit", "commit_details", "commit_files"})
         self.assertEqual(set(self.host.hidden), {"files"})
         self.assertEqual(self.host.state().hidden, self.host.hidden)
 
