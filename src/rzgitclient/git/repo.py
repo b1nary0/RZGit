@@ -98,6 +98,12 @@ class Repo:
             result.append(Branch(name=name, is_current=head == "*"))
         return result
 
+    def commit_count(self) -> int:
+        """How many commits HEAD reaches (0 before the first commit)."""
+        if not self.has_commits():
+            return 0
+        return int(self.git("rev-list", "--count", "HEAD"))
+
     def log(self, limit: int = 500, skip: int = 0) -> list[Commit]:
         """Up to ``limit`` commits reachable from HEAD, newest first, after ``skip``."""
         if not self.has_commits():

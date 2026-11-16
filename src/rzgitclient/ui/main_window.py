@@ -29,7 +29,8 @@ class MainWindow(QMainWindow):
         self._build_actions()
 
         session.repo_changed.connect(self._on_repo_changed)
-        for signal in (session.head_changed, session.history_changed, session.status_changed):
+        for signal in (session.head_changed, session.history_changed, session.status_changed,
+                       session.commit_count_changed):
             signal.connect(self._update_status_bar)
         session.error_occurred.connect(self._show_error)
         session.busy_changed.connect(self._busy_label.setVisible)
@@ -103,7 +104,17 @@ class MainWindow(QMainWindow):
         if s.repo is None:
             self.statusBar().showMessage("No repository open")
             return
+        commits = commit_summary(len(s.history), s.history_complete, s.commit_count)
         self.statusBar().showMessage(
             f"{s.repo.root}  ·  {s.head or 'detached HEAD'}  ·  "
-            f"{len(s.history)} commits  ·  {len(s.status)} changed files"
+            f"{commits}  ·  {len(s.status)} changed files"
         )
+
+
+def commit_summary(loaded: int, complete: bool, count: int | None) -> str:
+    """"2,421 commits" from the exact count; until it's known, "500+ commits" (spec §8)."""
+    if count is None:
+        count = loaded
+        if not complete:
+            return f"{count:,}+ commits"
+    return f"{count:,} commit" + ("" if count == 1 else "s")

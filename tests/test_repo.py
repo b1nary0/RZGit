@@ -24,6 +24,7 @@ class RepoTests(unittest.TestCase):
         repo = Repo(self.path)
         self.assertFalse(repo.has_commits())
         self.assertIsNone(repo.head_sha())
+        self.assertEqual(repo.commit_count(), 0)
         self.assertEqual(repo.log(), [])
         self.assertEqual(repo.branches(), [])
         self.assertEqual(repo.current_branch(), "main")
@@ -56,6 +57,7 @@ class RepoTests(unittest.TestCase):
         self.assertEqual([c.subject for c in repo.log(2, skip=4)], ["c1"])
         self.assertEqual(repo.log(2, skip=5), [])
         self.assertEqual(repo.head_sha(), repo.log(1)[0].sha)
+        self.assertEqual(repo.commit_count(), 5)
 
     def test_detached_head(self):
         commit_file(self.path, "a.txt", "1", "first")
@@ -69,7 +71,7 @@ class RepoTests(unittest.TestCase):
         # Every call fails with GitError, never an OSError and never a
         # silent "detached"/"no commits" answer.
         for call in (repo.current_branch, repo.has_commits, repo.head_sha,
-                     repo.branches, repo.log, repo.status):
+                     repo.branches, repo.log, repo.status, repo.commit_count):
             with self.subTest(call.__name__), self.assertRaises(GitError) as ctx:
                 call()
             self.assertIsNone(ctx.exception.returncode)

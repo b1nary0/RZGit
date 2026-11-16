@@ -30,16 +30,18 @@ class Refresh(Flag):
     BRANCHES = auto()
     HISTORY = auto()
     STATUS = auto()
-    ALL = HEAD | BRANCHES | HISTORY | STATUS
+    COUNT = auto()  # commits reachable from HEAD; never in the same job as HISTORY
+    ALL = HEAD | BRANCHES | HISTORY | STATUS | COUNT
 
 
 # The order parts load and emit in (spec §4.1), and their value with no repo.
-_PARTS = (Refresh.HEAD, Refresh.BRANCHES, Refresh.HISTORY, Refresh.STATUS)
+_PARTS = (Refresh.HEAD, Refresh.BRANCHES, Refresh.HISTORY, Refresh.STATUS, Refresh.COUNT)
 _EMPTY: dict[Refresh, object] = {
     Refresh.HEAD: None,
     Refresh.BRANCHES: (),
     Refresh.HISTORY: (),
     Refresh.STATUS: (),
+    Refresh.COUNT: None,
 }
 
 
@@ -49,6 +51,7 @@ class RepoSession(QObject):
     branches_changed = Signal(object)  # tuple[Branch, ...]
     history_changed = Signal(object)  # tuple[Commit, ...]
     status_changed = Signal(object)  # tuple[FileStatus, ...]
+    commit_count_changed = Signal(object)  # int | None  (None: not counted yet)
     error_occurred = Signal(str)
     busy_changed = Signal(bool)  # True while git work is queued or running
 
@@ -80,6 +83,7 @@ class RepoSession(QObject):
             Refresh.BRANCHES: self.branches_changed,
             Refresh.HISTORY: self.history_changed,
             Refresh.STATUS: self.status_changed,
+            Refresh.COUNT: self.commit_count_changed,
         }
 
     # ---- latest values --------------------------------------------------
@@ -107,6 +111,11 @@ class RepoSession(QObject):
     @property
     def status(self) -> tuple[FileStatus, ...]:
         return self._values[Refresh.STATUS]  # type: ignore[return-value]
+
+    @property
+    def commit_count(self) -> int | None:
+        """Commits reachable from HEAD, however much history is loaded; None until counted."""
+        return self._values[Refresh.COUNT]  # type: ignore[return-value]
 
     @property
     def history_complete(self) -> bool:
@@ -186,6 +195,10 @@ class RepoSession(QObject):
     def _start_next(self) -> None:
         parts, self._pending = self._pending, Refresh(0)
         more, self._more_pending = self._more_pending, False
+        if Refresh.COUNT in parts and (Refresh.HISTORY in parts or more):
+            # Count in the next job, so it doesn't delay the history.
+            parts &= ~Refresh.COUNT
+            self._pending |= Refresh.COUNT
         # The first load of a repo starts from nothing, not the old repo's history.
         loaded = () if Refresh.HISTORY in self._forced else self.history
         job = _Job(self._repo, self._generation, parts, loaded, more)  # type: ignore[arg-type]
@@ -207,6 +220,8 @@ class RepoSession(QObject):
                 self._store(part, value)
             if result.error is not None:
                 self.error_occurred.emit(result.error)
+                # A count queued behind a failed job would fail too: one error is enough.
+                self._pending &= ~Refresh.COUNT
             self._store_forced_as_empty()  # parts a failed first load left behind
         self._running = False
         if (self._pending or self._more_pending) and self._repo is not None:
@@ -231,7 +246,7 @@ class RepoSession(QObject):
 
     def _store_forced_as_empty(self) -> None:
         for part in _PARTS:
-            if part in self._forced:
+            if part in self._forced and part not in self._pending:  # queued: still coming
                 if part is Refresh.HISTORY:
                     self._history_complete = True
                 self._store(part, _EMPTY[part])
@@ -292,6 +307,8 @@ def _load(repo: Repo, part: Refresh) -> object:
         return tuple(repo.branches())
     if part is Refresh.STATUS:
         return tuple(repo.status())
+    if part is Refresh.COUNT:
+        return repo.commit_count()
     raise ValueError(f"not a single part: {part!r}")
 
 

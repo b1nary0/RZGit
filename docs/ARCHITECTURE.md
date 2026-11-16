@@ -122,16 +122,17 @@ class RepoSession(QObject):
     branches_changed = Signal(object)  # tuple[Branch, ...]
     history_changed  = Signal(object)  # tuple[Commit, ...]
     status_changed   = Signal(object)  # tuple[FileStatus, ...]
+    commit_count_changed = Signal(object)  # int | None  (commits reachable from HEAD)
     error_occurred   = Signal(str)
     busy_changed     = Signal(bool)  # True while git work is queued or running
 
     def open(self, path) -> bool
     def close(self) -> None
-    def refresh(self, parts: Refresh = Refresh.ALL) -> None   # Flag: BRANCHES|HISTORY|STATUS|HEAD
+    def refresh(self, parts: Refresh = Refresh.ALL) -> None   # Flag: HEAD|BRANCHES|HISTORY|STATUS|COUNT
     def load_more_history(self) -> None   # the next page of history, in the background
 
     # Latest values, so a panel created later renders at once (read-only properties):
-    repo, head, branches, history, status, history_complete
+    repo, head, branches, history, status, commit_count, history_complete
 
     # Future git commands (stage, commit, checkout…) are methods here. Each one ends with
     # refresh(<only the parts it changes>).
@@ -149,7 +150,7 @@ class RepoSession(QObject):
 - **Opening and closing.** A failed `open()` leaves the current repo open and returns False.
   A successful one forgets the stored values first, so every signal fires for the new repo
   even when its data equals the old repo's. Signals go out in a fixed order: `repo_changed`
-  (panels reset), then `head`, `branches`, `history`, `status`. `close()` sends
+  (panels reset), then `head`, `branches`, `history`, `status`, `commit_count`. `close()` sends
   `repo_changed(None)` and then empty data.
 - **Errors go through `error_occurred`.** MainWindow shows them. Panels never pop up dialogs
   for git failures, so errors look the same wherever they come from. `refresh()` stops at the
@@ -186,6 +187,11 @@ class RepoSession(QObject):
     everything down to the oldest commit loaded before, so the user's scroll position and
     selection survive new commits on top. If that commit is gone (another branch), it keeps
     as many whole pages as were loaded. A page requested at the same time is added on.
+- **The commit count** (`git rev-list --count HEAD`, 0 before the first commit) is exact
+  however little history is loaded. It never runs in the same job as `HISTORY`: when both
+  are due, the count waits for the next job, so the first page isn't delayed by it (0.1 s
+  for 200k commits). `commit_count` is None until it arrives; parts still queued aren't
+  reported as empty after a job.
 - **Growth:** when the session gains many commands (stage, commit, checkout, fetch…), they
   can move to a separate `core/git_commands.py` that the session delegates to. Not before.
 
@@ -546,9 +552,12 @@ Per-widget sheets are slow to apply and scatter the rules.
   and enabled state (e.g. Refresh is disabled with no repo open, driven by `repo_changed`).
   The menu bar, toolbar, context menus and a future Controls panel all show the same objects.
 - **`MainWindow`** is a thin shell: menus and toolbar built from `AppActions`, the status
-  bar summary (from session signals), error dialogs (from `error_occurred`), and a
+  bar summary (from session signals: path · branch · commits · changed files), error dialogs (from `error_occurred`), and a
   `LayoutHost` as the central widget. The Open, Quit and Reset Layout handlers live here
   because they need dialogs or the window. Target: around 100 lines.
+- **Commit count text** (`commit_summary`): the exact `commit_count` with separators
+  ("2,421 commits", "1 commit"). Until it arrives, or if it failed, the loaded count, with a
+  plus while more history is unloaded ("500+ commits").
 - The toolbar stays a `QToolBar` for now. It becomes a **Controls panel** when there are real
   controls to show (fetch/pull/push, the branch box).
 

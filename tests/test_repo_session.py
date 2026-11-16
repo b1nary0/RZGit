@@ -9,7 +9,8 @@ from rzgitclient.core.repo_session import Refresh, RepoSession
 from rzgitclient.git.repo import GitError, Repo
 from tests.support import SignalRecorder, commit_file, git, make_repo, qt_app, wait_idle
 
-DATA_SIGNALS = ("head_changed", "branches_changed", "history_changed", "status_changed")
+DATA_SIGNALS = ("head_changed", "branches_changed", "history_changed", "status_changed",
+                "commit_count_changed")
 ALL_SIGNALS = ("repo_changed", *DATA_SIGNALS, "error_occurred")
 BUSY = "busy_changed"
 
@@ -85,10 +86,11 @@ class RepoSessionTests(unittest.TestCase):
         self.assertEqual(
             self.rec.names(),
             ["repo_changed", "head_changed", "branches_changed", "error_occurred",
-             "history_changed", "status_changed"],
+             "history_changed", "status_changed", "commit_count_changed"],
         )
         self.assertEqual(self.session.history, ())
         self.assertEqual(self.session.status, ())
+        self.assertIsNone(self.session.commit_count)  # not the old repo's count
 
     # ---- close ----------------------------------------------------------
 
@@ -128,9 +130,10 @@ class RepoSessionTests(unittest.TestCase):
         commit_file(self.path, "a.txt", "2", "second")
         self.session.refresh()
         wait_idle(self.session)
-        # A new commit changes history and status; HEAD and the branch list
-        # (names and which is current) stay the same.
-        self.assertEqual(self.rec.names(), ["history_changed", "status_changed"])
+        # A new commit changes history, status and the count; HEAD and the
+        # branch list (names and which is current) stay the same.
+        self.assertEqual(self.rec.names(), ["history_changed", "status_changed",
+                                            "commit_count_changed"])
 
     def test_refresh_without_repo_does_nothing(self):
         self.session.refresh()
@@ -227,6 +230,53 @@ class RepoSessionTests(unittest.TestCase):
         wait_idle(self.session, timeout=1)  # nothing left running
         self.assertEqual(self.rec.events, [])  # the result was dropped
 
+
+
+    # ---- the commit count -----------------------------------------------
+
+    def test_count_runs_in_its_own_job_after_history_is_out(self):
+        seen_when_counting = []
+        real_count = Repo.commit_count
+
+        def count(repo):
+            seen_when_counting.append(list(self.rec.names()))
+            return real_count(repo)
+
+        with mock.patch.object(Repo, "commit_count", count):
+            self.session.open(self.path)
+            wait_idle(self.session)
+        # history and status were emitted before git was asked to count
+        self.assertEqual(seen_when_counting, [["repo_changed", *DATA_SIGNALS[:-1]]])
+        self.assertEqual(self.session.commit_count, 1)
+
+    def test_count_is_none_until_counted_and_after_close(self):
+        self.assertIsNone(self.session.commit_count)
+        self.open_and_clear()
+        self.assertEqual(self.session.commit_count, 1)
+        self.session.close()
+        self.assertIsNone(self.session.commit_count)
+
+    def test_count_follows_new_commits(self):
+        self.open_and_clear()
+        commit_file(self.path, "b.txt", "1", "second")
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertEqual(self.session.commit_count, 2)
+        self.assertEqual(self.rec.values("commit_count_changed"), [2])
+
+    def test_count_alone_runs_in_one_job(self):
+        self.open_and_clear()
+        jobs = SignalRecorder(self.session, BUSY)
+        self.session.refresh(Refresh.COUNT)
+        wait_idle(self.session)
+        self.assertEqual(jobs.events, [(BUSY, True), (BUSY, False)])
+
+    def test_a_failed_load_reports_once_not_again_for_the_count(self):
+        with mock.patch.object(Repo, "log", side_effect=GitError("log broke")):
+            self.session.open(self.path)
+            wait_idle(self.session)
+        self.assertEqual(self.rec.values("error_occurred"), ["log broke"])
+        self.assertIsNone(self.session.commit_count)
 
 
 class HistoryPagingTests(unittest.TestCase):
