@@ -42,6 +42,9 @@ def _git_env() -> dict[str, str]:
     env["LC_ALL"] = "C"  # stable, parseable output
     env["GIT_TERMINAL_PROMPT"] = "0"  # never block on a hidden prompt
     env["GIT_EDITOR"] = "false"  # a command that wants an editor fails instead of waiting
+    # Reads write nothing: `git status` would otherwise refresh .git/index, and the
+    # repo watcher would see that and refresh again (spec §4.1, §4.3).
+    env["GIT_OPTIONAL_LOCKS"] = "0"
     return env
 
 
@@ -195,6 +198,35 @@ class Repo:
                 i += 1
             result.append(FileStatus(code[0], " ", path, orig))
         return result
+
+    # ---- for the repo watcher (spec §4.3) ----------------------------------
+
+    def git_dirs(self) -> tuple[Path, Path]:
+        """The git dir (HEAD, index) and the common dir (refs, packed-refs).
+        They differ in a linked worktree."""
+        out = self.git("rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir")
+        git_dir, common_dir = out.splitlines()[:2]
+        return Path(git_dir), Path(common_dir)
+
+    def listed_files(self) -> list[str]:
+        """Tracked files and untracked ones git doesn't ignore, relative to the root."""
+        out = self.git("ls-files", "-z", "--cached", "--others", "--exclude-standard")
+        return [p for p in out.split("\0") if p]
+
+    def untracked_folders(self) -> list[str]:
+        """Untracked folders git doesn't ignore, empty ones too, relative to the
+        root and without the trailing slash. Only the top one of an untracked tree."""
+        out = self.git("ls-files", "-z", "--others", "--exclude-standard", "--directory")
+        return [p.rstrip("/") for p in out.split("\0") if p.endswith("/")]
+
+    def ignored(self, paths: Sequence[str]) -> set[str]:
+        """Those of ``paths`` (relative to the root) that git ignores. Tracked
+        files are never ignored."""
+        if not paths:
+            return set()
+        out = run_git(self.root, "check-ignore", "-z", "--stdin", ok_codes=(0, 1),
+                      input="\0".join(paths) + "\0")
+        return {p for p in out.split("\0") if p}
 
     # ---- commands: they change the repository ------------------------------
 

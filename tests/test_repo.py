@@ -407,3 +407,59 @@ class RepoCommitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RepoWatchListingTests(unittest.TestCase):
+    """What the repo watcher asks git for (spec §4.3)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        (self.path / ".gitignore").write_text("build/\n*.o\n")
+        (self.path / "src" / "a").mkdir(parents=True)
+        (self.path / "src" / "a" / "y.c").write_text("c")
+        (self.path / "src" / "a" / "y.o").write_text("o")
+        (self.path / "build").mkdir()
+        (self.path / "build" / "out").write_text("x")
+        (self.path / "empty").mkdir()
+        commit_file(self.path, "t.txt", "t", "first")
+        self.repo = Repo(self.path)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_git_dirs(self):
+        git_dir, common = self.repo.git_dirs()
+        self.assertEqual(git_dir, self.repo.root / ".git")
+        self.assertEqual(common, git_dir)
+
+    def test_git_dirs_of_a_linked_worktree(self):
+        other = Path(self._tmp.name) / "linked"
+        git(self.path, "worktree", "add", "-q", str(other))
+        git_dir, common = Repo(other).git_dirs()
+        self.assertEqual(common, self.repo.root / ".git")
+        self.assertEqual(git_dir.parent, common / "worktrees")
+
+    def test_listed_files_leave_out_ignored_ones(self):
+        self.assertEqual(sorted(self.repo.listed_files()), [".gitignore", "src/a/y.c", "t.txt"])
+
+    def test_untracked_folders_include_empty_ones(self):
+        self.assertEqual(sorted(self.repo.untracked_folders()), ["empty", "src"])
+
+    def test_ignored(self):
+        names = ["build", "build/out", "src/a/y.o", "src/a/y.c", "t.txt", "gone.o", "a b/c.o"]
+        self.assertEqual(self.repo.ignored(names),
+                         {"build", "build/out", "src/a/y.o", "gone.o", "a b/c.o"})
+        self.assertEqual(self.repo.ignored([]), set())
+
+    def test_tracked_files_are_never_ignored(self):
+        (self.path / "kept.o").write_text("o")
+        git(self.path, "add", "-f", "kept.o")
+        self.assertEqual(self.repo.ignored(["kept.o"]), set())
+
+    def test_status_doesnt_write_the_index(self):
+        index = self.path / ".git" / "index"
+        (self.path / "t.txt").write_text("t")  # same content, newer mtime: stat info is stale
+        before = index.stat().st_mtime_ns
+        self.repo.status()
+        self.assertEqual(index.stat().st_mtime_ns, before)

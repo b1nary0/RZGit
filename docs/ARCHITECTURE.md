@@ -73,6 +73,8 @@ src/rzgitclient/
     git_commands.py             GitCommand, run_command (the worker side of commands: stage, commit, …)
     commit_drafts.py            CommitDrafts: the unfinished commit message of each repository
     selection.py                Selection: what the user has selected (commit, file)
+    repo_watcher.py             RepoWatcher: refreshes the session when the repository changes on disk
+    inotify_watcher.py          InotifyWatcher: Linux inotify on a QSocketNotifier (folders → named events)
     app_settings.py             AppSettings: typed wrapper over QSettings (last_repo, layout, …)
   ui/
     main_window.py              MainWindow: thin shell (menus, status bar, LayoutHost)
@@ -157,6 +159,7 @@ class RepoSession(QObject):
     def unstage_all(self) -> None
     def discard(self, paths) -> None      # unstaged changes; untracked files go to the trash
     def commit(self, message) -> GitCommand | None   # the staged changes; None with no repo
+    commands_in_flight: tuple[GitCommand, ...]   # queued or running, until command_finished
 
     # Latest values, so a panel created later renders at once (read-only properties):
     repo, head, branches, history, status, commit_count, history_complete, diff_file, diff,
@@ -280,6 +283,77 @@ class RepoSession(QObject):
   - **No editor or prompt, ever:** git runs with `GIT_EDITOR=false` and
     `GIT_TERMINAL_PROMPT=0`, and with stdin closed unless a command passes input. A
     command that would open an editor fails instead of waiting for it.
+  - **In flight:** `commands_in_flight` holds the commands queued or running, a job's
+    until its `command_finished` signals have gone out. The watcher (§4.3) uses it to tell
+    the app's own changes from others.
+- **Reads write nothing.** Git runs with `GIT_OPTIONAL_LOCKS=0`, so `git status` doesn't
+  refresh `.git/index` behind the app's back. **Why:** the watcher (§4.3) would see that
+  write and refresh again, for ever.
+
+### 4.3 RepoWatcher
+
+`RepoWatcher(QObject)` (`core/repo_watcher.py`) keeps the session up to date with changes
+made outside the app: an editor saving a file, a commit or checkout in a terminal, a
+fetch. It only ever calls `session.refresh(parts)`, so panels don't know it exists.
+
+```python
+class RepoWatcher(QObject):
+    def __init__(self, session, parent=None, *, delay_ms=300, max_delay_ms=2000,
+                 max_folders=10_000, poll_ms=3000)
+    def set_active(self, active: bool) -> None   # the window is active (app.py)
+    def shutdown(self) -> None
+    busy: bool          # a change waits, or the watch set is being built (tests wait on it)
+    polling: bool       # over the cap: the working tree is polled, not watched
+    folder_count: int   # working tree folders watched
+```
+
+- **Linux inotify** (`core/inotify_watcher.py`), through `ctypes`, read on a
+  `QSocketNotifier`. One watch per folder. **Why not `QFileSystemWatcher`:** on a folder
+  it misses files changed in place (VS Code saves that way), and it doesn't say which
+  file changed, so ignored files can't be told apart. Where inotify isn't available,
+  nothing is watched and only the focus refresh below works.
+- **What is watched.** On `repo_changed`, a background job lists the folders:
+  - the git dir and the common dir (`git rev-parse --git-dir --git-common-dir`, so a
+    linked worktree works) and every folder under `refs/`;
+  - the working tree's root and every folder holding a file `git ls-files --cached
+    --others --exclude-standard` lists, plus untracked folders (`--directory`), so an
+    empty new folder is seen too. Ignored folders (`.venv`, `build/`) aren't watched.
+- **What a change reloads:**
+
+  | Changed | Parts |
+  |---|---|
+  | `index` (git dir) | `STATUS` |
+  | `HEAD`, `packed-refs`, anything under `refs/` | `HEAD \| BRANCHES \| HISTORY \| COUNT` |
+  | a working tree file or folder git doesn't ignore | `STATUS` |
+  | `*.lock`, `objects/`, logs, anything else in `.git` | nothing |
+
+  A working tree name the last listing didn't have is checked with `git check-ignore`
+  (`Repo.ignored`) in the background first, so an ignored file causes no refresh. A new
+  folder that isn't ignored is walked (pruning ignored subfolders) and watched. A folder
+  moved or deleted stops being watched. A changed `.gitignore` rebuilds the watch set.
+  `HISTORY` after a ref change is cheap: with HEAD unchanged it runs no `git log` (§4.1).
+- **Merged:** changes are collected until 300 ms pass without one, at most 2 s after the
+  first, then sent as one `refresh(parts)`. A burst (a checkout, a build) is one refresh,
+  or one every 2 s while it lasts. The session merges it into a waiting job too.
+- **The app's own commands** already reload what they change (§4.1). While
+  `session.commands_in_flight` isn't empty, changes inside `.git` are counted as theirs
+  and dropped, and so are working tree changes to the paths of an in-flight Discard. On
+  `command_finished` the watcher reads the events already waiting, so a command's own
+  changes are dropped even if they arrive after it. Any other working tree change still
+  counts. A git command run outside the app in that same moment is missed; the focus
+  refresh catches it.
+- **The cap:** past `max_folders` working tree folders (or when inotify runs out of
+  watches), the working tree isn't watched, only `.git`. Instead `STATUS` is refreshed
+  every 3 s while the window is active (`polling`).
+- **Focus:** `set_active(True)` after the window was inactive refreshes everything
+  (`Refresh.ALL`): it catches whatever the watcher missed. app.py calls it from
+  `QGuiApplication.applicationStateChanged`. The first activation at startup doesn't
+  refresh, since `open()` just loaded everything.
+- **Overflow:** if the kernel's event queue overflows, the watch set is rebuilt and
+  everything refreshed.
+- Its own git (listing folders, `check-ignore`) runs on a background thread of its own:
+  it only reads, so it can't clash with the session's worker. Results from a repository
+  since closed are dropped (a generation counter).
 
 ### 4.2 Selection
 
@@ -900,6 +974,8 @@ Per-widget sheets are slow to apply and scatter the rules.
 
 - **`AppActions`** (`ui/app_actions.py`) defines every `QAction` once: text, icon, shortcut
   and enabled state (e.g. Refresh is disabled with no repo open, driven by `repo_changed`).
+  **Refresh** (F5, File menu and Controls panel) stays as a fallback: the window follows
+  the repository by itself (§4.3).
   The menu bar, context menus and the Controls panel all show the same objects.
   **Side by Side Diff** is checkable: the Diff panel follows its `toggled`. MainWindow sets
   it from `AppSettings.side_by_side_diff` before the panels are built, and saves it on close
@@ -941,6 +1017,7 @@ cheap to fix **later**, without paying for them now:
 | Full rebuild on every refresh | frequent refreshes | granular signals, emitted only on change | §4.1 (done now: cheap, and the right semantics anyway) |
 | Layout changes recreating panels | layout switching | panel reuse in `LayoutHost.apply` | §6.2 (done now: needed to keep panel state anyway) |
 | Restyling | theme switch | one app-wide stylesheet | §7.3 |
+| Refresh storms from the watcher | builds, checkouts, huge trees | **done:** changes merged over 300 ms; ignored files filtered; polling past 10,000 folders | §4.3 |
 
 ## 10. Testing
 
@@ -956,7 +1033,8 @@ cheap to fix **later**, without paying for them now:
   edge cases), `test_layout_host` (build, panel reuse, reading sizes back),
   `test_<name>_panel` (each panel renders a temp repo and the empty state),
   `test_diff_request` and `test_diff_rows` (the diff's worker side and its rows),
-  `test_git_commands` (commands on temp repos), `test_commit_drafts`, and
+  `test_git_commands` (commands on temp repos), `test_commit_drafts`,
+  `test_inotify_watcher` and `test_repo_watcher` (real file changes in temp repos), and
   `test_architecture` (§2 import rules, unique panel ids).
 - Stays on stdlib `unittest`: there are no extra dependencies, and VS Code's test panel is
   already set up for it.

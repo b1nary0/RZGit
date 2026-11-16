@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import sys
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from rzgitclient import __version__
 from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.commit_drafts import CommitDrafts
 from rzgitclient.core.repo_session import RepoSession
+from rzgitclient.core.repo_watcher import RepoWatcher
 from rzgitclient.core.selection import Selection
 from rzgitclient.ui.app_actions import AppActions
 from rzgitclient.ui.main_window import MainWindow
@@ -25,6 +27,10 @@ def main(argv: list[str] | None = None) -> int:
     app.setDesktopFileName("rzgitclient")
     theme = ThemeManager(app, LIGHT_THEME)
     session = RepoSession()
+    # The window follows the repository by itself (spec §4.3).
+    watcher = RepoWatcher(session)
+    app.applicationStateChanged.connect(
+        lambda state: watcher.set_active(state == Qt.ApplicationState.ApplicationActive))
 
     selection = Selection(session)
     settings = AppSettings()
@@ -46,5 +52,6 @@ def main(argv: list[str] | None = None) -> int:
         session.open(target)
 
     code = app.exec()
+    watcher.shutdown()
     session.shutdown()  # wait for a git command still running
     return code

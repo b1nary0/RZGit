@@ -688,6 +688,18 @@ class RepoSessionCommandTests(unittest.TestCase):
         wait_idle(self.session)
         self.assertEqual(self.codes(), {"a.txt": " M", "b.txt": "A "})
 
+    def test_commands_are_in_flight_until_command_finished_has_gone_out(self):
+        self.assertEqual(self.session.commands_in_flight, ())
+        first = self.session.stage(["a.txt"])
+        second = self.session.stage(["b.txt"])
+        self.assertEqual(self.session.commands_in_flight, (first, second))
+        seen = []
+        self.session.command_finished.connect(
+            lambda command, ok: seen.append(command in self.session.commands_in_flight))
+        wait_idle(self.session)
+        self.assertEqual(seen, [True, True])
+        self.assertEqual(self.session.commands_in_flight, ())
+
     def test_a_failed_command_is_one_error_and_the_status_still_loads(self):
         git(self.path, "add", "a.txt")  # outside the app
         self.session.refresh()  # the worker is busy, so both commands share the next job

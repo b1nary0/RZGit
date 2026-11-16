@@ -86,6 +86,7 @@ class RepoSession(QObject):
         self._files_pending = False
         self._commit_files: tuple[str | None, tuple[FileStatus, ...] | None] = (None, None)
         self._commands: list[GitCommand] = []  # waiting for the next job, in order
+        self._job_commands: tuple[GitCommand, ...] = ()  # the running job's
         # One thread: git commands on a repo can clash on index.lock, and
         # in-order jobs can't deliver results out of order.
         self._pool = QThreadPool(self)
@@ -161,6 +162,12 @@ class RepoSession(QObject):
     def commit_files(self) -> tuple[FileStatus, ...] | None:
         """The files ``commit_files_sha`` changed; None if they couldn't be read."""
         return self._commit_files[1]
+
+    @property
+    def commands_in_flight(self) -> tuple[GitCommand, ...]:
+        """Commands queued or running, a job's until its ``command_finished``
+        signals have gone out (the watcher tells the app's own changes by it)."""
+        return self._job_commands + tuple(self._commands)
 
     # ---- opening and closing ------------------------------------------------
 
@@ -330,6 +337,7 @@ class RepoSession(QObject):
         files_sha = self._files_sha if self._files_pending else None
         self._files_pending = False
         commands, self._commands = tuple(self._commands), []
+        self._job_commands = commands
         if Refresh.COUNT in parts and (Refresh.HISTORY in parts or more):
             # Count in the next job, so it doesn't delay the history.
             parts &= ~Refresh.COUNT
@@ -375,6 +383,7 @@ class RepoSession(QObject):
             self._store_forced_as_empty()  # parts a failed first load left behind
             for i, command in enumerate(result.commands):
                 self.command_finished.emit(command, i < result.commands_ok)
+        self._job_commands = ()
         self._running = False
         if (self._pending or self._more_pending or self._diff_pending
                 or self._files_pending) and self._repo is not None:

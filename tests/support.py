@@ -71,6 +71,16 @@ def wait_idle(session: RepoSession, timeout: float = 10.0) -> None:
         QThread.msleep(1)
 
 
+def pump(ms: int) -> None:
+    """Process events for ``ms`` milliseconds."""
+    from PySide6.QtCore import QCoreApplication, QThread
+
+    deadline = time.monotonic() + ms / 1000
+    while time.monotonic() < deadline:
+        QCoreApplication.processEvents()
+        QThread.msleep(1)
+
+
 # ---- signals ---------------------------------------------------------------
 
 
