@@ -333,7 +333,7 @@ class MainWindowTests(unittest.TestCase):
         actions = window.ctx.actions
         self.assertEqual([a for a in menu.actions() if not a.isSeparator()],
                          [actions.stage, actions.unstage, actions.discard,
-                          actions.stage_all, actions.unstage_all, actions.commit])
+                          actions.stage_all, actions.unstage_all, actions.commit, actions.amend])
 
     def test_discard_asks_first_and_acts_only_on_unstaged_rows(self):
         window = self.start()
@@ -388,6 +388,29 @@ class MainWindowTests(unittest.TestCase):
         with mock.patch.object(window.branch_dialogs, "ask", return_value=None) as ask:
             window.ctx.actions.request_branch(BranchOp.MERGE, "feature")
         ask.assert_called_once()
+
+    def test_amending_asks_only_for_a_pushed_commit(self):
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QApplication, QMessageBox
+        from rzgitclient.git.git_models import LastCommit
+        window = self.start()
+        self.assertTrue(window.ctx.actions.confirm_amend(LastCommit("a" * 40, "m", False)))
+        seen = {}
+
+        def answer():
+            box = QApplication.activeModalWidget()
+            try:
+                seen["text"] = box.text()
+                seen["default_is_cancel"] = (
+                    box.defaultButton() is box.button(QMessageBox.StandardButton.Cancel))
+                box.button(QMessageBox.StandardButton.Cancel).click()
+            finally:
+                if box.isVisible():
+                    box.reject()
+        QTimer.singleShot(0, answer)
+        self.assertFalse(window.ctx.actions.confirm_amend(LastCommit("b" * 40, "m", True)))
+        self.assertEqual(seen, {"text": f"Amend {'b' * 8}, a pushed commit?",
+                                "default_is_cancel": True})
 
     def test_reset_layout_shows_hidden_panels(self):
         window = self.start()

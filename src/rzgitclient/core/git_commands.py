@@ -25,6 +25,7 @@ class CommandKind(StrEnum):
     UNSTAGE_ALL = "unstage_all"
     DISCARD = "discard"  # unstaged changes; untracked files go to the trash
     COMMIT = "commit"  # the staged changes, with ``message``
+    AMEND = "amend"  # HEAD's commit replaced: the staged changes, if any, and ``message``
     # Chosen lines of ``diff`` (a hunk is all of its changed lines):
     STAGE_LINES = "stage_lines"
     UNSTAGE_LINES = "unstage_lines"
@@ -45,7 +46,7 @@ class GitCommand:
 
     kind: CommandKind
     paths: tuple[str, ...] = ()
-    message: str = ""  # COMMIT's
+    message: str = ""  # COMMIT's and AMEND's
     diff: FileDiff | None = None  # the *_LINES commands': the diff the lines are from
     lines: frozenset[Line] = frozenset()  # (hunk, line) indices into ``diff``
     branch: str = ""  # the branch commands'
@@ -71,6 +72,8 @@ def run_command(repo: Repo, command: GitCommand) -> None:
             _discard(repo, paths)
         case CommandKind.COMMIT:
             repo.commit(command.message)
+        case CommandKind.AMEND:
+            repo.amend(command.message)
         case CommandKind.STAGE_LINES | CommandKind.UNSTAGE_LINES | CommandKind.DISCARD_LINES:
             _apply_lines(repo, command)
         case CommandKind.SWITCH:

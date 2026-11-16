@@ -6,7 +6,7 @@ objects, so text, icon, shortcut and enabled state are set in one place.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from enum import StrEnum
 
 from PySide6.QtCore import QObject, Signal, Slot
@@ -14,7 +14,7 @@ from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import FileSource, Selection
-from rzgitclient.git.git_models import FileDiff
+from rzgitclient.git.git_models import FileDiff, LastCommit
 from rzgitclient.ui.theme.theme_manager import ThemeMode
 
 
@@ -80,6 +80,12 @@ class AppActions(QObject):
         self.commit = self._action("vcs-commit", "&Commit", "Ctrl+Return")
         self.commit.setShortcuts([QKeySequence("Ctrl+Return"), QKeySequence("Ctrl+Enter")])
         self._commit_ready = False
+        # Amend (spec §8): checked on HEAD's commit; unchecked when HEAD moves.
+        self.amend = self._action("edit-redo", "&Amend Last Commit")
+        self.amend.setCheckable(True)
+        self.amend.toggled.connect(self._on_amend_toggled)
+        self._amend_sha: str | None = None
+        self._confirm_amend: Callable[[LastCommit], bool] = lambda _last: True
 
         # triggered(bool) would land in refresh's `parts` argument.
         self.refresh.triggered.connect(lambda: session.refresh())
@@ -89,7 +95,10 @@ class AppActions(QObject):
                                                          FileSource.WORKTREE))
         self.stage_all.triggered.connect(lambda: session.stage_all())
         self.unstage_all.triggered.connect(lambda: session.unstage_all())
-        for signal in (session.repo_changed, session.status_changed, selection.files_changed):
+        # Another repository: its history isn't loaded yet, so don't wait for it.
+        session.repo_changed.connect(lambda _repo: self.amend.setChecked(False))
+        for signal in (session.repo_changed, session.status_changed, session.history_changed,
+                       selection.files_changed):
             signal.connect(self._update_enabled)
         self._update_enabled()
 
@@ -103,6 +112,19 @@ class AppActions(QObject):
         """Not ready: for the Commit panel's ``destroyed``. A bound slot, so Qt
         drops the connection if these actions go first (at exit)."""
         self.set_commit_ready(False)
+
+    def set_amend_confirmer(self, ask: Callable[[LastCommit], bool]) -> None:
+        """MainWindow's question before amending ``last`` (spec §8)."""
+        self._confirm_amend = ask
+
+    def confirm_amend(self, last: LastCommit) -> bool:
+        """Whether to go ahead and amend ``last``: True without a confirmer."""
+        return self._confirm_amend(last)
+
+    def _on_amend_toggled(self, checked: bool) -> None:
+        history = self._session.history
+        self._amend_sha = history[0].sha if checked and history else None
+        self._update_enabled()
 
     def move(self, paths: tuple[str, ...], to: FileSource) -> None:
         """Stage ``paths`` (``to`` the index) or unstage them, and have their new
@@ -149,4 +171,11 @@ class AppActions(QObject):
         self.stage_all.setEnabled(any(f.has_unstaged or f.is_untracked for f in session.status))
         staged = any(f.is_staged for f in session.status)
         self.unstage_all.setEnabled(staged)
-        self.commit.setEnabled(staged and self._commit_ready and session.repo is not None)
+        history = session.history
+        self.amend.setEnabled(session.repo is not None and bool(history))
+        if self.amend.isChecked() and (not self.amend.isEnabled()
+                                       or history[0].sha != self._amend_sha):
+            self.amend.setChecked(False)  # another repo, or HEAD moved: calls back here
+            return
+        self.commit.setEnabled((staged or self.amend.isChecked()) and self._commit_ready
+                               and session.repo is not None)

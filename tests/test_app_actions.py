@@ -151,5 +151,63 @@ class AppActionsTests(unittest.TestCase):
         self.assertEqual(seen, [(BranchOp.MERGE, "feature")])
 
 
+    # ---- Amend Last Commit (spec §8) --------------------------------------
+
+    def open_with_commit(self):
+        commit_file(self.repo, "a.txt", "1", "first")
+        self.session.open(self.repo)
+        wait_idle(self.session)
+
+    def test_amend_is_enabled_only_with_commits(self):
+        self.assertFalse(self.actions.amend.isEnabled())
+        self.session.open(self.repo)
+        wait_idle(self.session)
+        self.assertFalse(self.actions.amend.isEnabled())  # no commits yet
+        commit_file(self.repo, "a.txt", "1", "first")
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertTrue(self.actions.amend.isEnabled())
+
+    def test_amend_lets_commit_run_with_nothing_staged(self):
+        self.open_with_commit()
+        self.actions.set_commit_ready(True)
+        self.assertFalse(self.actions.commit.isEnabled())
+        self.actions.amend.setChecked(True)
+        self.assertTrue(self.actions.commit.isEnabled())
+        self.actions.amend.setChecked(False)
+        self.assertFalse(self.actions.commit.isEnabled())
+
+    def test_amend_turns_off_when_head_moves_but_not_on_a_refresh(self):
+        self.open_with_commit()
+        self.actions.amend.setChecked(True)
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertTrue(self.actions.amend.isChecked())
+        commit_file(self.repo, "b.txt", "1", "second")
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertFalse(self.actions.amend.isChecked())
+
+    def test_amend_turns_off_when_the_repository_changes(self):
+        self.open_with_commit()
+        self.actions.amend.setChecked(True)
+        self.session.open(self.repo)
+        self.assertFalse(self.actions.amend.isChecked())
+        wait_idle(self.session)
+        self.actions.amend.setChecked(True)
+        self.session.close()
+        self.assertFalse(self.actions.amend.isChecked())
+        self.assertFalse(self.actions.amend.isEnabled())
+
+    def test_confirm_amend_asks_the_confirmer(self):
+        from rzgitclient.git.git_models import LastCommit
+        last = LastCommit("abc", "m", True)
+        self.assertTrue(self.actions.confirm_amend(last))  # none set
+        seen = []
+        self.actions.set_amend_confirmer(lambda l: seen.append(l) or False)
+        self.assertFalse(self.actions.confirm_amend(last))
+        self.assertEqual(seen, [last])
+
+
 if __name__ == "__main__":
     unittest.main()

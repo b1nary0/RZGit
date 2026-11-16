@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtGui import QFocusEvent
@@ -8,7 +9,10 @@ from PySide6.QtTest import QTest
 from shiboken6 import isValid
 
 from rzgitclient.ui.panels.commit_panel import (
+    AMEND_ALONE,
+    AMENDING,
     COMMITTING,
+    LOADING_MESSAGE,
     STAGE_FIRST,
     TYPE_MESSAGE,
     CommitPanel,
@@ -281,6 +285,86 @@ class CommitPanelTests(unittest.TestCase):
         self.type("x" * 73)
         self.assertEqual(count.text(), "73/50")
         self.assertEqual(count.property(ROLE_PROPERTY), Role.HINT_WARNING)
+
+
+    # ---- amending (spec §5.4) --------------------------------------------
+
+    def amend_on(self):
+        """Turn Amend on and wait for the last commit's message."""
+        self.ctx.actions.amend.setChecked(True)
+        wait_idle(self.session)
+
+    def test_amend_shows_the_last_message_and_turning_it_off_brings_back_the_draft(self):
+        git(self.repo, "commit", "-q", "--amend", "-m", "first", "-m", "Its body")
+        self.stage()
+        self.open()
+        self.type("My draft", "in progress")
+        self.ctx.actions.amend.setChecked(True)
+        self.assertEqual(self.button(), (LOADING_MESSAGE, False))  # still reading it
+        wait_idle(self.session)
+        self.assertEqual(self.fields(), ("first", "Its body"))
+        self.assertTrue(self.panel._amend_box.isChecked())
+        self.type("first, edited")
+        self.assertEqual(self.ctx.drafts.get(self.repo), "My draft\n\nin progress")
+        self.panel._amend_box.setChecked(False)  # the box drives the action too
+        self.assertFalse(self.ctx.actions.amend.isChecked())
+        self.assertEqual(self.fields(), ("My draft", "in progress"))
+
+    def test_amend_with_nothing_staged_changes_the_message_only(self):
+        self.open()
+        self.assertTrue(self.panel.collapsed)
+        self.amend_on()
+        self.assertFalse(self.panel.collapsed)  # kept open: the message alone can change
+        self.assertEqual(self.button(), (AMEND_ALONE, True))
+        self.type("first, reworded")
+        self.panel._button.click()
+        self.assertEqual(self.button(), (AMENDING, False))
+        wait_idle(self.session)
+        self.assertEqual(self.subjects(), ["first, reworded"])
+        self.assertEqual(self.session.commit_count, 1)
+        self.assertFalse(self.ctx.actions.amend.isChecked())  # HEAD moved: off
+        self.assertEqual(self.fields(), ("", ""))  # the (empty) draft is back
+        self.assertTrue(self.panel.collapsed)
+
+    def test_amend_with_staged_files(self):
+        self.stage("b.txt", "b")
+        self.open()
+        self.amend_on()
+        self.assertEqual(self.button(), ("Amend with 1 File", True))
+        self.type("")
+        self.assertEqual(self.button(), (TYPE_MESSAGE, False))
+        self.type("first and b")
+        self.action.trigger()
+        wait_idle(self.session)
+        self.assertEqual(self.subjects(), ["first and b"])
+        self.assertEqual(self.session.status, ())
+
+    def test_a_cancelled_confirmation_amends_nothing(self):
+        self.open()
+        self.amend_on()
+        self.ctx.actions.set_amend_confirmer(lambda last: False)
+        with mock.patch.object(self.session, "amend") as amend:
+            self.action.trigger()
+        amend.assert_not_called()
+        self.assertTrue(self.ctx.actions.amend.isChecked())
+
+    def test_a_failed_amend_stays_on_with_the_message(self):
+        add_hook(self.repo, "pre-commit", "echo 'lint failed' >&2\nexit 1\n")
+        self.open()
+        self.amend_on()
+        self.type("reworded")
+        self.action.trigger()
+        wait_idle(self.session)
+        self.assertTrue(self.ctx.actions.amend.isChecked())
+        self.assertEqual(self.fields(), ("reworded", ""))
+        self.assertEqual(self.subjects(), ["first"])
+        self.assertEqual(self.button(), (AMEND_ALONE, True))
+
+    def test_amend_is_disabled_before_the_first_commit(self):
+        empty = make_repo(Path(self._tmp.name) / "empty")
+        self.stage("a.txt", "a", repo=empty)
+        self.open(empty)
+        self.assertFalse(self.panel._amend_box.isEnabled())
 
 
 if __name__ == "__main__":

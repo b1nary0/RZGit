@@ -940,5 +940,72 @@ class RepoSessionBranchTests(unittest.TestCase):
         self.assertFalse(self.session.busy)
 
 
+
+class RepoSessionLastCommitTests(unittest.TestCase):
+    """Refresh.LAST_COMMIT and amend (spec §4.1)."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        commit_file(self.path, "a.txt", "1", "First\n\nBody")
+        self.session = RepoSession()
+        self.assertTrue(self.session.open(self.path))
+        wait_idle(self.session)
+
+    def tearDown(self):
+        self.session.shutdown()
+        self._tmp.cleanup()
+
+    def test_read_only_when_asked_for(self):
+        rec = SignalRecorder(self.session, "last_commit_changed")
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertIsNone(self.session.last_commit)
+        self.assertEqual(rec.events, [])
+        self.session.refresh(Refresh.LAST_COMMIT)
+        wait_idle(self.session)
+        last = self.session.last_commit
+        self.assertEqual((last.message, last.pushed), ("First\n\nBody", False))
+        self.assertEqual(rec.values("last_commit_changed"), [last])
+        self.session.refresh(Refresh.LAST_COMMIT)  # unchanged: not emitted again
+        wait_idle(self.session)
+        self.assertEqual(len(rec.events), 1)
+
+    def test_open_and_close_reset_it(self):
+        self.session.refresh(Refresh.LAST_COMMIT)
+        wait_idle(self.session)
+        rec = SignalRecorder(self.session, "last_commit_changed")
+        self.assertTrue(self.session.open(self.path))
+        wait_idle(self.session)
+        self.assertIsNone(self.session.last_commit)
+        self.assertEqual(rec.values("last_commit_changed"), [None])
+        self.session.close()
+        self.assertIsNone(self.session.last_commit)
+
+    def test_none_before_the_first_commit(self):
+        self.assertTrue(self.session.open(make_repo(Path(self._tmp.name) / "empty")))
+        self.session.refresh(Refresh.LAST_COMMIT)
+        wait_idle(self.session)
+        self.assertIsNone(self.session.last_commit)
+
+    def test_amend_reloads_history_and_status(self):
+        (self.path / "b.txt").write_text("b")
+        git(self.path, "add", "b.txt")
+        self.session.refresh()
+        wait_idle(self.session)
+        command = self.session.amend("First, amended")
+        finished = []
+        self.session.command_finished.connect(lambda c, ok: finished.append((c, ok)))
+        wait_idle(self.session)
+        self.assertEqual([c.subject for c in self.session.history], ["First, amended"])
+        self.assertEqual(self.session.status, ())
+        self.assertEqual(self.session.commit_count, 1)
+        self.assertEqual(finished, [(command, True)])
+
+
 if __name__ == "__main__":
     unittest.main()

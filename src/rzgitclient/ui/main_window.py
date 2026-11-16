@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QFileDialog, QLabel, QMainWindow, QMessageBox
 
 from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.selection import FileSource
-from rzgitclient.git.git_models import FileDiff
+from rzgitclient.git.git_models import FileDiff, LastCommit
 from rzgitclient.git.repo import Repo
 from rzgitclient.ui.branch_dialogs import BranchDialogs
 from rzgitclient.ui.layout.layout_host import LayoutHost
@@ -62,7 +62,8 @@ class MainWindow(QMainWindow):
         repo_menu.addSeparator()
         repo_menu.addActions([actions.stage_all, actions.unstage_all])
         repo_menu.addSeparator()
-        repo_menu.addAction(actions.commit)
+        repo_menu.addActions([actions.commit, actions.amend])
+        actions.set_amend_confirmer(self.confirm_amend)
 
         actions.reset_layout.triggered.connect(self.reset_layout)
         view_menu = self.menuBar().addMenu("&View")
@@ -130,6 +131,21 @@ class MainWindow(QMainWindow):
         box.setDefaultButton(QMessageBox.StandardButton.Cancel)
         box.exec()
         return box.clickedButton() is discard
+
+    def confirm_amend(self, last: LastCommit) -> bool:
+        """Amend ``last``? Asked only if it's pushed (spec §8)."""
+        if not last.pushed:
+            return True
+        box = QMessageBox(QMessageBox.Icon.Warning, "Amend",
+                          f"Amend {last.sha[:8]}, a pushed commit?", parent=self)
+        box.setInformativeText(
+            "It is already on a remote branch. Amending replaces it here only: the remote "
+            "keeps the old commit, so pushing this branch will need a force push.")
+        amend = box.addButton("Amend", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        return box.clickedButton() is amend
 
     def confirm_discard(self, paths: tuple[str, ...]) -> bool:
         shown = "\n".join(paths[:_LISTED])

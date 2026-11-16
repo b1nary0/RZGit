@@ -146,6 +146,7 @@ class RepoSession(QObject):
     commit_count_changed = Signal(object)  # int | None  (commits reachable from HEAD)
     diff_changed     = Signal(object, object)  # FileSelection | None, FileDiff | None
     commit_files_changed = Signal(object, object)  # sha | None, tuple[FileStatus, ...] | None
+    last_commit_changed = Signal(object)   # LastCommit | None  (asked for: Refresh.LAST_COMMIT)
     command_finished = Signal(object, bool)    # GitCommand, whether it ran without error
     error_occurred   = Signal(str)
     busy_changed     = Signal(bool)  # True while git work is queued or running
@@ -167,6 +168,7 @@ class RepoSession(QObject):
     def unstage_lines(self, diff, lines) -> GitCommand | None
     def discard_lines(self, diff, lines) -> GitCommand | None  # from the working tree; no undo
     def commit(self, message) -> GitCommand | None   # the staged changes; None with no repo
+    def amend(self, message) -> GitCommand | None    # replace HEAD's commit (RZG-27)
     def switch_branch(self, name, stash=False) -> GitCommand | None   # git switch
     def create_branch(self, name, start, switch=False) -> GitCommand | None
     def rename_branch(self, old, new) -> GitCommand | None
@@ -177,7 +179,7 @@ class RepoSession(QObject):
 
     # Latest values, so a panel created later renders at once (read-only properties):
     repo, head, branches, history, status, commit_count, history_complete, diff_file, diff,
-    commit_files_sha, commit_files
+    commit_files_sha, commit_files, last_commit
 ```
 
 - **Push, not pull.** Panels never ask for data and wait for a return value. They read the
@@ -234,6 +236,14 @@ class RepoSession(QObject):
   are due, the count waits for the next job, so the first page isn't delayed by it (0.1 s
   for 200k commits). `commit_count` is None until it arrives; parts still queued aren't
   reported as empty after a job.
+- **The last commit is asked for** (RZG-27): `Refresh.LAST_COMMIT` is a part like the
+  others, loaded after them, but not in `Refresh.ALL`, so only a `refresh(LAST_COMMIT)`
+  reads it and the watcher never does. Its value is a `LastCommit(sha, message,
+  pushed)` (`git_models.py`) or None before the first commit: the full message
+  (`git log -1 --format=%B`, trailing newlines dropped) and whether HEAD is on any
+  remote-tracking branch (`for-each-ref --count=1 --contains HEAD refs/remotes`). It
+  emits `last_commit_changed` only when it changed. `open()` and `close()` reset it to
+  None like the other parts.
 - **Diffs are asked for.** Unlike the parts above, a diff is for one file, the one the
   Diff panel shows. `request_diff(file)` makes `file` the session's **diff target** and
   queues it on the same worker, so a diff is never read between two parts of a refresh.
@@ -345,6 +355,9 @@ class RepoSession(QObject):
     - `Branch.merged`: whether the branch's tip is in HEAD (`git for-each-ref --merged
       HEAD`, a second read in `BRANCHES`; all False if HEAD has no commit). The Delete
       confirmation uses it (§8).
+  - **Amend** (`git commit -q --amend --cleanup=whitespace -F -`, the message on stdin)
+    replaces HEAD's commit with the staged changes, if any, and the message, and reloads
+    what Commit does. Git keeps the author and author date, and a merge's parents.
   - **No editor or prompt, ever:** git runs with `GIT_EDITOR=false` and
     `GIT_TERMINAL_PROMPT=0`, and with stdin closed unless a command passes input. A
     command that would open an editor fails instead of waiting for it.
@@ -808,6 +821,15 @@ RZG-26).
   repository root); tests give it none, and it keeps drafts in memory. The key is the
   root with symlinks resolved (`Path.resolve()`), so every path to one repository finds
   the same draft (on macOS, `/var/...` and `/private/var/...` are one folder).
+- **Amend** (RZG-27): an **Amend** checkbox beside the button shows the `amend` action
+  (§8), checked both ways. Turning it on puts the last commit's message in the fields
+  (`refresh(LAST_COMMIT)`; at once if `session.last_commit` is already HEAD's), and the
+  draft isn't touched while it's on. Turning it off, by hand or by the action, puts the
+  draft back. The button reads "Amend Last Commit", or "Amend with 3 Files" when
+  something is staged; the message is ready once the last commit's message has arrived
+  and the summary isn't blank. Committing calls `actions.confirm_amend(last)` (MainWindow
+  asks if it's pushed), then `session.amend(message)`. While Amend is on the panel isn't
+  collapsed, even with nothing staged, so the message can be changed alone.
 - **Summary hint:** "n/50", muted (`Role.HINT`), and in the warning colour past 72
   (`Role.HINT_WARNING`). Nothing is enforced.
 - **Built when first shown:** the panel starts collapsed (the repository opens after the
@@ -1180,7 +1202,7 @@ Per-widget sheets are slow to apply and scatter the rules.
   path?", can't be undone) and then calls `session.discard_lines`.
 - **Commit** (Ctrl+Enter, in the Repository menu) commits the staged changes with the
   Commit panel's message. It is enabled when a repository is open, something is staged
-  and the panel reports its message ready (`set_commit_ready`); the panel connects
+  (or Amend Last Commit is on) and the panel reports its message ready (`set_commit_ready`); the panel connects
   `triggered`, since it holds the message. A panel that is hidden (deleted) reports not
   ready.
 - **Branch operations** (RZG-35): the Branches panel calls `actions.request_branch(op,
@@ -1201,6 +1223,14 @@ Per-widget sheets are slow to apply and scatter the rules.
   - **Merge:** "Merge *X* into *current*?", saying a conflict aborts it and changes
     nothing. **Rebase:** "Rebase *current* onto *X*?", a warning that it rewrites the
     commits of *current* not in *X* (Cancel default), and that a conflict aborts it.
+- **Amend Last Commit** (in the Repository menu, after Commit; RZG-27) is checkable. It
+  is enabled when the repository has commits (`session.history`), and unchecks itself when
+  it is disabled or HEAD moves to another commit (the first commit of `history` isn't the
+  one it was checked on): another repository, a commit or checkout anywhere, or the amend
+  itself succeeding. A failed amend leaves HEAD, so it stays on. While it's checked, Commit
+  is enabled with nothing staged. `actions.confirm_amend(last)` asks MainWindow's
+  confirmer (`set_amend_confirmer`; True without one): for a pushed commit, "Amend a
+  pushed commit?", saying the remote keeps the old one, with Cancel the default.
 - **`MainWindow`** is a thin shell: menus built from `AppActions`, the status
   bar summary (from session signals: path · branch · commits · changed files), error dialogs (from `error_occurred`), and a
   `LayoutHost` as the central widget. The Open, Quit and Reset Layout handlers live here

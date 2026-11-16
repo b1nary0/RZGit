@@ -21,6 +21,7 @@ from rzgitclient.git.git_models import (
     FileDiff,
     FileStatus,
     Hunk,
+    LastCommit,
     LineKind,
 )
 
@@ -140,6 +141,17 @@ class Repo:
                 pass
         return [Branch(name=name, is_current=head == "*", merged=name in merged)
                 for head, _, name in rows]
+
+    def last_commit(self) -> LastCommit | None:
+        """HEAD's commit: its full message and whether it's on a remote-tracking
+        branch. None before the first commit."""
+        sha = self.head_sha()
+        if sha is None:
+            return None
+        message = self.git("log", "-1", "--format=%B", sha).rstrip("\n")
+        pushed = self.git("for-each-ref", "--count=1", "--contains", sha,
+                          "--format=%(refname)", "refs/remotes").strip()
+        return LastCommit(sha, message, bool(pushed))
 
     def commit_count(self) -> int:
         """How many commits HEAD reaches (0 before the first commit)."""
@@ -337,6 +349,12 @@ class Repo:
     def _rebasing(self) -> bool:
         out = self.git("rev-parse", "--git-path", "rebase-merge", "--git-path", "rebase-apply")
         return any((self.root / p).exists() for p in out.splitlines())
+
+    def amend(self, message: str) -> None:
+        """Replace HEAD's commit with the staged changes (if any) and ``message``,
+        cleaned up as by ``commit``. git keeps the author and author date."""
+        run_git(self.root, "commit", "-q", "--amend", "--cleanup=whitespace", "-F", "-",
+                input=message)
 
     def apply(self, patch: str, *, cached: bool = False, reverse: bool = False) -> None:
         """Apply ``patch`` (a ``core.diff_patch`` patch): to the index with

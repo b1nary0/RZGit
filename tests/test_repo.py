@@ -593,3 +593,60 @@ class RepoBranchTests(unittest.TestCase):
 
     def test_stash_push_with_nothing_to_stash_says_so(self):
         self.assertFalse(self.repo.stash_push("msg"))
+
+
+class RepoAmendTests(unittest.TestCase):
+    """The last commit and amending it (spec §4.1)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        self.repo = Repo(self.path)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def message(self):
+        return git(self.path, "log", "-1", "--format=%B").rstrip("\n")
+
+    def test_no_last_commit_before_the_first(self):
+        self.assertIsNone(self.repo.last_commit())
+
+    def test_last_commit_has_the_full_message_and_whether_it_is_pushed(self):
+        (self.path / "a.txt").write_text("a")
+        git(self.path, "add", "a.txt")
+        git(self.path, "commit", "-q", "-m", "Summary", "-m", "Body line\n\n# kept")
+        last = self.repo.last_commit()
+        self.assertEqual(last.sha, self.repo.head_sha())
+        self.assertEqual(last.message, "Summary\n\nBody line\n\n# kept")
+        self.assertFalse(last.pushed)
+        git(self.path, "update-ref", "refs/remotes/origin/main", "HEAD")
+        self.assertTrue(self.repo.last_commit().pushed)
+        commit_file(self.path, "b.txt", "b", "Not pushed yet")
+        self.assertFalse(self.repo.last_commit().pushed)
+
+    def test_amend_the_message_only(self):
+        commit_file(self.path, "a.txt", "a", "first")
+        commit_file(self.path, "b.txt", "b", "Tpyo")
+        git(self.path, "commit", "-q", "--amend", "--author=Someone <s@example.com>",
+            "--no-edit", "--date=2001-02-03T04:05:06")
+        self.repo.amend("Typo fixed\n\n# a heading, kept\n\n")
+        self.assertEqual(self.message(), "Typo fixed\n\n# a heading, kept")
+        self.assertEqual(git(self.path, "rev-list", "--count", "HEAD").strip(), "2")
+        self.assertEqual(git(self.path, "log", "-1", "--format=%an %ad", "--date=short"),
+                         "Someone 2001-02-03\n")  # the author and author date stay
+        self.assertEqual(git(self.path, "show", "--format=", "--name-only", "HEAD"), "b.txt\n")
+
+    def test_amend_with_staged_changes(self):
+        commit_file(self.path, "a.txt", "a", "first")
+        (self.path / "c.txt").write_text("c")
+        git(self.path, "add", "c.txt")
+        self.repo.amend("first, and c")
+        self.assertEqual(git(self.path, "rev-list", "--count", "HEAD").strip(), "1")
+        self.assertEqual(sorted(git(self.path, "ls-tree", "--name-only", "HEAD").split()),
+                         ["a.txt", "c.txt"])
+        self.assertEqual(self.repo.status(), [])
+
+    def test_amend_before_the_first_commit_is_git_s_error(self):
+        with self.assertRaises(GitError):
+            self.repo.amend("nothing to amend")

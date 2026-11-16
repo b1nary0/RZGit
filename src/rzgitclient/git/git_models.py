@@ -20,6 +20,15 @@ class Commit:
 
 
 @dataclass(frozen=True)
+class LastCommit:
+    """HEAD's commit, for amending it (spec §4.1)."""
+
+    sha: str
+    message: str  # in full, without trailing newlines
+    pushed: bool  # on a remote-tracking branch: amending it diverges from the remote
+
+
+@dataclass(frozen=True)
 class Branch:
     name: str
     is_current: bool

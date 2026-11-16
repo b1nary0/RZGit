@@ -259,6 +259,7 @@ class SwitchCommandTests(unittest.TestCase):
              "delete_branch", ("a",), {"force": True}),
             (CommandKind.MERGE, dict(branch="a"), "merge", ("a",), {}),
             (CommandKind.REBASE, dict(branch="a"), "rebase", ("a",), {}),
+            (CommandKind.AMEND, dict(message="m"), "amend", ("m",), {}),
         ):
             with self.subTest(kind), mock.patch.object(Repo, call) as method:
                 run_command(self.repo, GitCommand(kind, **kwargs))

@@ -21,7 +21,7 @@ from rzgitclient.core.diff_patch import Line
 from rzgitclient.core.diff_request import DiffRequest, load_diff
 from rzgitclient.core.git_commands import CommandKind, GitCommand, run_command
 from rzgitclient.core.selection import FileSelection
-from rzgitclient.git.git_models import Branch, Commit, FileDiff, FileStatus
+from rzgitclient.git.git_models import Branch, Commit, FileDiff, FileStatus, LastCommit
 from rzgitclient.git.repo import GitError, Repo
 
 HISTORY_PAGE = 500  # commits per page of history (spec §4.1)
@@ -38,16 +38,23 @@ class Refresh(Flag):
     STATUS = auto()
     COUNT = auto()  # commits reachable from HEAD; never in the same job as HISTORY
     ALL = HEAD | BRANCHES | HISTORY | STATUS | COUNT
+    LAST_COMMIT = auto()  # HEAD's message, for amending: only when asked for, not in ALL
+
+
+# Reset by open() and close(): emitted for the new repo even if equal.
+_RESET = Refresh.ALL | Refresh.LAST_COMMIT
 
 
 # The order parts load and emit in (spec §4.1), and their value with no repo.
-_PARTS = (Refresh.HEAD, Refresh.BRANCHES, Refresh.HISTORY, Refresh.STATUS, Refresh.COUNT)
+_PARTS = (Refresh.HEAD, Refresh.BRANCHES, Refresh.HISTORY, Refresh.STATUS, Refresh.COUNT,
+          Refresh.LAST_COMMIT)
 _EMPTY: dict[Refresh, object] = {
     Refresh.HEAD: None,
     Refresh.BRANCHES: (),
     Refresh.HISTORY: (),
     Refresh.STATUS: (),
     Refresh.COUNT: None,
+    Refresh.LAST_COMMIT: None,
 }
 
 
@@ -60,6 +67,7 @@ class RepoSession(QObject):
     commit_count_changed = Signal(object)  # int | None  (None: not counted yet)
     diff_changed = Signal(object, object)  # FileSelection | None, FileDiff | None
     commit_files_changed = Signal(object, object)  # sha | None, tuple[FileStatus, ...] | None
+    last_commit_changed = Signal(object)  # LastCommit | None  (asked for: Refresh.LAST_COMMIT)
     command_finished = Signal(object, bool)  # GitCommand, whether it ran without error
     error_occurred = Signal(str)
     busy_changed = Signal(bool)  # True while git work is queued or running
@@ -106,6 +114,7 @@ class RepoSession(QObject):
             Refresh.HISTORY: self.history_changed,
             Refresh.STATUS: self.status_changed,
             Refresh.COUNT: self.commit_count_changed,
+            Refresh.LAST_COMMIT: self.last_commit_changed,
         }
 
     # ---- latest values --------------------------------------------------
@@ -138,6 +147,11 @@ class RepoSession(QObject):
     def commit_count(self) -> int | None:
         """Commits reachable from HEAD, however much history is loaded; None until counted."""
         return self._values[Refresh.COUNT]  # type: ignore[return-value]
+
+    @property
+    def last_commit(self) -> LastCommit | None:
+        """HEAD's commit as last read by ``refresh(Refresh.LAST_COMMIT)``."""
+        return self._values[Refresh.LAST_COMMIT]  # type: ignore[return-value]
 
     @property
     def history_complete(self) -> bool:
@@ -189,7 +203,7 @@ class RepoSession(QObject):
         self._pending = Refresh(0)
         self._more_pending = False
         self._history_complete = True
-        self._forced = Refresh.ALL
+        self._forced = _RESET
         self._commands = []
         self._drop_diff()
         self._drop_commit_files()
@@ -204,7 +218,7 @@ class RepoSession(QObject):
         self._generation += 1
         self._pending = Refresh(0)
         self._more_pending = False
-        self._forced = Refresh.ALL
+        self._forced = _RESET
         self._commands = []
         self._drop_diff()
         self._drop_commit_files()
@@ -355,6 +369,10 @@ class RepoSession(QObject):
         """Rebase the current branch onto ``onto``; a conflict aborts it.
         Callers confirm first: it rewrites commits."""
         return self._command(GitCommand(CommandKind.REBASE, branch=onto), Refresh.ALL)
+
+    def amend(self, message: str) -> GitCommand | None:
+        """Replace HEAD's commit with the staged changes, if any, and ``message``."""
+        return self._command(GitCommand(CommandKind.AMEND, message=message), Refresh.ALL)
 
     def _command(self, command: GitCommand, parts: Refresh = Refresh.STATUS) -> GitCommand | None:
         """Queue ``command``; its job then loads ``parts``, what it changes."""
@@ -591,6 +609,8 @@ def _load(repo: Repo, part: Refresh) -> object:
         return tuple(repo.status())
     if part is Refresh.COUNT:
         return repo.commit_count()
+    if part is Refresh.LAST_COMMIT:
+        return repo.last_commit()
     raise ValueError(f"not a single part: {part!r}")
 
 
