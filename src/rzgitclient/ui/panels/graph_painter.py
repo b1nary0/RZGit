@@ -4,7 +4,8 @@ Over the cell's stripe, hover and selection, antialiased: a straight line down
 each lane, a short curve where a line changes lane (in a row's bottom half), and
 a dot at the commit. Uncommitted changes has a hollow dot, joined to HEAD's
 below it. At most ``GRAPH_MAX_LANES`` lanes are drawn; a wider row is cut off
-there and its last lane fades out.
+there and its last lane fades out. ``inset`` moves the lanes right, so a ref
+label centred on a dot near the left edge isn't cut off (RZG-86).
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ class GraphPainter:
         self._brushes: list[QBrush] = []  # one per colour, made once: rows are painted often
         self._pens: list[QPen] = []
         self._lane = self._line = self._dot = 0.0
+        self.inset = 0  # px left of the lanes, for the ref labels (set by the panel)
         self.set_theme(theme)
 
     def set_theme(self, theme: AppTheme) -> None:
@@ -37,12 +39,22 @@ class GraphPainter:
         self._pens = [self._make_pen(b) for b in self._brushes]
 
     def width(self, lanes: int) -> int:
-        """The column width that shows ``lanes`` lanes (no more than the cap)."""
+        """The column width that shows ``lanes`` lanes (no more than the cap), without
+        the inset."""
         return int(min(max(lanes, 1), GRAPH_MAX_LANES) * self._lane) + 2 * PADDING_X
+
+    def lane_x(self, lane: int) -> float:
+        """The middle of a commit's dot in ``lane``, from the cell's left edge, without
+        the inset; past the cap, the last lane drawn."""
+        return PADDING_X + (min(lane, GRAPH_MAX_LANES - 1) + 0.5) * self._lane
+
+    def node_x(self, lane: int) -> float:
+        """As ``lane_x``, with the inset: where a ref label is centred (RZG-86)."""
+        return self.inset + self.lane_x(lane)
 
     def _x(self, rect: QRect, lane: int) -> float:
         """The middle of ``lane``, on a pixel's centre so a straight line is crisp."""
-        return math.floor(rect.left() + PADDING_X + (lane + 0.5) * self._lane) + 0.5
+        return math.floor(rect.left() + self.inset + PADDING_X + (lane + 0.5) * self._lane) + 0.5
 
     def _brush(self, color: int, rect: QRect, fade: bool) -> QBrush:
         color %= len(self._colors)
@@ -50,7 +62,7 @@ class GraphPainter:
             return self._brushes[color]
         colour = self._colors[color]
         # The last lane drawn fades out: there are more to its right.
-        end = rect.left() + PADDING_X + GRAPH_MAX_LANES * self._lane
+        end = rect.left() + self.inset + PADDING_X + GRAPH_MAX_LANES * self._lane
         gradient = QLinearGradient(end - self._lane, 0, end, 0)
         clear = QColor(colour)
         clear.setAlpha(0)

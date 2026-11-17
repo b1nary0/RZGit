@@ -3,10 +3,12 @@
 selected while a stash is (the Stash panel's). Commits are striped, and
 Uncommitted changes stays pinned at the top while the table scrolls, and well
 down, a "Back to top" control floats below it (RZG-64). The first column is the
-commits' ref labels (RZG-77), as wide as the widest row of them loaded; the second
-the branch graph (RZG-58), as wide as the widest row in view."""
+branch graph (RZG-58), with each commit's ref label over its dot (RZG-77, RZG-86),
+as wide as the widest row in view."""
 
 from __future__ import annotations
+
+import math
 
 from PySide6.QtCore import QEvent, QModelIndex, QObject, QPersistentModelIndex, QRect, Qt
 from PySide6.QtGui import QBrush, QColor, QFontMetrics, QKeyEvent, QMouseEvent, QPainter, QPaintEvent, QPalette
@@ -27,7 +29,7 @@ from rzgitclient.git.git_models import Commit, Stash
 from rzgitclient.ui.panels.back_to_top_button import BackToTopButton
 from rzgitclient.ui.panels.graph_painter import GraphPainter
 from rzgitclient.ui.panels.history_model import (DATE_FORMAT, GRAPH_COLUMN, MUTED_COLUMNS,
-                                                 REFS_COLUMN, SUBJECT_COLUMN, HistoryModel)
+                                                 SUBJECT_COLUMN, HistoryModel)
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.panels.ref_label_painter import RefLabelPainter
 from rzgitclient.ui.theme.app_theme import AppTheme
@@ -53,9 +55,8 @@ class HistoryPanel(Panel):
         self._model.set_date_format(self.ctx.prefs.value(DATE_FORMAT))
         self.ctx.prefs.changed.connect(self._on_pref_changed)
         self._graph = GraphPainter(self.ctx.theme.current)
-        self._graph_lanes = 0  # the lanes the graph column was last fitted to
         self._refs = RefLabelPainter(self.ctx.theme.current)
-        self._refs_width = -1  # the width the Refs column was last fitted to
+        self._graph_width = -1  # the width the graph column was last fitted to
         self._view = _HistoryView(self._graph, self._refs)
         self._labels = ColumnHeader(self.panel_id, self.ctx.columns, self.ctx.theme.current,
                                     main_column=SUBJECT_COLUMN)
@@ -128,7 +129,6 @@ class HistoryPanel(Panel):
         if was_empty or not appended:
             self._view.fit_row_height()
             self._fit_columns()
-        self._fit_refs()
         self._fit_graph()
         self._sync_selection()
 
@@ -178,40 +178,41 @@ class HistoryPanel(Panel):
         session = self.ctx.session
         self._model.set_labels(labels_by_commit(session.refs, session.head, session.head_sha,
                                                 session.stashes))
-        self._fit_refs()
-
-    def _fit_refs(self) -> None:
-        """Size the Refs column to the widest row of labels loaded (``set_fitted``:
-        unless the user sized it), up to ``ref_column_max_width``; with none, its label."""
-        labels, refs = self._model.labels, self._refs
-        self._view.ensurePolished()  # the stylesheet's list font
-        refs.set_font(self._view.font())
-        widest = 0
-        if labels:
-            widest = max((refs.natural_width(labels[c.sha]) for c in self._model.commits
-                          if c.sha in labels), default=0)
-        width = max(min(widest, self.ctx.theme.current.metrics.ref_column_max_width),
-                    self._labels.sectionSizeHint(REFS_COLUMN))
-        if width != self._refs_width:
-            self._refs_width = width
-            self._labels.set_fitted(REFS_COLUMN, width)
+        self._fit_graph()
 
     def _fit_graph(self, *_args: object) -> None:
         """Size the graph column to the widest row in view (``set_fitted``: unless
-        the user sized it), up to the cap. Only rows in view are worked out."""
-        view, model = self._view, self._model
+        the user sized it): its lanes, up to the cap, or its ref label where that
+        reaches further (RZG-86). A label is centred on its dot: where its left half
+        wouldn't fit, the lanes move right (the graph's inset). Only rows in view are
+        worked out."""
+        view, model, graph, refs = self._view, self._model, self._graph, self._refs
         rows = model.rowCount()
-        lanes = 1
+        lanes, inset, shown = 1, 0.0, []
         if rows:
+            view.ensurePolished()  # the stylesheet's list font
+            refs.set_font(view.font())
             first = max(view.rowAt(0), 0)
             last = view.rowAt(view.viewport().height() - 1)
             for row in range(first, (last if last >= 0 else rows - 1) + 1):
-                graph = model.graph_row(row)
-                if graph is not None:
-                    lanes = max(lanes, graph.width)
-        if lanes != self._graph_lanes:
-            self._graph_lanes = lanes
-            self._labels.set_fitted(GRAPH_COLUMN, self._graph.width(lanes))
+                graph_row = model.graph_row(row)
+                if graph_row is None:
+                    continue
+                lanes = max(lanes, graph_row.width)
+                labels = model.ref_labels(row)
+                if labels:
+                    x = graph.lane_x(graph_row.lane)
+                    inset = max(inset, refs.left_reach(labels) - x)
+                    shown.append((labels, x))
+        inset = math.ceil(inset)
+        width = max([inset + graph.width(lanes)] +
+                    [refs.needed_width(labels, inset + x) for labels, x in shown])
+        if inset != graph.inset:
+            graph.inset = inset
+            view.viewport().update()  # every row's lanes move
+        if width != self._graph_width:
+            self._graph_width = width
+            self._labels.set_fitted(GRAPH_COLUMN, width)
 
     def _restore(self, keep: Commit | None, top: Commit | None) -> None:
         row = self._model.row_of(keep.sha) if keep is not None else -1
@@ -234,11 +235,9 @@ class HistoryPanel(Panel):
         self._labels.set_theme(theme)
         self._model.set_theme(theme)
         self._graph.set_theme(theme)
-        self._graph_lanes = 0  # the lane width may have changed: fit again
-        self._fit_graph()
         self._refs.set_theme(theme)
-        self._refs_width = -1
-        self._fit_refs()
+        self._graph_width = -1  # the lane and label widths may have changed: fit again
+        self._fit_graph()
         self._view.set_pinned_line(QColor(theme.colors.border_light))
         self._view.back_to_top.set_colors(theme.colors)
         self._view.fit_row_height()
@@ -305,7 +304,7 @@ class _HistoryView(QTableView):
         super().__init__()
         self.hover_row = -1
         self.graph = graph  # draws the graph column; the panel keeps it themed
-        self.refs = refs  # draws the Refs column (RZG-77); themed by the panel too
+        self.refs = refs  # draws the ref labels over the graph (RZG-86); themed by the panel too
         self.pinned = _PinnedRow(self)
         self.back_to_top = BackToTopButton(self.viewport())
         self.back_to_top.clicked.connect(self.scrollToTop)  # a jump; the selection stays
@@ -514,8 +513,8 @@ _CELL_STATES = QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_HasFocus
 class _RowHoverDelegate(QStyledItemDelegate):
     """Marks every cell of the hovered row as hovered, as a tree view does, and
     paints a row's stripe (its BackgroundRole) under it: the stylesheet's item
-    rule keeps Qt from painting that brush itself. Draws the Refs and graph
-    columns over the cell (``RefLabelPainter``, ``GraphPainter``)."""
+    rule keeps Qt from painting that brush itself. Draws the graph column over the
+    cell (``GraphPainter``), and a commit's ref label over its dot (``RefLabelPainter``)."""
 
     def __init__(self, view: _HistoryView):
         super().__init__(view)
@@ -537,24 +536,22 @@ class _RowHoverDelegate(QStyledItemDelegate):
             painter.fillRect(option.rect, stripe)  # hover and selection are drawn over it
         model = index.model()
         column = index.column()
-        if column not in (GRAPH_COLUMN, REFS_COLUMN) or not isinstance(model, HistoryModel):
+        if column != GRAPH_COLUMN or not isinstance(model, HistoryModel):
             super().paint(painter, option, index)
             return
-        # A graph or Refs cell has no text: the style draws only its hover, selection
+        # A graph cell has no text: the style draws only its hover, selection
         # or focus. Asking it for a plain cell costs more than the graph.
         if (option.state & _CELL_STATES) or index.row() == self._view.hover_row:
             super().paint(painter, option, index)
         row = index.row()
-        if column == REFS_COLUMN:
-            labels = model.ref_labels(row)
-            if labels:
-                graph_row = model.graph_row(row)
-                self._view.refs.set_font(option.font)
-                self._view.refs.paint(painter, option.rect, labels,
-                                      graph_row.color if graph_row is not None else 0)
-            return
         graph = self._view.graph
         if model.has_uncommitted and row == 0:
             graph.paint_uncommitted(painter, option.rect, model.graph_row(1))
         elif (commit := model.graph_row(row)) is not None:
             graph.paint(painter, option.rect, commit, joined_above=model.has_uncommitted and row == 1)
+            labels = model.ref_labels(row)
+            if labels:  # over the dot (RZG-86)
+                refs = self._view.refs
+                refs.set_font(option.font)
+                refs.paint(painter, option.rect, labels, commit.color,
+                           graph.node_x(commit.lane), model.striped(row))

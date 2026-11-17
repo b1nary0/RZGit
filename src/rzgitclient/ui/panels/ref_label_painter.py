@@ -1,11 +1,15 @@
-"""Draws a row of History's ref labels (spec §5.4, RZG-77) from its ``RefLabel``s.
+"""Draws a commit's ref label over History's branch graph (spec §5.4, RZG-77,
+RZG-86) from its ``RefLabel``s.
 
-Pills left to right, vertically centred, over the cell's stripe, hover and
-selection: a local branch (and a detached HEAD) as a tint of its commit's lane
-colour with a border in it, a remote-only branch as the border alone, a tag and a
-stash in their neutral tokens (a stash's border dashed). The current branch is
-bold. A pill is at most ``ref_label_max_width``, its name shortened in the middle;
-pills that don't fit the cell leave a ``+N`` pill.
+One pill, the commit's first label, centred on its dot (``centre``), and a
+``+N`` pill after it for the others. Each pill is filled with the row's
+background first, so it hides the graph under it. A local branch (and a
+detached HEAD) is a tint of its commit's lane colour with a border in it, a
+remote-only branch the border alone, a tag and a stash their neutral tokens (a
+stash's border dashed). The current branch is bold. A pill is at most
+``ref_label_max_width``, its name shortened in the middle. The panel moves the
+graph's lanes right so a label's left half fits (``left_reach``); in a cell made
+too narrow, the label moves left and is shortened.
 """
 
 from __future__ import annotations
@@ -46,6 +50,7 @@ class RefLabelPainter:
         self._max, self._pad, self._gap = m.ref_label_max_width, m.ref_label_padding, m.ref_label_gap
         self._radius = m.ref_label_radius
         self._text = QColor(c.text)
+        self._row_bg = (QBrush(QColor(c.content_bg)), QBrush(QColor(c.row_alt_bg)))
         self._muted = QColor(c.text_muted)
         # Made once per theme: rows are painted often.
         self._lane_pens = [QPen(QColor(lane), 1) for lane in g.lanes]
@@ -88,33 +93,39 @@ class RefLabelPainter:
     def _more_width(self, hidden: int) -> int:
         return self._text_width(f"+{hidden}", False) + 2 * self._pad
 
-    def natural_width(self, labels: Sequence[RefLabel]) -> int:
-        """The cell width that shows every label of a row (0 for none)."""
+    def _first(self, labels: Sequence[RefLabel]) -> tuple[int, int, int]:
+        """The shown label's whole width, the hidden count and the room the ``+N``
+        pill takes after it (0 for none)."""
+        hidden = len(labels) - 1
+        after = self._gap + self._more_width(hidden) if hidden else 0
+        return self.pill_width(labels[0]), hidden, after
+
+    def left_reach(self, labels: Sequence[RefLabel]) -> float:
+        """How far left of its centre a row's label reaches, with its gap (0 for none)."""
+        return self.pill_width(labels[0]) / 2 + self._gap if labels else 0
+
+    def needed_width(self, labels: Sequence[RefLabel], centre: float) -> int:
+        """The cell width that shows a row's label, centred on ``centre`` (from the
+        cell's left edge, at least ``left_reach``), and its ``+N`` whole (0 for none)."""
         if not labels:
             return 0
-        return self._gap + sum(self.pill_width(label) + self._gap for label in labels)
+        width, _hidden, after = self._first(labels)
+        return max(self._gap, int(centre - width / 2)) + width + after + self._gap
 
-    def layout(self, labels: Sequence[RefLabel], width: int) -> list[Pill]:
-        """The pills of ``labels`` in a cell ``width`` wide."""
-        pills: list[Pill] = []
+    def layout(self, labels: Sequence[RefLabel], width: int, centre: float) -> list[Pill]:
+        """The pills of ``labels`` in a cell ``width`` wide: the first label centred
+        on ``centre``, then ``+N``; both kept ``ref_label_gap`` inside the cell."""
+        if not labels:
+            return []
+        w, hidden, after = self._first(labels)
         end = width - self._gap  # the last pill's right edge, at most
-        x = self._gap
-        for i, label in enumerate(labels):
-            rest = len(labels) - i - 1
-            w = self.pill_width(label)
-            after = self._gap + self._more_width(rest) if rest else 0
-            if x + w + after <= end:
-                pills.append(self._pill(x, w, label))
-                x += w + self._gap
-                continue
-            hidden = len(labels) - i
-            if i == 0:  # not even the first fits: shorten it beside "+N"
-                pills.append(self._pill(x, max(end - x - after, 2 * self._pad), label))
-                x += pills[-1].width + self._gap
-                hidden = rest
-            if hidden:
-                pills.append(Pill(x, self._more_width(hidden), f"+{hidden}", None))
-            break
+        x = max(self._gap, int(centre - w / 2))
+        if x + w + after > end:  # a narrowed cell: move left, then shorten
+            x = max(self._gap, end - w - after)
+            w = max(min(w, end - x - after), 2 * self._pad)
+        pills = [self._pill(x, w, labels[0])]
+        if hidden:
+            pills.append(Pill(x + w + self._gap, self._more_width(hidden), f"+{hidden}", None))
         return pills
 
     def _pill(self, x: int, width: int, label: RefLabel) -> Pill:
@@ -128,9 +139,10 @@ class RefLabelPainter:
     # ---- painting ----------------------------------------------------------
 
     def paint(self, painter: QPainter, rect: QRect, labels: Sequence[RefLabel],
-              lane_color: int) -> None:
-        """Draw ``labels`` in ``rect``; branches in lane colour ``lane_color`` (an
-        index into the theme's lanes)."""
+              lane_color: int, centre: float, striped: bool = False) -> None:
+        """Draw ``labels`` in ``rect``, centred on ``centre`` (from its left edge);
+        branches in lane colour ``lane_color`` (an index into the theme's lanes).
+        ``striped``: the row has the stripe, so the pills are filled with it."""
         if not labels:
             return
         metrics = QFontMetrics(self._font)
@@ -140,9 +152,13 @@ class RefLabelPainter:
         painter.save()
         painter.setClipRect(rect, Qt.ClipOperation.IntersectClip)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        for pill in self.layout(labels, rect.width()):
+        row_bg = self._row_bg[1 if striped else 0]
+        for pill in self.layout(labels, rect.width(), centre):
             brush, pen, colour = self._style(pill.label, lane)
             box = QRectF(rect.left() + pill.x + 0.5, top + 0.5, pill.width - 1, height - 1)
+            painter.setPen(Qt.PenStyle.NoPen)  # opaque: the graph doesn't show through
+            painter.setBrush(row_bg)
+            painter.drawRoundedRect(box, self._radius, self._radius)
             painter.setPen(pen)
             painter.setBrush(brush if brush is not None else Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(box, self._radius, self._radius)

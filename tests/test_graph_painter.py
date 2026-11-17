@@ -45,6 +45,19 @@ class GraphPainterTests(unittest.TestCase):
         self.assertEqual(self.graph.width(3), 3 * LANE + 2 * PADDING_X)
         self.assertEqual(self.graph.width(30), self.graph.width(GRAPH_MAX_LANES))
 
+    def test_the_inset_moves_the_lanes_right(self):
+        """RZG-86: room left of the lanes, for a ref label centred on a dot."""
+        row = GraphRow(0, 2, ((0, 0, 2),), ((0, 0, 2),))
+        self.graph.inset = 20
+        image = self.draw(row)
+        self.assertEqual(self.colour(image, x_of(0) + 20, HEIGHT // 2).name(), LANES[2])
+        self.assertEqual(self.colour(image, x_of(0) + 20, 1).name(), LANES[2])  # its line too
+        self.assertEqual(self.colour(image, x_of(0), HEIGHT // 2).alpha(), 0)
+        self.assertEqual(self.graph.node_x(1), 20 + self.graph.lane_x(1))
+        self.assertEqual(self.graph.lane_x(1), PADDING_X + 1.5 * LANE)
+        self.assertEqual(self.graph.lane_x(30), self.graph.lane_x(GRAPH_MAX_LANES - 1))
+        self.assertEqual(self.graph.width(1), LANE + 2 * PADDING_X)  # without the inset
+
     def test_a_dot_in_its_lane_and_colour_with_lines_above_and_below(self):
         row = GraphRow(1, 2, ((0, 0, 0), (1, 1, 2)), ((0, 0, 0), (1, 1, 2)))
         image = self.draw(row)

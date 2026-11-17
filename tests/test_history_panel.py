@@ -1,4 +1,5 @@
 import dataclasses
+import math
 import subprocess
 import tempfile
 import unittest
@@ -6,15 +7,13 @@ from pathlib import Path
 from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QPointF, Qt
-from PySide6.QtGui import QEnterEvent, QHoverEvent
+from PySide6.QtGui import QColor, QEnterEvent, QFontMetrics, QHoverEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
 
 from rzgitclient.core.commit_graph import CommitGraph
-from rzgitclient.ui.panels.graph_painter import PADDING_X
 from rzgitclient.ui.panels.history_model import (AUTHOR_COLUMN, DATE_COLUMN, GRAPH_COLUMN,
-                                                 HASH_COLUMN, MUTED_COLUMNS, REFS_COLUMN,
-                                                 SUBJECT_COLUMN)
+                                                 HASH_COLUMN, MUTED_COLUMNS, SUBJECT_COLUMN)
 from rzgitclient.ui.panels.history_panel import HistoryPanel
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
 from rzgitclient.ui.widgets.column_header import ColumnHeader
@@ -86,9 +85,9 @@ class HistoryPanelTests(unittest.TestCase):
         """RZG-41: History's labels get the shared look."""
         header = self.panel._view.horizontalHeader()
         self.assertIsInstance(header, ColumnHeader)
-        self.assertEqual([header.label(c) for c in range(6)],
-                         ["Refs", "Graph", "Subject", "Author", "Date", "Commit"])
-        self.assertEqual(header.main_column, SUBJECT_COLUMN)  # the labels and graph come before it
+        self.assertEqual([header.label(c) for c in range(header.count())],
+                         ["Graph", "Subject", "Author", "Date", "Commit"])  # no Refs (RZG-86)
+        self.assertEqual(header.main_column, SUBJECT_COLUMN)  # the graph comes before it
 
     def test_a_hidden_column_stays_hidden_through_a_reload(self):
         self.open()
@@ -547,7 +546,7 @@ class HistoryGraphTests(unittest.TestCase):
         """The pixel at the middle of ``row``'s dot."""
         rect = self.view.visualRect(self.model.index(row, GRAPH_COLUMN))
         lane = self.model.graph_row(row).lane if self.model.graph_row(row) else 0
-        x = int(rect.left() + PADDING_X + (lane + 0.5) * self.theme.metrics.graph_lane_width)
+        x = int(rect.left() + self.panel._graph.node_x(lane))
         return self.view.viewport().grab().toImage().pixelColor(x, rect.center().y())
 
     def test_the_graph_is_the_first_column_and_its_rows_follow_the_commits(self):
@@ -559,8 +558,16 @@ class HistoryGraphTests(unittest.TestCase):
         self.assertEqual([self.model.graph_row(r).lane for r in range(1, 6)], [0, 1, 0, 1, 0])
 
     def test_the_column_fits_the_widest_row_in_view(self):
+        graph, refs = self.panel._graph, self.panel._refs
+        rows = [(self.model.ref_labels(r), graph.lane_x(self.model.graph_row(r).lane))
+                for r in (1, 2)]  # main and side: the only labels
+        inset = math.ceil(max(refs.left_reach(labels) - x for labels, x in rows))
+        self.assertGreater(inset, 0)  # main's left half needs room left of lane 0
+        self.assertEqual(graph.inset, inset)
+        labels = max(refs.needed_width(labels, inset + x) for labels, x in rows)
+        self.assertGreater(labels, inset + graph.width(2))  # they reach past the lanes
         self.assertEqual(self.header.sectionSize(GRAPH_COLUMN),
-                         max(self.panel._graph.width(2), self.header.minimumSectionSize()))
+                         max(labels, self.header.minimumSectionSize()))
 
     def test_a_user_sized_graph_column_keeps_its_width(self):
         self.ctx.columns.set_width("history", "Graph", 90)
@@ -569,7 +576,7 @@ class HistoryGraphTests(unittest.TestCase):
         self.assertEqual(self.header.sectionSize(GRAPH_COLUMN), 90)
 
     def test_each_commit_has_a_dot_in_its_lanes_colour(self):
-        for row in (1, 2, 3):
+        for row in (3, 4, 5):  # no label over them: rows 1 and 2 have main and side
             graph = self.model.graph_row(row)
             lanes = self.theme.graph.lanes
             self.assertEqual(self.dot(row).name(), lanes[graph.color % len(lanes)], row)
@@ -794,7 +801,7 @@ class HistoryBackToTopTests(unittest.TestCase):
 
 
 class HistoryRefLabelTests(unittest.TestCase):
-    """The Refs column (RZG-77, spec §5.4)."""
+    """Ref labels over the graph (RZG-77, RZG-86, spec §5.4)."""
 
     @classmethod
     def setUpClass(cls):
@@ -827,26 +834,34 @@ class HistoryRefLabelTests(unittest.TestCase):
     def texts(self, row):
         return [label.text for label in self.model.ref_labels(row)]
 
-    def test_the_first_column_with_each_commits_labels(self):
-        self.assertEqual(REFS_COLUMN, 0)
-        self.assertEqual(self.header.label(REFS_COLUMN), "Refs")
-        self.assertEqual(self.model.text(1, REFS_COLUMN), "")  # drawn, not written
+    def image(self):
+        return self.view.viewport().grab().toImage()
+
+    def node_x(self, row):
+        rect = self.view.visualRect(self.model.index(row, GRAPH_COLUMN))
+        return rect, self.panel._graph.node_x(self.model.graph_row(row).lane)
+
+    def test_each_commits_labels_and_no_refs_column(self):
+        self.assertNotIn("Refs", [self.header.label(c) for c in range(self.header.count())])
+        self.assertEqual(self.model.text(1, GRAPH_COLUMN), "")  # drawn, not written
         self.assertEqual(self.texts(0), [])  # Uncommitted changes
         self.assertEqual(self.texts(1), ["main"])  # the merge
         self.assertTrue(self.model.ref_labels(1)[0].current)
         self.assertEqual(self.texts(2), ["side"])  # s2
         self.assertEqual([self.texts(r) for r in (3, 4, 5)], [[], [], []])
 
-    def test_the_tooltip_lists_the_refs(self):
-        self.assertEqual(self.model.data(self.model.index(1, REFS_COLUMN), ROLE.ToolTipRole),
+    def test_the_graph_cells_tooltip_lists_the_refs(self):
+        self.assertEqual(self.model.data(self.model.index(1, GRAPH_COLUMN), ROLE.ToolTipRole),
                          "Branch main (checked out)")
-        self.assertIsNone(self.model.data(self.model.index(3, REFS_COLUMN), ROLE.ToolTipRole))
+        self.assertIsNone(self.model.data(self.model.index(3, GRAPH_COLUMN), ROLE.ToolTipRole))
+        self.assertIsNone(self.model.data(self.model.index(1, SUBJECT_COLUMN), ROLE.ToolTipRole))
 
     def test_a_new_tag_shows_though_head_has_not_moved(self):
         subprocess.run(["git", "tag", "v1.0", "HEAD~1"], cwd=self.repo, check=True)
         changed = SignalRecorder(self.model, "dataChanged", "modelReset")
         self.refresh()
         self.assertEqual(changed.names(), ["dataChanged"])  # only the labels: no reset
+        self.assertEqual([i.column() for i in changed.values("dataChanged")], [GRAPH_COLUMN])
         row = self.model.row_of(self.ctx.session.history[0].parents[0])
         self.assertIn("v1.0", self.texts(row))
 
@@ -855,7 +870,7 @@ class HistoryRefLabelTests(unittest.TestCase):
         subprocess.run(["git", "stash", "-q", "-m", "half done"], cwd=self.repo, check=True)
         self.refresh()
         self.assertEqual(self.texts(1), ["main", "stash@{0}"])
-        tip = self.model.data(self.model.index(1, REFS_COLUMN), ROLE.ToolTipRole)
+        tip = self.model.data(self.model.index(1, GRAPH_COLUMN), ROLE.ToolTipRole)
         self.assertIn("Stash stash@{0}: half done", tip)
 
     def test_a_detached_head_has_a_head_label(self):
@@ -864,39 +879,94 @@ class HistoryRefLabelTests(unittest.TestCase):
         self.assertEqual(self.texts(1)[:2], ["HEAD", "side"])
         self.assertFalse(self.model.ref_labels(1)[1].current)
 
-    def test_the_column_fits_the_widest_row_up_to_the_cap(self):
-        refs = self.panel._refs
-        widest = max(refs.natural_width(self.model.ref_labels(r)) for r in (1, 2))
-        self.assertEqual(self.header.sectionSize(REFS_COLUMN),
-                         max(widest, self.header.sectionSizeHint(REFS_COLUMN)))
-        for name in ("a-very-long-branch-name-one", "a-very-long-branch-name-two", "third"):
-            subprocess.run(["git", "branch", name], cwd=self.repo, check=True)
+    def test_main_wins_the_one_spot(self):
+        subprocess.run(["git", "branch", "aaa"], cwd=self.repo, check=True)
+        subprocess.run(["git", "switch", "-q", "side"], cwd=self.repo, check=True)
+        subprocess.run(["git", "branch", "-f", "main", "side"], cwd=self.repo, check=True)
         self.refresh()
-        self.assertEqual(self.header.sectionSize(REFS_COLUMN),
-                         self.theme.metrics.ref_column_max_width)
+        row = self.model.row_of(self.ctx.session.head_sha)
+        self.assertEqual(self.texts(row)[0], "main")  # before the current branch, side
 
-    def test_a_user_sized_refs_column_keeps_its_width(self):
-        self.ctx.columns.set_width("history", "Refs", 70)
+    def test_the_column_widens_for_a_label_and_a_user_sized_one_keeps_its_width(self):
+        before = self.header.sectionSize(GRAPH_COLUMN)
+        subprocess.run(["git", "branch", "a-rather-longer-branch-name"], cwd=self.repo, check=True)
+        self.refresh()
+        self.assertEqual(self.texts(1), ["main", "a-rather-longer-branch-name"])
+        self.assertGreater(self.header.sectionSize(GRAPH_COLUMN), before)  # for the "+1"
+        self.ctx.columns.set_width("history", "Graph", 40)
         self.header.apply_prefs()
         subprocess.run(["git", "branch", "another"], cwd=self.repo, check=True)
         self.refresh()
-        self.assertEqual(self.header.sectionSize(REFS_COLUMN), 70)
+        self.assertEqual(self.header.sectionSize(GRAPH_COLUMN), 40)
 
-    def test_hiding_the_column_turns_the_labels_off(self):
-        self.header.set_column_shown("Refs", False)
-        self.assertTrue(self.header.isSectionHidden(REFS_COLUMN))
+    def test_hiding_the_graph_column_turns_the_labels_off(self):
+        self.header.set_column_shown("Graph", False)
+        self.assertTrue(self.header.isSectionHidden(GRAPH_COLUMN))
         self.refresh()
-        self.assertTrue(self.header.isSectionHidden(REFS_COLUMN))
+        self.assertTrue(self.header.isSectionHidden(GRAPH_COLUMN))
 
-    def test_a_branch_label_is_drawn_in_its_lanes_colour(self):
-        rect = self.view.visualRect(self.model.index(2, REFS_COLUMN))  # side, in lane 1
+    def test_every_label_is_centred_on_its_dot_and_the_lanes_make_room(self):
+        refs, graph = self.panel._refs, self.panel._graph
+        self.assertGreater(graph.inset, 0)
+        for row in (1, 2):  # main in lane 0, side in lane 1
+            rect, centre = self.node_x(row)
+            pills = refs.layout(self.model.ref_labels(row), rect.width(), centre)
+            self.assertLessEqual(abs(pills[0].x + pills[0].width / 2 - centre), 1, row)
+            self.assertGreaterEqual(pills[0].x, self.theme.metrics.ref_label_gap)  # not cut off
+        rect = self.view.visualRect(self.model.index(3, GRAPH_COLUMN))
+        dot = self.image().pixelColor(int(rect.left() + graph.node_x(0)), rect.center().y())
+        self.assertEqual(dot.name(), self.dot_colour(3))  # unlabelled rows move with them
+
+    def test_the_room_follows_the_labels_in_view(self):
+        graph = self.panel._graph
+        before = graph.inset  # for main, in lane 0
+        subprocess.run(["git", "branch", "-m", "main", "a-much-longer-branch-name"],
+                       cwd=self.repo, check=True)
+        self.refresh()
+        self.assertEqual(self.texts(1), ["a-much-longer-branch-name"])
+        self.assertGreater(graph.inset, before)
+        subprocess.run(["git", "branch", "-m", "a-much-longer-branch-name", "main"],
+                       cwd=self.repo, check=True)
+        self.refresh()
+        self.assertEqual(graph.inset, before)
+
+    def test_a_label_is_drawn_over_its_dot_in_its_lanes_colour(self):
+        rect, centre = self.node_x(2)  # side, in lane 1
         lanes = self.theme.graph.lanes
         colour = lanes[self.model.graph_row(2).color % len(lanes)]
-        image = self.view.viewport().grab().toImage()
-        x = rect.left() + self.theme.metrics.ref_label_gap  # the pill's left border
+        pills = self.panel._refs.layout(self.model.ref_labels(2), rect.width(), centre)
+        self.assertEqual(len(pills), 1)
+        self.assertLessEqual(abs(pills[0].x + pills[0].width / 2 - centre), 1)  # centred
+        image = self.image()
+        x = rect.left() + pills[0].x  # the pill's left border
         found = {image.pixelColor(x, y).name() for y in range(rect.top(), rect.bottom())}
         self.assertIn(colour, found)
-        found = {image.pixelColor(x, y).name()
-                 for y in range(self.view.visualRect(self.model.index(3, REFS_COLUMN)).top(),
-                                self.view.visualRect(self.model.index(3, REFS_COLUMN)).bottom())}
-        self.assertEqual(found, {self.theme.colors.content_bg})  # no labels, nothing drawn
+
+    def test_a_label_hides_the_graph_under_it(self):
+        subprocess.run(["git", "branch", "covering", "HEAD~1"], cwd=self.repo, check=True)
+        self.refresh()
+        self.assertEqual(self.texts(3), ["covering"])  # m1, in lane 0; side's line passes by
+        rect, centre = self.node_x(3)
+        refs = self.panel._refs
+        pill = refs.layout(self.model.ref_labels(3), rect.width(), centre)[0]
+        lane1 = int(rect.left() + self.panel._graph.node_x(1))
+        self.assertLess(rect.left() + pill.x + 2, lane1)
+        self.assertGreater(rect.left() + pill.x + pill.width - 2, lane1)  # the pill covers it
+        line = QColor(self.theme.graph.lanes[self.model.graph_row(4).color
+                                             % len(self.theme.graph.lanes)])
+        image = self.image()
+        self.assertEqual(image.pixelColor(lane1, rect.top()).name(), line.name())  # above it
+        height = min(rect.height() - 2, QFontMetrics(self.view.font()).height() + 2)
+        inside = image.pixelColor(lane1, rect.top() + (rect.height() - height) // 2 + 2)
+        distance = sum(abs(a - b) for a, b in zip(inside.getRgb()[:3], line.getRgb()[:3]))
+        self.assertGreater(distance, 100, inside.name())  # the line doesn't show through
+
+    def dot_colour(self, row):
+        lanes = self.theme.graph.lanes
+        return lanes[self.model.graph_row(row).color % len(lanes)]
+
+    def test_rows_without_labels_look_as_before(self):
+        rect = self.view.visualRect(self.model.index(3, GRAPH_COLUMN))
+        image = self.image()
+        x = int(rect.left() + self.panel._graph.node_x(self.model.graph_row(3).lane))
+        self.assertEqual(image.pixelColor(x, rect.center().y()).name(), self.dot_colour(3))

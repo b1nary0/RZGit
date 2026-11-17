@@ -169,7 +169,6 @@ class ThemeMetrics:
     graph_line_width: float = 1.6
     graph_dot_radius: float = 3.5
     ref_label_max_width: int = 160  # History's ref labels (RZG-77)
-    ref_column_max_width: int = 240
     ref_label_padding: int = 5  # left and right of a label's text
     ref_label_gap: int = 3  # between labels, and before the first
     ref_label_radius: float = 3
