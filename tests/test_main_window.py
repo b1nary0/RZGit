@@ -263,22 +263,42 @@ class MainWindowTests(unittest.TestCase):
         self.assertTrue(panels["commit_files"].collapsed)  # Uncommitted changes
         sidebar = panels["branches"].parentWidget().parentWidget()
         branches_height = sidebar.sizes()[0]
+        working = sidebar.sizes()
+        main = panels["commit_details"].parentWidget().parentWidget()
+        self.assertEqual(main.sizes()[1], 0)  # collapsed: the tabs have its space
+        main_height = sum(main.sizes())
+        details_height = main.sizes()
         history = panels["history"]
         history._view.setCurrentIndex(history._model.index(2, 0))  # "first"
         wait_idle(window.session)
         self.app.processEvents()
         first = window.ctx.selection.commit
         self.assertEqual(first.subject, "first")
-        # Commit Details and Commit Files take the place of the working tree's panels,
-        # sharing their space evenly.
-        swapped = ("files", "staged", "commit", "commit_details", "commit_files")
+        # Commit Files alone takes the place of the working tree's panels (RZG-65).
+        swapped = ("files", "staged", "commit", "commit_files")
         self.assertEqual([pid for pid in swapped if not panels[pid].collapsed],
-                         ["commit_details", "commit_files"])
+                         ["commit_files"])
         self.assertTrue(panels["commit_files"].isVisible())
-        self.assertTrue(panels["commit_details"].isVisible())
-        details, files = (sidebar.sizes()[sidebar.indexOf(panels[p].parentWidget())]
-                          for p in ("commit_details", "commit_files"))
-        self.assertLessEqual(abs(details - files), 2)  # a later resize may move a pixel
+        files_at = sidebar.indexOf(panels["commit_files"].parentWidget())
+        self.assertEqual(sidebar.sizes()[files_at], sum(working[1:files_at + 1]))
+        # Commit Details below History and Diff, at its height from the tabs above it.
+        details = panels["commit_details"]
+        self.assertTrue(details.isVisible())
+        main = details.parentWidget().parentWidget()
+        self.assertEqual(main.indexOf(details.parentWidget()), 1)
+        self.assertIs(main.widget(0), panels["history"].parentWidget().parentWidget())
+        self.assertLessEqual(abs(sum(main.sizes()) - main_height), 2)  # the divider
+        self.assertEqual(main.sizes()[1], 220)  # MAIN's size for it
+        shown = main.sizes()
+        for _ in range(3):  # back and forth, with no drift
+            history._view.setCurrentIndex(history._model.index(0, 0))
+            self.app.processEvents()
+            self.assertEqual(main.sizes()[1], 0)
+            history._view.setCurrentIndex(history._model.index(2, 0))
+            wait_idle(window.session)
+            self.app.processEvents()
+            self.assertLessEqual(abs(main.sizes()[0] - shown[0]), 1)  # the divider
+            self.assertEqual(main.sizes()[1], 220)
         self.assertEqual(panels["commit_details"]._summary.text(), "first")
         self.assertFalse(panels["files"].isVisible())
         self.assertEqual(sidebar.sizes()[0], branches_height)
@@ -292,8 +312,10 @@ class MainWindowTests(unittest.TestCase):
         self.app.processEvents()
         self.assertTrue(panels["commit_files"].collapsed)
         self.assertTrue(panels["commit_details"].collapsed)
+        self.assertEqual(main.sizes()[1], 0)  # the tabs have it all back
+        self.assertLessEqual(abs(main.sizes()[0] - details_height[0]), 1)  # the divider
         self.assertTrue(panels["files"].isVisible())
-        self.assertEqual(sidebar.sizes()[0], branches_height)
+        self.assertEqual(sidebar.sizes(), working)
         self.assertIsNone(window.ctx.selection.file)
 
     def test_a_stash_shows_like_a_commit_and_history_lets_it_be(self):

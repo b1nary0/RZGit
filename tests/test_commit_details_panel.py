@@ -6,10 +6,12 @@ from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent, QPoint
 from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import QWidget
 
 from rzgitclient.ui.panels import commit_details_panel
 from rzgitclient.ui.panels.commit_details_panel import CommitDetailsPanel, format_date, full_date
 from rzgitclient.ui.theme.app_theme import DARK_THEME
+from rzgitclient.ui.theme.style_roles import Surface
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 
@@ -144,14 +146,14 @@ class CommitDetailsPanelTests(unittest.TestCase):
         self.panel.show()
         self.choose(self.second)
         QCoreApplication.processEvents()
-        content = self.panel._content
+        [content] = self.panel._stacks
         self.assertEqual(content.widget().width(), content.viewport().width())
         self.assertEqual(self.panel._sha.toolTip(), self.second.sha)
         self.assertTrue(self.panel._copy.isVisible())
 
     def test_three_segments_summary_body_and_details(self):
         self.choose(self.second)
-        top, body, details = self.panel._content.segments
+        top, body, details = self.panel.segments
         self.assertIs(top.header_label, self.panel._summary)
         self.assertEqual(top.header.property("role"), "segment-header")
         self.assertTrue(body.fill)
@@ -169,7 +171,7 @@ class CommitDetailsPanelTests(unittest.TestCase):
         self.choose(self.session.history[0])
         for _ in range(4):
             QCoreApplication.processEvents()
-        stack = self.panel._content
+        [stack] = self.panel._stacks  # narrow: one stack
         _top, body, details = stack.segments
         self.assertGreater(body.scroll_area.verticalScrollBar().maximum(), 0)
         self.assertEqual(stack.verticalScrollBar().maximum(), 0)
@@ -179,7 +181,7 @@ class CommitDetailsPanelTests(unittest.TestCase):
 
     def test_no_body_no_body_segment(self):
         self.choose(self.third)  # "third": a summary only
-        _top, body, _details = self.panel._content.segments
+        _top, body, _details = self.panel.segments
         self.assertFalse(body.isVisibleTo(self.panel))
 
     def test_a_hard_wrapped_body_is_reflowed_for_display_only(self):
@@ -227,6 +229,93 @@ class CommitDetailsPanelTests(unittest.TestCase):
         message = self.panel.message_menu(self.panel._summary).actions()[1]
         self.assertFalse(message.isEnabled())
         wait_idle(self.session)
+
+    def show_at(self, width, height=320):
+        self.panel.resize(width, height)
+        self.panel.show()
+        for _ in range(3):
+            QCoreApplication.processEvents()
+
+    def test_the_content_surface(self):
+        """RZG-65: it sits in the main pane."""
+        self.assertEqual(self.panel.surface, Surface.CONTENT)
+
+    def test_wide_details_is_a_column_beside_the_message(self):
+        """RZG-65: over WIDE px, the message on the left and Details on the right."""
+        self.choose(self.second)
+        self.show_at(commit_details_panel.WIDE + 100)
+        p = self.panel
+        self.assertTrue(p.wide)
+        message, side = p._stacks
+        top, body, details = p.segments
+        self.assertEqual(message.segments, (top, body))
+        self.assertEqual(side.segments, (details,))
+        self.assertEqual(side.width(), commit_details_panel.DETAILS_WIDTH)
+        self.assertEqual(side.x(), message.geometry().right() + 1)
+        self.assertEqual(side.geometry().right(), p.width() - 1)
+        self.assertEqual(top.mapTo(p, QPoint(0, 0)).y(), details.mapTo(p, QPoint(0, 0)).y())
+        self.assertTrue(p._sha.isVisible())
+
+    def test_narrow_details_is_below_the_message_and_back(self):
+        self.choose(self.second)
+        self.show_at(commit_details_panel.WIDE + 100)
+        self.panel._summary.setSelection(0, 3)
+        self.show_at(commit_details_panel.WIDE)  # not wider than WIDE: narrow
+        p = self.panel
+        self.assertFalse(p.wide)
+        [stack] = p._stacks
+        self.assertEqual(stack.segments, p.segments)
+        top, body, details = p.segments
+        self.assertGreater(details.mapTo(p, QPoint(0, 0)).y(), body.mapTo(p, QPoint(0, 0)).y())
+        self.assertEqual(p._summary.text(), "Second commit")  # kept, with its selection
+        self.assertEqual(p._summary.selectedText(), "Sec")
+        self.show_at(commit_details_panel.WIDE + 1)
+        self.assertTrue(p.wide)
+        self.assertEqual(len(p._stacks), 2)
+
+    def test_a_hidden_panel_is_built_for_the_width_of_what_holds_it(self):
+        """Built while hidden (collapsed), its own width is stale: the shown container's
+        is used, so it's arranged once, wide, not narrow first."""
+        holder = QWidget()
+        self.addCleanup(holder.deleteLater)
+        holder.resize(commit_details_panel.WIDE + 200, 400)
+        self.panel.setParent(holder)
+        self.panel.resize(400, 300)  # a hidden panel's stale width: narrow
+        self.panel.hide()
+        holder.show()
+        with mock.patch.object(commit_details_panel, "PanelSegments",
+                               wraps=commit_details_panel.PanelSegments) as made:
+            self.choose(self.second)
+            self.panel.setGeometry(holder.rect())
+            self.panel.show()
+            for _ in range(3):
+                QCoreApplication.processEvents()
+        self.assertEqual(made.call_count, 2)  # the message and Details: wide at once
+        self.assertTrue(self.panel.wide)
+
+    def test_a_panel_built_wide_starts_wide(self):
+        self.show_at(commit_details_panel.WIDE + 300)
+        self.choose(self.second)  # built now, at that width
+        self.assertTrue(self.panel.wide)
+
+    def test_the_message_lines_are_capped_and_kept_on_the_left(self):
+        """RZG-65: at most MESSAGE_CHARS average characters wide, the rest empty."""
+        long = "Summary " * 40 + "\n\n" + "A long body line. " * 40
+        git(self.repo, "commit", "-q", "--allow-empty", "-m", long)
+        self.session.refresh()
+        wait_idle(self.session)
+        self.choose(self.session.history[0])
+        self.show_at(2400)
+        p = self.panel
+        for label in (p._summary, p._body):
+            with self.subTest(label.text()[:7]):
+                cap = commit_details_panel.MESSAGE_CHARS * label.fontMetrics().averageCharWidth()
+                self.assertEqual(label.width(), cap)
+                self.assertLess(cap, p._stacks[0].width() - 100)  # space is left over
+                self.assertLessEqual(label.x(), 8)  # on the left, after its margin
+                self.assertGreater(label.height(), 2 * label.fontMetrics().lineSpacing())
+        self.show_at(500)  # narrower than the cap: the label takes the width
+        self.assertLess(p._body.width(), 500)
 
     def test_the_theme_keeps_the_fonts(self):
         self.choose(self.third)

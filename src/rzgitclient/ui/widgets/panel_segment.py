@@ -126,7 +126,9 @@ class PanelSegment(QWidget):
             label.setTextInteractionFlags(_SELECTABLE)
             _no_wider(label)
             self._header_label = label
-            header = label
+            row.addWidget(label, 1)
+            row.addStretch(0)  # what a label capped by its maximum width leaves over
+            return strip
         row.addWidget(header)
         return strip
 

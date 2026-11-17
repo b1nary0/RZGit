@@ -877,7 +877,7 @@ The first three are extracted from the original `main_window.py` with the same b
 | BranchesPanel | `branches` | sidebar | branches, current in bold | branch operations, through `actions.request_branch` |
 | StashPanel | `stash` | sidebar | "Stashes": message, branch and age of each, newest first | `selection.commit` (a `Stash`); stash operations, through `actions.request_stash` |
 | HistoryPanel | `history` | content | Uncommitted changes, then the commit table; no row while a stash is selected | `selection.commit` |
-| CommitDetailsPanel | `commit_details` | sidebar | "Commit Details": the selected commit's message, author, committer, SHA, parents and refs; collapsed for Uncommitted changes | `selection.commit` (a parent link) |
+| CommitDetailsPanel | `commit_details` | content | "Commit Details", below History and Diff: the selected commit's message, author, committer, SHA, parents and refs; collapsed for Uncommitted changes | `selection.commit` (a parent link) |
 | CommitFilesPanel | `commit_files` | sidebar | "Commit Files": the selected commit's changed files, in place of Unstaged Files, Staged Files and Commit; collapsed for Uncommitted changes | `selection.select()` |
 | FilesPanel | `files` | sidebar | "Unstaged Files": unstaged and untracked files, status colours | `selection.select()`; stages |
 | StagedPanel | `staged` | sidebar | "Staged Files": the index's changes; collapsed when empty | `selection.select()`; unstages |
@@ -972,13 +972,16 @@ the working tree's panels**, as in GitKraken: while a commit is selected, Unstag
 Files, Staged Files and Commit collapse and Commit Files is shown; on Uncommitted changes
 it's the other way round. Each panel collapses by itself from `selection.commit` (none
 knows another), and it sits directly below Commit in every preset, so the host's swap
-rule (§6.2) gives it their space. Like Staged Files it builds its list the first time a
+rule (§6.2) gives it all their space: it is their only stand-in (RZG-65). Like Staged Files it builds its list the first time a
 commit is selected; Commit keeps its draft while collapsed.
 
 **Commit Details** (CommitDetailsPanel, RZG-26) shows the commit selected in History. It
 asks `session.request_commit_details` when `selection.commit` changes, and collapses by
-itself while it is None, like Commit Files: it sits directly above Commit Files in every
-preset, so the swap gives the two the working tree's space, in equal shares. It builds its
+itself while it is None, like Commit Files. **It sits at the bottom of the main pane**
+(RZG-65), below the History and Diff tabs in a vertical split of their own in every
+preset, on the content surface: the message reads at the main pane's width, right under
+the commit. Collapsed, its space goes to the tabs above, and it comes back at the height
+it had (§6.2); it is nobody's stand-in. It builds its
 widgets the first time a commit is selected; uncollapsed with no commit (a layout where it
 can't collapse), it shows the placeholder "No commit selected".
 - **Content**, in three segments (RZG-38): the **summary** as the header of a pinned
@@ -995,6 +998,19 @@ can't collapse), it shows the placeholder "No commit selected".
   index and its untracked part) it has **Based on**: the first parent only. The content
   never scrolls sideways: a value too long for the panel (the SHA in a narrow sidebar)
   is cut off, and the SHA's tooltip and Copy still give it whole.
+- **Wide and narrow** (RZG-65): the message (summary and body) and Details are two
+  stacks side by side when the panel is wider than `WIDE` (700 px): `PanelSegments` of
+  the message on the left, and of Details, `DETAILS_WIDTH` (320 px) wide, on the right,
+  each scrolling by itself. Narrower, the three are one stack as in a sidebar, Details
+  pinned below the message. A resize across `WIDE` moves the segments (kept, with their
+  text and selection) into new stacks. Built while collapsed, the panel's own width is
+  stale, so it is first arranged for the width of its nearest shown container (the main
+  pane's split): it isn't arranged narrow and then again wide.
+- **Line length** (RZG-65): the summary and body labels are at most `MESSAGE_CHARS`
+  (100) average characters of their own font wide, so a wide pane never stretches them
+  into lines too long to read; the rest of the width stays empty. The cap is worked out
+  again in `apply_theme` (the font may change). A text segment header puts the space a
+  capped label leaves after it, so the label stays on the left.
 - **The body is reflowed** (RZG-37): commit messages are hard-wrapped at about 72
   characters, which a narrow sidebar would wrap again into ragged lines, so
   `reflow(body)` (`commit_message_text.py`, plain Python) joins the lines of each
@@ -1309,20 +1325,20 @@ class LayoutState: root: LayoutNode; hidden: Mapping[str, Anchor] = {}   # what'
 
 **Presets** (`layout_presets.py`, `PRESETS`) are named trees that show every panel. Each
 has the Controls panel across the top, above the arrangement described. In every preset,
-History and Diff are tabs of one group, with History current, and Staged Files, Commit,
-Commit Details and Commit Files are directly below Unstaged Files (`files`), in that order:
+History and Diff are tabs of one group, with History current, and Commit Details below
+the group in a vertical split of their own (`MAIN`: `Split(V, [Tabs([history, diff]),
+commit_details], sizes=(500, 220))`, RZG-65). Staged Files, Commit and Commit Files are
+directly below Unstaged Files (`files`), in that order:
 - **Standard** (`DEFAULT_LAYOUT`): Branches, Worktrees, Unstaged Files, Staged Files,
-  Commit, Commit Details, Commit Files and Stashes stacked in a left sidebar, History and
-  Diff on the right: `Split(V, [controls, Split(H, [Split(V, [branches, worktrees, files,
-  staged, commit, commit_details, commit_files, stash], sizes=(180, 140, 220, 120, 160, 0,
-  0, 170)), Tabs([history, diff])], sizes=(220, 880))])`. Commit Details' and Commit Files' sizes are 0 in every
-  preset: they have no space of their own (§6.2, swaps).
+  Commit, Commit Files and Stashes stacked in a left sidebar, History, Diff and Commit
+  Details on the right: `Split(V, [controls, Split(H, [Split(V, [branches, worktrees,
+  files, staged, commit, commit_files, stash], sizes=(180, 140, 220, 120, 160, 0, 170)),
+  MAIN], sizes=(220, 880))])`. Commit Files' size is 0 in every preset: it has no space of
+  its own (§6.2, swaps).
 - **Sidebar Tabs:** Branches, Worktrees, Unstaged Files and Stashes as tabs on the left, Staged
-  Files and Commit below the tabs; History and Diff on the right.
-- **Stacked:** History and Diff across the top; below, Branches with Worktrees and
-  Stashes below it,
-  beside Unstaged Files, with Staged Files, Commit, Commit Details and Commit Files below
-  it.
+  Files, Commit and Commit Files below the tabs; `MAIN` on the right.
+- **Stacked:** `MAIN` across the top; below, Branches with Worktrees and Stashes below it,
+  beside Unstaged Files, with Staged Files, Commit and Commit Files below it.
 
 ### 6.2 LayoutHost
 
@@ -1348,7 +1364,7 @@ Commit Details and Commit Files are directly below Unstaged Files (`files`), in 
   beside; the one after, if it is first), and comes back from that pane when it is shown
   again, at the size it had: so Staged Files or Commit appearing takes its height from
   Unstaged Files (the nearest shown pane above), never from
-  Branches. (If that pane can't spare it, Qt shares it out as usual.) `current_layout()`
+  Branches, and Commit Details takes its height from the History and Diff tabs above it. (If that pane can't spare it, Qt shares it out as usual.) `current_layout()`
   reports the pane at that size, taken from the same pane, so a layout saved meanwhile
   brings it back at that size.
 - **Collapsing is batched:** the host applies the collapse changes of one moment together

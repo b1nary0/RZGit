@@ -1,9 +1,11 @@
 """Commit Details: the commit selected in History, in full (spec §5.4).
 
 The panel asks the session for the commit's details when ``selection.commit``
-changes, and collapses while it is None (Uncommitted changes), like Commit
-Files, which it sits above. Three segments: the summary pinned at the top, the
-body scrolling below it, and the details pinned under their own header.
+changes, and collapses while it is None (Uncommitted changes). It sits below
+History and Diff, at the bottom of the main pane (RZG-65). Three segments: the
+summary pinned at the top, the body scrolling below it, and the details pinned
+under their own header: below the message when the panel is narrow, a column
+on its right when it is wide.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ from datetime import datetime
 from html import escape
 
 from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QGuiApplication, QKeySequence
+from PySide6.QtGui import QGuiApplication, QKeySequence, QResizeEvent
 from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
@@ -42,6 +44,9 @@ SELECT_ALL = "Select All"
 _SELECTABLE = (Qt.TextInteractionFlag.TextSelectableByMouse
                | Qt.TextInteractionFlag.TextSelectableByKeyboard)
 _SHORT = 8  # as Commit.short_sha
+WIDE = 700  # px: wider than this, Details is a column beside the message (RZG-65)
+DETAILS_WIDTH = 320  # px: that column's width
+MESSAGE_CHARS = 100  # the summary and body are at most this many average characters wide
 
 
 def format_date(date: datetime) -> str:
@@ -62,14 +67,18 @@ def person(name: str, email: str, date: datetime) -> str:
 class CommitDetailsPanel(Panel):
     panel_id = "commit_details"
     title = "Commit Details"
-    surface = Surface.SIDEBAR
+    surface = Surface.CONTENT
 
     # Built when a commit is first selected: the panel starts collapsed.
-    _content: PanelSegments | None
+    _content: QWidget | None  # holds the segments, in one stack or two
+    _stacks: tuple[PanelSegments, ...]  # (all three) narrow; (message, details) wide
+    _wide: bool
     _placeholder: QLabel
     _summary: QLabel
     _body: QLabel
+    _summary_segment: PanelSegment
     _body_segment: PanelSegment
+    _details_segment: PanelSegment
     _sha: QLabel
     _copy: QToolButton
     _parents_box: QHBoxLayout
@@ -124,9 +133,10 @@ class CommitDetailsPanel(Panel):
 
         self._body = self._label()
         body = QWidget()
-        body_column = QVBoxLayout(body)
-        body_column.setContentsMargins(8, 6, 8, 6)
-        body_column.addWidget(self._body)
+        body_row = QHBoxLayout(body)  # the label (capped width), then the space left over
+        body_row.setContentsMargins(8, 6, 8, 6)
+        body_row.addWidget(self._body, 1)
+        body_row.addStretch(0)
         self._body_segment = PanelSegment(body, fill=True)
 
         details = QWidget()
@@ -164,10 +174,64 @@ class CommitDetailsPanel(Panel):
             label.customContextMenuRequested.connect(
                 lambda pos, lbl=label: self.message_menu(lbl).popup(lbl.mapToGlobal(pos)))
 
-        self._content = PanelSegments(
-            (summary, self._body_segment, PanelSegment(details, header=DETAILS)))
+        self._summary_segment = summary
+        self._details_segment = PanelSegment(details, header=DETAILS)
+        self._content = QWidget()
+        box = QHBoxLayout(self._content)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(0)
+        self._stacks = ()
+        self._arrange(self._likely_width() > WIDE)
         self.layout().addWidget(self._content)
         self.apply_theme(self.ctx.theme.current)
+
+    @property
+    def segments(self) -> tuple[PanelSegment, ...]:
+        """The summary, body and Details segments, wherever they are."""
+        return self._summary_segment, self._body_segment, self._details_segment
+
+    @property
+    def wide(self) -> bool:
+        """Details is a column beside the message (else below it)."""
+        return self._wide
+
+    def _arrange(self, wide: bool) -> None:
+        """Stack the segments in one column (narrow), or put Details in a column of its
+        own on the right (wide). The segments are kept; only their stacks are new."""
+        if self._stacks and wide == self._wide:
+            return
+        self._wide = wide
+        assert self._content is not None
+        box = self._content.layout()
+        for old in self._stacks:
+            box.removeWidget(old)
+        summary, body, details = self.segments
+        if wide:
+            message, side = PanelSegments((summary, body)), PanelSegments((details,))
+            side.setFixedWidth(DETAILS_WIDTH)
+            box.addWidget(message, 1)
+            box.addWidget(side)
+            new: tuple[PanelSegments, ...] = (message, side)
+        else:
+            new = (PanelSegments((summary, body, details)),)
+            box.addWidget(new[0])
+        for old in self._stacks:  # emptied: the segments are in the new stacks
+            old.deleteLater()
+        self._stacks = new
+
+    def _likely_width(self) -> int:
+        """The width it will be shown at. Built while collapsed, its own width is stale:
+        the nearest shown container's (the main pane's split) is the better guess, so
+        the segments are seldom arranged twice."""
+        widget: QWidget | None = self
+        while widget is not None and not widget.isVisible():
+            widget = widget.parentWidget()
+        return (widget or self).width()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if self._content is not None:
+            self._arrange(event.size().width() > WIDE)
 
     def _label(self, wrap: bool = True) -> QLabel:
         label = QLabel()
@@ -310,6 +374,8 @@ class CommitDetailsPanel(Panel):
         bold = self.font()
         bold.setBold(True)
         self._summary.setFont(bold)
+        for label in (self._summary, self._body):  # lines short enough to read
+            label.setMaximumWidth(MESSAGE_CHARS * label.fontMetrics().averageCharWidth())
         mono = theme.mono_font()
         self._sha.setFont(mono)
         for label in self._parents:

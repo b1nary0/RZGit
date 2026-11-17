@@ -86,12 +86,15 @@ class LayoutHostTests(unittest.TestCase):
         self.assertEqual([f.panel for f in frames],
                          [self.host.panels["branches"], self.host.panels["worktrees"],
                           self.host.panels["files"]])
-        self.assertIsInstance(content, QTabWidget)  # History and Diff
-        self.assertEqual([content.widget(i) for i in range(2)],
+        self.assertEqual(content.orientation(), Qt.Orientation.Vertical)
+        tabs, details = content.widget(0), content.widget(1)
+        self.assertIsInstance(tabs, QTabWidget)  # History and Diff
+        self.assertEqual([tabs.widget(i) for i in range(2)],
                          [self.host.panels["history"], self.host.panels["diff"]])
-        self.assertEqual(content.currentIndex(), 0)
-        self.assertEqual([sidebar.widget(i).panel.panel_id for i in range(3, 7)],
-                         ["staged", "commit", "commit_details", "commit_files"])
+        self.assertEqual(tabs.currentIndex(), 0)
+        self.assertIs(details.panel, self.host.panels["commit_details"])  # below them
+        self.assertEqual([sidebar.widget(i).panel.panel_id for i in range(3, 6)],
+                         ["staged", "commit", "commit_files"])
 
     def test_tabs_use_the_panel_header_and_follow_it(self):
         self.host.apply(TABS)
@@ -226,7 +229,7 @@ class LayoutHostTests(unittest.TestCase):
 
     def test_a_panel_asking_to_be_activated_becomes_the_current_tab(self):
         self.host.apply(DEFAULT_LAYOUT)
-        tabs = self.body().widget(1)
+        tabs = self.body().widget(1).widget(0)
         self.host.panels["diff"].request_activation()
         self.assertEqual(tabs.currentWidget(), self.host.panels["diff"])
         self.host.panels["history"].request_activation()
