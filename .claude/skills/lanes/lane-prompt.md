@@ -20,7 +20,7 @@ Do the same for any script that imports rzgitclient, or have it insert your work
 
 ## The workflow
 First read, in this order:
-1. /home/JPOD/dev/RZGitClient/.claude/skills/linear/SKILL.md: how this project uses Linear, including archiving. Your worktree doesn't have that folder, so use this absolute path.
+1. /home/JPOD/dev/RZGitClient/.claude/skills/linear/SKILL.md: how this project uses Linear, including archiving. Use the main checkout's copy, which is always the current one.
 2. The description of the Linear project "Core Workflow".
 3. CLAUDE.md.
 Then:

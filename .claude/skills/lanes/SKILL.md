@@ -89,7 +89,7 @@ git branch -d RZG-N                                     # -d: refuses if not mer
 
 ## Rules for every lane (they're in `lane-prompt.md`; keep them in sync)
 
-- Lanes follow the `linear` skill. A lane's worktree has no `.claude/skills`, so the prompt points at it by absolute path.
+- Lanes follow the `linear` skill. The prompt points at the main checkout's copy by absolute path, so a lane always reads the current one.
 
 - One issue per lane, and the per-issue workflow from the Linear project "Core Workflow" (review, Decisions, plan, wait for "start", build, verify, report, commit only on the user's yes).
 - Python from the shared venv, with the lane's own src first: `PYTHONPATH=src /home/JPOD/dev/RZGitClient/.venv/bin/python …`. The editable install points at the main checkout.
