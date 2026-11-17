@@ -53,5 +53,6 @@ Then:
 - Never attach images the user shares to Linear issues. Record what you derive from them as text.
 - Never print the Linear API key (~/.config/linear-api-key).
 - No hard-coded colours outside ui/theme (an architecture test enforces it). Keep the git/ → core/ → ui/ layering. Panels never run git.
+{{SMALL_LANE}}
 
 Start now with your issue's review.
