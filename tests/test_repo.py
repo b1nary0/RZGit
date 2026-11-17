@@ -4,7 +4,9 @@ import unittest
 from pathlib import Path
 
 from rzgitclient.git.git_models import Commit, DiffLine, DiffSource, FileStatus, LineKind
-from rzgitclient.git.repo import GitError, Repo, canonical_path, parse_diff
+from rzgitclient.git.git_models import Worktree, WorktreeState
+from rzgitclient.git.repo import (GitError, Repo, canonical_path, parse_diff, parse_worktree_status,
+                                  parse_worktrees, worktree_state)
 from tests.support import commit_file, git, make_repo
 
 
@@ -835,3 +837,99 @@ class RepoAmendTests(unittest.TestCase):
     def test_amend_before_the_first_commit_is_git_s_error(self):
         with self.assertRaises(GitError):
             self.repo.amend("nothing to amend")
+
+
+class WorktreeTests(unittest.TestCase):
+    """Listing worktrees and reading their state (RZG-48, spec §4.4)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = canonical_path(self._tmp.name)
+        self.main = make_repo(self.tmp / "main")
+        commit_file(self.main, "a.txt", "1\n", "first")
+        self.repo = Repo(self.main)
+
+    def add(self, name, *args):
+        git(self.main, "worktree", "add", "-q", *args, str(self.tmp / name))
+        return self.tmp / name
+
+    def test_lists_the_main_worktree_first_then_the_linked_ones(self):
+        self.add("feature", "-b", "feature")
+        self.add("loose", "--detach")
+        head = git(self.main, "rev-parse", "HEAD").strip()
+        self.assertEqual(self.repo.worktrees(), [
+            Worktree(str(self.main), head, "main", main=True),
+            Worktree(str(self.tmp / "feature"), head, "feature"),
+            Worktree(str(self.tmp / "loose"), head, None),
+        ])
+        self.assertEqual(self.repo.worktrees()[1].name, "feature")
+
+    def test_the_same_list_from_a_linked_worktree(self):
+        linked = self.add("feature", "-b", "feature")
+        self.assertEqual(Repo(linked).worktrees(), self.repo.worktrees())
+        self.assertEqual(Repo(linked).common_dir, self.repo.common_dir)
+        self.assertEqual(self.repo.common_dir, self.main / ".git")
+
+    def test_locked_and_missing_worktrees(self):
+        self.add("usb", "-b", "usb")
+        git(self.main, "worktree", "lock", "--reason", "on a usb stick", str(self.tmp / "usb"))
+        gone = self.add("gone", "-b", "gone")
+        gone.rename(self.tmp / "moved")
+        listed = {w.name: w for w in self.repo.worktrees()}
+        self.assertTrue(listed["usb"].locked)
+        self.assertEqual(listed["usb"].lock_reason, "on a usb stick")
+        self.assertFalse(listed["usb"].missing)
+        self.assertTrue(listed["gone"].missing)
+        self.assertFalse(listed["main"].missing)
+
+    def test_a_bare_main_repository_is_left_out(self):
+        bare = self.tmp / "bare.git"
+        git(self.tmp, "clone", "-q", "--bare", str(self.main), str(bare))
+        git(bare, "worktree", "add", "-q", str(self.tmp / "work"), "main")
+        listed = Repo(self.tmp / "work").worktrees()
+        self.assertEqual([w.name for w in listed], ["work"])
+        self.assertFalse(listed[0].main)
+
+    def test_parsing_before_the_first_commit_and_odd_names(self):
+        out = ("worktree /x/new\0HEAD " + "0" * 40 + "\0branch refs/heads/main\0\0"
+               "worktree /x/b\0HEAD abc\0branch refs/heads/feat/a b\0locked\0\0")
+        first, second = parse_worktrees(out)
+        self.assertIsNone(first.head)
+        self.assertTrue(first.main)
+        self.assertEqual(second.branch, "feat/a b")
+        self.assertTrue(second.locked)
+        self.assertEqual(second.lock_reason, "")
+
+    def test_state_counts_each_changed_file_once(self):
+        (self.main / "a.txt").write_text("2\n")
+        git(self.main, "add", "a.txt")
+        (self.main / "a.txt").write_text("3\n")  # staged and unstaged: one file
+        (self.main / "new.txt").write_text("n\n")
+        self.assertEqual(worktree_state(self.main), WorktreeState(2))
+        git(self.main, "reset", "-q", "--hard")
+        git(self.main, "clean", "-fq")
+        self.assertEqual(worktree_state(self.main), WorktreeState(0))
+
+    def test_state_counts_ahead_and_behind_its_upstream(self):
+        clone = self.tmp / "clone"
+        git(self.tmp, "clone", "-q", str(self.main), str(clone))
+        git(clone, "config", "user.name", "T")
+        git(clone, "config", "user.email", "t@example.com")
+        self.assertEqual(worktree_state(clone), WorktreeState(0, "origin/main", 0, 0))
+        commit_file(clone, "b.txt", "b", "mine")
+        commit_file(clone, "c.txt", "c", "mine too")
+        commit_file(self.main, "d.txt", "d", "theirs")
+        git(clone, "fetch", "-q")
+        self.assertEqual(worktree_state(clone), WorktreeState(0, "origin/main", 2, 1))
+        self.assertEqual(worktree_state(self.main), WorktreeState(0))  # no upstream
+
+    def test_parsing_a_rename_an_unmerged_file_and_a_gone_upstream(self):
+        out = ("# branch.oid abc\0# branch.head main\0# branch.upstream origin/old\0"
+               "2 R. N... 100644 100644 100644 a b R100 new name\0? old name\0"
+               "u UU N... 1 2 3 4 a b c conflict\0? untracked\0")
+        self.assertEqual(parse_worktree_status(out), WorktreeState(3, "origin/old", None, None))
+
+    def test_the_state_of_a_missing_folder_is_git_s_error(self):
+        with self.assertRaises(GitError):
+            worktree_state(self.tmp / "nowhere")

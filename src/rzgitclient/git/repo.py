@@ -25,6 +25,8 @@ from rzgitclient.git.git_models import (
     LastCommit,
     LineKind,
     Stash,
+    Worktree,
+    WorktreeState,
 )
 
 
@@ -113,6 +115,7 @@ class Repo:
         self.root = canonical_path(top)
         git_dir, common_dir = canonical_path(git_dir), canonical_path(common_dir)
         linked = git_dir != common_dir
+        self.common_dir = common_dir  # shared by every worktree of the repository
         self.worktree_name = git_dir.name if linked else self.root.name
         self.main_root = (common_dir.parent if linked and common_dir.name == ".git"
                           else self.root)
@@ -256,6 +259,13 @@ class Repo:
         out = self.git("rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir")
         git_dir, common_dir = out.splitlines()[:2]
         return Path(git_dir), Path(common_dir)
+
+    # ---- worktrees (spec §4.4) -----------------------------------------------
+
+    def worktrees(self) -> list[Worktree]:
+        """Every worktree of the repository, the main one first; a bare main
+        repository's entry is left out."""
+        return list_worktrees(self.common_dir)
 
     def listed_files(self) -> list[str]:
         """Tracked files and untracked ones git doesn't ignore, relative to the root."""
@@ -509,6 +519,64 @@ class Repo:
 # Plain output whatever the user's config says; -M: show renames as renames.
 _DIFF_OPTIONS = ("--no-color", "--no-ext-diff", "-M")
 _HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def list_worktrees(common_dir: str | Path) -> list[Worktree]:
+    """The worktrees of the repository whose common dir is ``common_dir``. Run
+    there, so it works whichever worktree is gone (spec §4.4)."""
+    return parse_worktrees(run_git(common_dir, "worktree", "list", "--porcelain", "-z"))
+
+
+def parse_worktrees(out: str) -> list[Worktree]:
+    """``git worktree list --porcelain -z``: attributes end in NUL, a record in
+    a second NUL. Git lists the main worktree first."""
+    worktrees: list[Worktree] = []
+    for number, record in enumerate(r for r in out.split("\0\0") if r.strip("\0")):
+        fields: dict[str, str] = {}
+        for attribute in record.split("\0"):
+            if attribute:
+                key, _, value = attribute.partition(" ")
+                fields[key] = value
+        if "worktree" not in fields or "bare" in fields:
+            continue
+        path = str(canonical_path(fields["worktree"]))
+        head = fields.get("HEAD", "")
+        branch = fields.get("branch")
+        worktrees.append(Worktree(
+            path=path,
+            head=head if head.strip("0") else None,  # all zeros before the first commit
+            branch=branch.removeprefix("refs/heads/") if branch is not None else None,
+            main=number == 0,
+            locked="locked" in fields,
+            lock_reason=fields.get("locked", ""),
+            missing="prunable" in fields or not os.path.isdir(path),
+        ))
+    return worktrees
+
+
+def worktree_state(path: str | Path) -> WorktreeState:
+    """One ``git status`` in the worktree at ``path``: its changed files and how
+    far it is from its upstream (spec §4.4)."""
+    return parse_worktree_status(run_git(path, "status", "--porcelain=v2", "--branch", "-z"))
+
+
+def parse_worktree_status(out: str) -> WorktreeState:
+    changed = 0
+    upstream: str | None = None
+    ahead = behind = None
+    fields = iter(out.split("\0"))
+    for entry in fields:
+        if entry.startswith("# branch.upstream "):
+            upstream = entry.removeprefix("# branch.upstream ")
+        elif entry.startswith("# branch.ab "):
+            plus, minus = entry.removeprefix("# branch.ab ").split()
+            ahead, behind = int(plus), -int(minus)
+        elif entry[:2] in ("1 ", "u ", "? "):
+            changed += 1
+        elif entry.startswith("2 "):  # a rename: its old path follows
+            changed += 1
+            next(fields, None)
+    return WorktreeState(changed, upstream, ahead, behind)
 
 
 def parse_diff(

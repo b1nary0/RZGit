@@ -18,6 +18,7 @@ from rzgitclient.ui.layout.layout_model import to_dict
 from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT, matching_preset, restore_layout
 from rzgitclient.ui.layout.panels_menu import PanelsMenu
 from rzgitclient.ui.panels.panel import PanelContext
+from rzgitclient.ui.panels.worktrees_panel import WorktreesPanel
 from rzgitclient.ui.stash_dialogs import StashDialogs
 
 
@@ -85,6 +86,11 @@ class MainWindow(QMainWindow):
         repo_menu.addActions([actions.commit, actions.amend])
         repo_menu.addSeparator()
         repo_menu.addAction(actions.stash_changes)
+        repo_menu.addSeparator()
+        repo_menu.addAction(actions.worktrees)
+        actions.worktrees.triggered.connect(self.show_worktrees)
+        actions.open_worktree_requested.connect(self.open_in_window)
+        actions.open_worktree_here_requested.connect(self.open_repo)
         self.stash_dialogs = StashDialogs(self, self.session, actions)
         actions.set_amend_confirmer(self.confirm_amend)
 
@@ -249,6 +255,13 @@ class MainWindow(QMainWindow):
         if self.windows is None:
             return self if self.open_repo(path) else None
         return self.windows.open(path, from_window=self)
+
+    def show_worktrees(self) -> None:
+        """Show the Worktrees panel if it is hidden, and bring its tab to the front (§8)."""
+        self.layout_host.show_panel(WorktreesPanel.panel_id)
+        panel = self.layout_host.panels.get(WorktreesPanel.panel_id)
+        if panel is not None:
+            panel.request_activation()
 
     def _on_repo_changed(self, repo: Repo | None) -> None:
         if repo is None:

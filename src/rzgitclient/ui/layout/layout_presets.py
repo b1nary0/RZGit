@@ -33,6 +33,7 @@ CONTROLS, DIFF, COMMIT = PanelNode("controls"), PanelNode("diff"), PanelNode("co
 STAGED, COMMIT_FILES = PanelNode("staged"), PanelNode("commit_files")
 COMMIT_DETAILS = PanelNode("commit_details")
 STASH = PanelNode("stash")
+WORKTREES = PanelNode("worktrees")  # below Branches in every preset (RZG-48)
 # History and the diff of the selected file share one tab group in every preset.
 CONTENT = TabsNode((HISTORY, DIFF))
 
@@ -51,26 +52,28 @@ def _below_controls(root: LayoutNode) -> SplitNode:
 # In every preset Staged Files, Commit, Commit Details and Commit Files are
 # directly below (Unstaged) Files, as in GitKraken: Commit Details and Commit
 # Files take the place of the other three while a commit is selected (spec
-# §5.4). Their sizes are 0: they always take theirs (§6.2). Standard: Branches, Unstaged Files, Staged Files,
-# Commit and Stashes stacked in a left sidebar; History and Diff on the right.
+# §5.4). Their sizes are 0: they always take theirs (§6.2). Standard: Branches, Worktrees,
+# Unstaged Files, Staged Files, Commit and Stashes stacked in a left sidebar; History and
+# Diff on the right.
 DEFAULT_LAYOUT = _below_controls(SplitNode(
-    H, (SplitNode(V, (BRANCHES, FILES, STAGED, COMMIT, COMMIT_DETAILS, COMMIT_FILES, STASH),
-                  sizes=(180, 220, 120, 160, 0, 0, 170)),
+    H, (SplitNode(V, (BRANCHES, WORKTREES, FILES, STAGED, COMMIT, COMMIT_DETAILS, COMMIT_FILES,
+                      STASH),
+                  sizes=(180, 140, 220, 120, 160, 0, 0, 170)),
         CONTENT),
     sizes=(220, 880)))
 
 PRESETS = (
     Preset("Standard", DEFAULT_LAYOUT),
-    # Branches, Unstaged Files and Stashes as tabs, above Staged Files and Commit.
+    # Branches, Worktrees, Unstaged Files and Stashes as tabs, above Staged Files and Commit.
     Preset("Sidebar Tabs", _below_controls(SplitNode(H, (
-        SplitNode(V, (TabsNode((BRANCHES, FILES, STASH)), STAGED, COMMIT, COMMIT_DETAILS,
+        SplitNode(V, (TabsNode((BRANCHES, WORKTREES, FILES, STASH)), STAGED, COMMIT, COMMIT_DETAILS,
                       COMMIT_FILES), sizes=(330, 120, 160, 0, 0)),
         CONTENT), sizes=(220, 880)))),
-    # History and Diff across the top; below, Branches (Stashes below it) beside
+    # History and Diff across the top; below, Branches (Worktrees and Stashes below it) beside
     # Unstaged Files, with Staged Files, Commit, Commit Details and Commit Files below it.
     Preset("Stacked", _below_controls(SplitNode(V, (
         CONTENT,
-        SplitNode(H, (SplitNode(V, (BRANCHES, STASH), sizes=(240, 130)), SplitNode(V, (FILES, STAGED, COMMIT, COMMIT_DETAILS,
+        SplitNode(H, (SplitNode(V, (BRANCHES, WORKTREES, STASH), sizes=(240, 130, 130)), SplitNode(V, (FILES, STAGED, COMMIT, COMMIT_DETAILS,
                                                COMMIT_FILES), sizes=(120, 90, 160, 0, 0))),
                   sizes=(400, 700))),
         sizes=(240, 370)))),

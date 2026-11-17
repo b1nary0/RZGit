@@ -1,10 +1,11 @@
 import unittest
 
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QLabel
 
 from rzgitclient.ui.layout.panel_frame import PanelFrame
 from rzgitclient.ui.panels.panel import Panel
-from rzgitclient.ui.theme.style_roles import Surface
+from rzgitclient.ui.theme.style_roles import ROLE_PROPERTY, Role, Surface
 from tests.support import make_panel_context, qt_app
 
 
@@ -66,3 +67,44 @@ class PanelFrameTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HeaderMenuTests(unittest.TestCase):
+    """The ⋯ button of the shared header menu (RZG-48, spec §6.2)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = qt_app()
+
+    def setUp(self):
+        self.panel = FilesLikePanel(make_panel_context())
+        self.frame = PanelFrame(self.panel)
+        self.frame.resize(300, 200)
+        self.frame.show()
+        self.addCleanup(self.frame.deleteLater)
+        self.app.processEvents()
+
+    def test_no_button_without_actions(self):
+        self.assertIsNone(self.frame.menu_button)  # not even made
+
+    def test_the_button_shows_the_panel_s_actions_and_follows_them(self):
+        one, two = QAction("One", self.panel), QAction("Two", self.panel)
+        self.panel.set_header_actions([one, two])
+        self.app.processEvents()
+        button = self.frame.menu_button
+        self.assertTrue(button.isVisible())
+        self.assertEqual(button.menu().actions(), [one, two])
+        self.assertEqual(button.property(ROLE_PROPERTY), Role.HEADER_MENU)
+        self.panel.set_header_actions([two])
+        self.assertEqual(button.menu().actions(), [two])
+        self.panel.set_header_actions([])
+        self.assertFalse(button.isVisible())
+
+    def test_the_button_is_inside_the_header_at_its_right(self):
+        self.panel.set_header_actions([QAction("One", self.panel)])
+        self.app.processEvents()
+        button, header = self.frame.menu_button, self.frame.header
+        self.assertIs(button.parentWidget(), header)
+        self.assertLessEqual(button.geometry().right(), header.width())
+        self.assertGreater(button.geometry().left(), header.width() // 2)
+        self.assertEqual(header.text(), "FILES")  # the title is untouched

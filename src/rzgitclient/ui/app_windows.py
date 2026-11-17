@@ -1,7 +1,7 @@
 """The open main windows (spec §8.1).
 
 Made once by app.py. Each main window gets its own RepoSession, RepoWatcher,
-Selection and AppActions; the settings, theme, commit drafts and column
+WorktreeReader, Selection and AppActions; the settings, theme, commit drafts and column
 choices are shared.
 A worktree is shown in at most one window: opening it again raises that one.
 """
@@ -20,6 +20,7 @@ from rzgitclient.core.commit_drafts import CommitDrafts
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.repo_watcher import RepoWatcher
 from rzgitclient.core.selection import Selection
+from rzgitclient.core.worktree_reader import WorktreeReader
 from rzgitclient.git.repo import GitError, Repo, canonical_path
 from rzgitclient.ui.app_actions import AppActions
 from rzgitclient.ui.main_window import MainWindow
@@ -34,6 +35,7 @@ class _Window:
     window: MainWindow
     session: RepoSession
     watcher: RepoWatcher
+    worktrees: WorktreeReader
     selection: Selection
     actions: AppActions
     shut_down: bool = False
@@ -43,6 +45,7 @@ class _Window:
         if not self.shut_down:
             self.shut_down = True
             self.watcher.shutdown()
+            self.worktrees.shutdown()
             self.session.shutdown()
 
 
@@ -98,22 +101,26 @@ class AppWindows(QObject):
         anchor = from_window or self._anchor()
         session = RepoSession()
         watcher = RepoWatcher(session)
+        worktrees = WorktreeReader(session)
         selection = Selection(session)
         actions = AppActions(session, selection)
         ctx = PanelContext(session=session, selection=selection, theme=self._theme,
-                           actions=actions, drafts=self._drafts, columns=self._columns)
+                           actions=actions, drafts=self._drafts, columns=self._columns,
+                           worktrees=worktrees)
         window = MainWindow(ctx, self._settings, self, restore_geometry=anchor is None)
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         # Its own objects are deleted with it (after its panels, which are connected
         # to them), the session last.
-        for owned in (watcher, actions, selection, session):
+        for owned in (watcher, worktrees, actions, selection, session):
             owned.setParent(window)
         if anchor is not None:
             place_beside(window, anchor)
-        record = _Window(window, session, watcher, selection, actions)
+        record = _Window(window, session, watcher, worktrees, selection, actions)
         self._open.append(record)
         window.closed.connect(lambda: self._on_closed(record))
-        watcher.set_active(self._app.applicationState() == Qt.ApplicationState.ApplicationActive)
+        active = self._app.applicationState() == Qt.ApplicationState.ApplicationActive
+        watcher.set_active(active)
+        worktrees.set_active(active)
         return window
 
     def shutdown(self) -> None:
@@ -134,6 +141,7 @@ class AppWindows(QObject):
         active = state == Qt.ApplicationState.ApplicationActive
         for w in self._open:
             w.watcher.set_active(active)
+            w.worktrees.set_active(active)
 
     def _on_closed(self, record: _Window) -> None:
         if record not in self._open:

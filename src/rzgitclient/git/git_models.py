@@ -138,3 +138,30 @@ class FileDiff:
     binary: bool = False
     too_large: bool = False  # over the size limit: not parsed, no hunks
     line_count: int = 0  # lines of git's output; set even when too_large
+
+
+@dataclass(frozen=True)
+class Worktree:
+    """One worktree of a repository, as ``git worktree list`` gives it (spec §4.4)."""
+
+    path: str  # canonical
+    head: str | None  # its commit; None before the first
+    branch: str | None  # the short name; None when detached
+    main: bool = False  # the main worktree (listed first)
+    locked: bool = False
+    lock_reason: str = ""
+    missing: bool = False  # git calls it prunable, or its folder isn't there
+
+    @property
+    def name(self) -> str:
+        return self.path.rstrip("/").rsplit("/", 1)[-1]
+
+
+@dataclass(frozen=True)
+class WorktreeState:
+    """What ``git status`` says about a worktree (spec §4.4)."""
+
+    changed: int  # files with staged, unstaged or untracked changes, each once
+    upstream: str | None = None  # e.g. "origin/main"; None without one
+    ahead: int | None = None  # None without an upstream, or when it's gone
+    behind: int | None = None

@@ -10,6 +10,7 @@ from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QDrag, QDropEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QMenu,
     QSplitter,
     QTabBar,
     QTabWidget,
@@ -535,11 +536,29 @@ def _fix_heights(splitter: QSplitter) -> None:
 
 
 class _PanelTabs(QTabWidget):
-    """Tabs whose labels follow each panel's header text."""
+    """Tabs whose labels follow each panel's header text. Right-clicking a
+    tab shows its panel's header actions (spec §6.2)."""
 
     def __init__(self):
         super().__init__()
         self.setDocumentMode(True)
+        self.tabBar().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tabBar().customContextMenuRequested.connect(self._show_menu)
+
+    def menu_for(self, index: int) -> QMenu | None:
+        """The menu of the tab at ``index``: its panel's header actions, or None."""
+        panel = self.widget(index)
+        if not isinstance(panel, Panel) or not panel.header_actions:
+            return None
+        menu = QMenu(self)
+        menu.addActions(list(panel.header_actions))
+        return menu
+
+    def _show_menu(self, pos: QPoint) -> None:
+        menu = self.menu_for(self.tabBar().tabAt(pos))
+        if menu is not None:
+            menu.exec(self.tabBar().mapToGlobal(pos))
+            menu.deleteLater()
 
     def add_panel(self, panel: Panel) -> None:
         self.addTab(panel, panel.header)

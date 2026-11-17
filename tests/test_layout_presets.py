@@ -29,7 +29,7 @@ CUSTOM = SplitNode(
      SplitNode(H, (PanelNode("history"), PanelNode("diff"), PanelNode("staged"),
                    PanelNode("commit"), PanelNode("commit_details"),
                    PanelNode("commit_files"), PanelNode("stash"))),
-     TabsNode((PanelNode("branches"), PanelNode("files")), current=1)),
+     TabsNode((PanelNode("branches"), PanelNode("worktrees"), PanelNode("files")), current=2)),
     sizes=(30, 500, 200),
 )
 
@@ -77,20 +77,21 @@ class RestoreLayoutTests(unittest.TestCase):
                          LayoutState(rest, {"files": anchor}))
 
     def test_a_panel_new_in_this_version_goes_to_its_default_place(self):
-        # Saved by a version without the Files, Controls, Diff, Staged, Commit,
-        # Commit Details, Commit Files and Stashes panels: the user's arrangement is kept, Files
-        # joins Branches with Staged, Commit, Commit Details, Commit Files and Stashes below it (at the default
-        # sizes: that split is the default's now), Controls goes across the top,
-        # and Diff becomes History's second tab.
+        # Saved by a version without the Worktrees, Files, Controls, Diff, Staged, Commit,
+        # Commit Details, Commit Files and Stashes panels: the user's arrangement is kept,
+        # Worktrees and Files join Branches with Staged, Commit, Commit Details, Commit
+        # Files and Stashes below it (at the default sizes: that split is the default's
+        # now), Controls goes across the top, and Diff becomes History's second tab.
         older = SplitNode(H, (PanelNode("branches"), PanelNode("history")), sizes=(100, 500))
         restored = restore_layout(saved(older))
         self.assertEqual(restored.root, SplitNode(V, (
             PanelNode("controls"),
             SplitNode(H, (
-                SplitNode(V, (PanelNode("branches"), PanelNode("files"), PanelNode("staged"),
-                              PanelNode("commit"), PanelNode("commit_details"),
-                              PanelNode("commit_files"), PanelNode("stash")),
-                          sizes=(180, 220, 120, 160, 0, 0, 170)),
+                SplitNode(V, (PanelNode("branches"), PanelNode("worktrees"), PanelNode("files"),
+                              PanelNode("staged"), PanelNode("commit"),
+                              PanelNode("commit_details"), PanelNode("commit_files"),
+                              PanelNode("stash")),
+                          sizes=(180, 140, 220, 120, 160, 0, 0, 170)),
                 TabsNode((PanelNode("history"), PanelNode("diff"))),
             ), sizes=(100, 500)),
         )))
@@ -104,14 +105,22 @@ class RestoreLayoutTests(unittest.TestCase):
         self.assertEqual(restore_layout(saved(before_rzg_18)), LayoutState(DEFAULT_LAYOUT))
 
     def test_stashes_a_tab_only_in_sidebar_tabs(self):
-        """RZG-36: at the bottom of Standard's sidebar, a third tab in Sidebar Tabs, below
-        Branches in Stacked."""
+        """RZG-36: at the bottom of Standard's sidebar, the last tab in Sidebar Tabs, below
+        Branches and Worktrees in Stacked."""
         standard, tabs, stacked = (p.root for p in PRESETS)
         self.assertEqual(standard.children[1].children[0].children[-1], PanelNode("stash"))
         self.assertEqual(tabs.children[1].children[0].children[0], TabsNode(
-            (PanelNode("branches"), PanelNode("files"), PanelNode("stash"))))
+            (PanelNode("branches"), PanelNode("worktrees"), PanelNode("files"),
+             PanelNode("stash"))))
         self.assertEqual(stacked.children[1].children[1].children[0].children,
-                         (PanelNode("branches"), PanelNode("stash")))
+                         (PanelNode("branches"), PanelNode("worktrees"), PanelNode("stash")))
+
+    def test_worktrees_is_below_branches_in_every_preset(self):
+        """RZG-48: directly below Branches in a split, the tab after it in tabs."""
+        for preset in PRESETS:
+            with self.subTest(preset.title):
+                ids = panel_ids(preset.root)
+                self.assertEqual(ids[ids.index("branches") + 1], "worktrees")
 
     def test_staged_and_commit_go_below_files_in_a_layout_saved_before_them(self):
         for preset in PRESETS:
@@ -127,16 +136,17 @@ class RestoreLayoutTests(unittest.TestCase):
         ), sizes=(700, 300))))
         sidebar = restore_layout(saved(mine)).root.children[1].children[1]
         self.assertEqual(panel_ids(sidebar),
-                         ["files", "staged", "commit", "commit_details", "commit_files", "stash",
-                          "branches"])
+                         ["worktrees", "files", "staged", "commit", "commit_details",
+                          "commit_files", "stash", "branches"])
         self.assertEqual(sidebar.sizes[-1], 100)  # Branches keeps its own
 
     def test_a_new_tab_leaves_the_current_tab_current(self):
         older = SplitNode(V, (PanelNode("controls"), SplitNode(H, (
             PanelNode("branches"),
             TabsNode((PanelNode("files"), PanelNode("history")), current=1)))))
-        # Staged and Commit go below the tabs that hold Files.
-        tabs = restore_layout(saved(older)).root.children[1].children[1].children[0]
+        # Worktrees goes above the tabs that hold Files (beside Files, as in the default),
+        # Staged and Commit below them.
+        tabs = restore_layout(saved(older)).root.children[1].children[1].children[1]
         self.assertEqual(tabs, TabsNode(
             (PanelNode("files"), PanelNode("history"), PanelNode("diff")), current=1))
 
@@ -150,7 +160,7 @@ class RestoreLayoutTests(unittest.TestCase):
         restored = restore_layout(saved(newer, {"gone": retired_anchor}))
         self.assertEqual(sorted(panel_ids(restored.root)),
                          ["branches", "commit", "commit_details", "commit_files", "controls", "diff", "files",
-                          "history", "staged", "stash"])
+                          "history", "staged", "stash", "worktrees"])
         self.assertIsNone(restored.root.sizes)  # children changed, so sizes no longer fit
         self.assertEqual(restored.hidden, {})
 
@@ -211,8 +221,8 @@ class BuiltInLayoutTests(unittest.TestCase):
 
     def test_a_custom_layout_stays_as_it_is(self):
         restored = restore_layout(saved(self.OLD_STANDARD), None)
-        self.assertEqual(panel_ids(restored.root)[:9],
-                         ["controls", "branches", "files", "staged", "commit",
+        self.assertEqual(panel_ids(restored.root)[:10],
+                         ["controls", "branches", "worktrees", "files", "staged", "commit",
                           "commit_details", "commit_files", "stash", "history"])
         self.assertIn(SplitNode(V, (PanelNode("history"), PanelNode("diff")), sizes=(400, 300)),
                       restored.root.children[1].children)  # Diff still below History

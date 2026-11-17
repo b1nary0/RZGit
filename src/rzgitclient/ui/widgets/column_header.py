@@ -18,6 +18,8 @@ labels also shows or hides columns (the main one is always shown).
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from PySide6.QtCore import QAbstractItemModel, QEvent, QRect, QSize, Qt
 from PySide6.QtGui import (QColor, QHelpEvent, QMouseEvent, QPainter, QPaintEvent,
                            QResizeEvent)
@@ -43,9 +45,10 @@ class ColumnHeader(QHeaderView):
     the columns' saved widths and the columns it hides in ``prefs``."""
 
     def __init__(self, panel_id: str, prefs: ColumnPrefs, theme: AppTheme,
-                 parent: QWidget | None = None):
+                 parent: QWidget | None = None, *, hidden_by_default: Iterable[str] = ()):
         super().__init__(Qt.Orientation.Horizontal, parent)
         self.panel_id, self._prefs = panel_id, prefs
+        self._hidden_by_default = frozenset(hidden_by_default)  # until the user chooses
         self._theme = theme
         self.hover_section = -1  # the label under the pointer
         self._fitted: dict[int, int] = {}  # the panel's fitted widths, by column
@@ -327,7 +330,7 @@ class ColumnHeader(QHeaderView):
     def apply_prefs(self) -> None:
         """Hide the columns this panel hides (the main one never), and give the
         user's widths back (the main one has none: it takes the rest)."""
-        hidden = self._prefs.hidden(self.panel_id)
+        hidden = self._prefs.hidden(self.panel_id, self._hidden_by_default)
         widths = self._prefs.widths(self.panel_id)
         self._user.clear()
         for logical in range(self.count()):
@@ -357,5 +360,5 @@ class ColumnHeader(QHeaderView):
         return menu
 
     def set_column_shown(self, label: str, shown: bool) -> None:
-        self._prefs.set_hidden(self.panel_id, label, not shown)
+        self._prefs.set_hidden(self.panel_id, label, not shown, self._hidden_by_default)
         self.apply_prefs()

@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QLabel
 
 from rzgitclient.ui.panels.panel import Panel
@@ -135,3 +136,23 @@ class PanelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HeaderActionsTests(unittest.TestCase):
+    """The shared header menu (RZG-48, spec §5.1)."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def test_none_until_set_and_emits_only_on_change(self):
+        panel = BranchNamesPanel(make_panel_context())
+        self.assertEqual(panel.header_actions, ())
+        changes = []
+        panel.header_actions_changed.connect(lambda: changes.append(panel.header_actions))
+        one, two = QAction("One", panel), QAction("Two", panel)
+        panel.set_header_actions([one, two])
+        panel.set_header_actions((one, two))
+        self.assertEqual(changes, [(one, two)])
+        panel.set_header_actions(())
+        self.assertEqual(changes, [(one, two), ()])

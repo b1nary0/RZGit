@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import ClassVar
 
 from PySide6.QtCore import Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QWidget
 
 from rzgitclient.core.column_prefs import ColumnPrefs
 from rzgitclient.core.commit_drafts import CommitDrafts
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import Selection
+from rzgitclient.core.worktree_reader import WorktreeReader
 from rzgitclient.ui.app_actions import AppActions
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.theme.style_roles import Surface, set_surface
@@ -29,6 +32,7 @@ class PanelContext:
     actions: AppActions
     drafts: CommitDrafts  # the Commit panel's unfinished messages
     columns: ColumnPrefs  # each panel's column choices (ColumnHeader, spec §5.2)
+    worktrees: WorktreeReader | None = None  # the Worktrees window's (spec §4.4)
 
 
 class Panel(QWidget):
@@ -59,6 +63,7 @@ class Panel(QWidget):
     header_changed = Signal(str)
     activate_requested = Signal()  # "bring me to the front": the layout raises my tab
     collapsed_changed = Signal(bool)  # "nothing to show now": the layout lends my space out
+    header_actions_changed = Signal()  # the header menu's actions changed (spec §5.1)
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -75,6 +80,7 @@ class Panel(QWidget):
         self.ctx = ctx
         self._header = self.title
         self._collapsed = False
+        self._header_actions: tuple[QAction, ...] = ()
         set_surface(self, self.surface)
         self._setup()
         self.apply_theme(ctx.theme.current)
@@ -120,3 +126,19 @@ class Panel(QWidget):
             return
         self._collapsed = collapsed
         self.collapsed_changed.emit(collapsed)
+
+    # ---- the header menu (spec §5.1) ----------------------------------------
+
+    @property
+    def header_actions(self) -> tuple[QAction, ...]:
+        """The panel's commands for the panel as a whole, shown by the layout
+        in its header menu (a split) or its tab's menu (tabs)."""
+        return self._header_actions
+
+    def set_header_actions(self, actions: Iterable[QAction]) -> None:
+        """Replace the header menu's actions. Emits on change."""
+        actions = tuple(actions)
+        if actions == self._header_actions:
+            return
+        self._header_actions = actions
+        self.header_actions_changed.emit()

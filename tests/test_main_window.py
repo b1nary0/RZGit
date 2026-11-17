@@ -17,6 +17,7 @@ from rzgitclient.ui.layout.layout_model import (
     Orientation,
     PanelNode,
     SplitNode,
+    TabsNode,
     to_dict,
 )
 from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
@@ -24,7 +25,7 @@ from rzgitclient.ui.app_actions import StashOp
 from rzgitclient.ui.main_window import MainWindow, commit_summary
 from rzgitclient.ui.theme.app_theme import DARK_CB_THEME, DARK_THEME, LIGHT_THEME
 from rzgitclient.ui.theme.theme_manager import ThemeManager, ThemeMode
-from tests.support import commit_file, make_panel_context, make_repo, qt_app, wait_idle
+from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 
 def bright_share(image, step=3):
@@ -160,7 +161,7 @@ class MainWindowTests(unittest.TestCase):
         self.quit(window)
 
         again = self.start()
-        self.assertEqual(set(again.layout_host.panels), {"controls", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
+        self.assertEqual(set(again.layout_host.panels), {"controls", "worktrees", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
         again.layout_host.show_panel("branches")  # and comes back where it was
         self.assertEqual(strip_sizes(again.layout_host.current_layout()), strip_sizes(DEFAULT_LAYOUT))
 
@@ -448,7 +449,7 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual([a for a in menu.actions() if not a.isSeparator()],
                          [actions.stage, actions.unstage, actions.discard,
                           actions.stage_all, actions.unstage_all, actions.commit, actions.amend,
-                      actions.stash_changes])
+                          actions.stash_changes, actions.worktrees])
 
     def test_discard_asks_first_and_acts_only_on_unstaged_rows(self):
         window = self.start()
@@ -527,11 +528,39 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(seen, {"text": f"Amend {'b' * 8}, a pushed commit?",
                                 "default_is_cancel": True})
 
+    def test_show_worktrees_shows_the_panel_and_brings_its_tab_forward(self):
+        window = self.start()
+        action = window.ctx.actions.worktrees
+        self.assertEqual(action.text(), "Show &Worktrees")
+        self.assertEqual(action.shortcut().toString(), "Ctrl+Shift+W")
+        window.layout_host.hide_panel("worktrees")
+        self.assertNotIn("worktrees", window.layout_host.panels)
+        window.show_worktrees()
+        self.assertIn("worktrees", window.layout_host.panels)
+        self.assertEqual(window.layout_host.hidden, {})
+        window.layout_host.apply(SplitNode(Orientation.HORIZONTAL, (
+            TabsNode((PanelNode("branches"), PanelNode("worktrees"))), PanelNode("history"))))
+        tabs = window.layout_host.panels["worktrees"].parentWidget().parentWidget()
+        self.assertEqual(tabs.currentIndex(), 0)
+        window.show_worktrees()
+        self.assertEqual(tabs.currentIndex(), 1)
+
+    def test_open_in_this_window_opens_the_worktree_here(self):
+        repo = make_repo(self.tmp / "repo")
+        commit_file(repo, "a.txt", "1", "first")
+        git(repo, "worktree", "add", "-q", "-b", "other", str(self.tmp / "other"))
+        window = self.start()
+        window.session.open(repo)
+        wait_idle(window.session)
+        window.ctx.actions.request_open_worktree_here(str(self.tmp / "other"))
+        wait_idle(window.session)
+        self.assertEqual(window.session.repo.root, (self.tmp / "other").resolve())
+
     def test_reset_layout_shows_hidden_panels(self):
         window = self.start()
         window.layout_host.hide_panel("files")
         window.ctx.actions.reset_layout.trigger()
-        self.assertEqual(set(window.layout_host.panels), {"controls", "branches", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
+        self.assertEqual(set(window.layout_host.panels), {"controls", "branches", "worktrees", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
         self.assertEqual(window.layout_host.hidden, {})
 
     def test_status_bar_counts_every_commit_not_just_the_loaded_page(self):

@@ -56,6 +56,48 @@ class AppWindowsTests(unittest.TestCase):
 
     # ---- one window per worktree, each with its own objects -------------------
 
+    def test_each_window_has_its_own_worktree_reader(self):
+        a, b = self.open(self.one), self.open(self.two)
+        self.assertIsNot(a.ctx.worktrees, b.ctx.worktrees)
+        self.assertIs(a.ctx.worktrees.parent(), a)
+        self.assertTrue(a.ctx.worktrees.attached)  # the Worktrees panel is in the layout
+        reader = b.ctx.worktrees
+        with mock.patch.object(reader, "shutdown", wraps=reader.shutdown) as shutdown:
+            b.close()
+        shutdown.assert_called_once_with()
+
+    def test_the_worktree_readers_follow_the_app_s_activation(self):
+        window = self.open(self.one)
+        with mock.patch.object(window.ctx.worktrees, "set_active") as set_active:
+            self.windows._on_app_state(Qt.ApplicationState.ApplicationInactive)
+            self.windows._on_app_state(Qt.ApplicationState.ApplicationActive)
+        self.assertEqual(set_active.call_args_list, [mock.call(False), mock.call(True)])
+
+    def test_open_from_the_worktrees_panel_opens_a_window_of_its_own_or_raises_it(self):
+        linked = self.tmp / "one-linked"
+        git(self.one, "worktree", "add", "-q", "-b", "linked", str(linked))
+        window = self.open(self.one)
+        window.ctx.actions.request_open_worktree(str(linked))
+        self.assertEqual(len(self.windows.windows()), 2)
+        other = self.windows.window_for(linked)
+        wait_idle(other.session)
+        window.ctx.actions.request_open_worktree(str(linked))
+        window.ctx.actions.request_open_worktree(str(self.one))
+        self.assertEqual(len(self.windows.windows()), 2)  # raised, not opened again
+
+    def test_open_in_this_window_raises_the_window_already_showing_it(self):
+        linked = self.tmp / "one-linked"
+        git(self.one, "worktree", "add", "-q", "-b", "linked", str(linked))
+        window, other = self.open(self.one), self.open(linked)
+        with mock.patch.object(other, "bring_to_front") as raised:
+            window.ctx.actions.request_open_worktree_here(str(linked))
+        raised.assert_called_once_with()
+        self.assertEqual(window.session.repo.root, self.one.resolve())  # unchanged
+        other.close()
+        window.ctx.actions.request_open_worktree_here(str(linked))
+        wait_idle(window.session)
+        self.assertEqual(window.session.repo.root, linked.resolve())
+
     def test_each_window_has_its_own_session_and_shares_the_rest(self):
         a, b = self.open(self.one), self.open(self.two)
         self.assertEqual(self.windows.windows(), (a, b))

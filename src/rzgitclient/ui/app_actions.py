@@ -49,6 +49,10 @@ class AppActions(QObject):
     branch_requested = Signal(object, str)  # BranchOp, branch name
     # The Stash panel asks for a stash operation; StashDialogs asks if need be, then runs it.
     stash_requested = Signal(object, object)  # StashOp, Stash
+    # The Worktrees panel asks to open a worktree; MainWindow opens it in a window (§8.1),
+    # a window of its own or this one.
+    open_worktree_requested = Signal(str)  # the worktree's path
+    open_worktree_here_requested = Signal(str)
 
     def __init__(self, session: RepoSession, selection: Selection,
                  parent: QObject | None = None):
@@ -98,6 +102,8 @@ class AppActions(QObject):
         self._confirm_amend: Callable[[LastCommit], bool] = lambda _last: True
         # Stash Changes… (spec §8): connected by StashDialogs, which asks for the message.
         self.stash_changes = self._action("document-save", "Stas&h Changes…")
+        # Show Worktrees (spec §8): MainWindow shows the Worktrees panel and raises it.
+        self.worktrees = self._action("view-list-details", "Show &Worktrees", "Ctrl+Shift+W")
 
         # triggered(bool) would land in refresh's `parts` argument.
         self.refresh.triggered.connect(lambda: session.refresh())
@@ -163,6 +169,14 @@ class AppActions(QObject):
         """Ask for ``op`` on ``stash``, once confirmed where it loses work (spec §8)."""
         self.stash_requested.emit(op, stash)
 
+    def request_open_worktree(self, path: str) -> None:
+        """Show the worktree at ``path`` in a main window of its own (spec §8)."""
+        self.open_worktree_requested.emit(path)
+
+    def request_open_worktree_here(self, path: str) -> None:
+        """Show the worktree at ``path`` in this window (spec §8)."""
+        self.open_worktree_here_requested.emit(path)
+
     def selected(self, source: FileSource) -> tuple[str, ...]:
         """Paths of the selected rows from ``source`` (Stage, Unstage, Discard)."""
         return tuple(f.path for f in self._selection.files if f.source is source)
@@ -180,6 +194,7 @@ class AppActions(QObject):
     def _update_enabled(self, *_args: object) -> None:
         session = self._session
         self.refresh.setEnabled(session.repo is not None)
+        self.worktrees.setEnabled(session.repo is not None)
         worktree = bool(self.selected(FileSource.WORKTREE))
         self.stage.setEnabled(worktree)
         self.discard.setEnabled(worktree)

@@ -40,27 +40,31 @@ class ColumnPrefs:
             if not (_valid_hidden(hidden) and _valid_widths(widths)):
                 log.warning("Dropping malformed column choices for %r: %.80r", panel_id, entry)
                 continue
-            if hidden:
+            if hidden or _HIDDEN in entry:  # [] after showing columns hidden at first
                 self._hidden[panel_id] = set(hidden)
             if widths:
                 self._widths[panel_id] = dict(widths)
 
     # ---- hidden columns (RZG-41) ------------------------------------------
 
-    def hidden(self, panel_id: str) -> frozenset[str]:
-        """The labels of the columns ``panel_id`` hides."""
-        return frozenset(self._hidden.get(panel_id, ()))
+    def hidden(self, panel_id: str, default: frozenset[str] = frozenset()) -> frozenset[str]:
+        """The labels of the columns ``panel_id`` hides: ``default`` (the columns
+        hidden at first, spec §5.2) until the user chose any."""
+        columns = self._hidden.get(panel_id)
+        return frozenset(columns) if columns is not None else frozenset(default)
 
-    def set_hidden(self, panel_id: str, column: str, hidden: bool) -> None:
-        """Hide or show ``column`` (its label) in ``panel_id``; saved at once."""
-        columns = self._hidden.get(panel_id, set())
+    def set_hidden(self, panel_id: str, column: str, hidden: bool,
+                   default: frozenset[str] = frozenset()) -> None:
+        """Hide or show ``column`` (its label) in ``panel_id``; saved at once.
+        With columns hidden at first, the choice is kept even when it hides none."""
+        columns = set(self.hidden(panel_id, default))
         if (column in columns) == hidden:
             return
         if hidden:
             columns.add(column)
         else:
             columns.discard(column)
-        if columns:
+        if columns or default:
             self._hidden[panel_id] = columns
         else:
             self._hidden.pop(panel_id, None)

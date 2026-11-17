@@ -16,8 +16,9 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QApplication
 from PySide6.QtWidgets import QSplitter, QTabWidget
+from PySide6.QtGui import QAction
 
-from rzgitclient.ui.layout.layout_host import PANEL_MIME, LayoutHost
+from rzgitclient.ui.layout.layout_host import PANEL_MIME, LayoutHost, _drag_source
 from rzgitclient.ui.layout.layout_model import (
     LayoutState,
     Orientation,
@@ -70,7 +71,7 @@ class LayoutHostTests(unittest.TestCase):
 
     def test_builds_the_default_layout(self):
         self.host.apply(DEFAULT_LAYOUT)
-        self.assertEqual(set(self.host.panels), {"controls", "branches", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
+        self.assertEqual(set(self.host.panels), {"controls", "branches", "worktrees", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
 
         top = self.root()
         self.assertEqual(top.orientation(), Qt.Orientation.Vertical)
@@ -80,15 +81,16 @@ class LayoutHostTests(unittest.TestCase):
         self.assertFalse(root.childrenCollapsible())
         sidebar, content = root.widget(0), root.widget(1)
         self.assertEqual(sidebar.orientation(), Qt.Orientation.Vertical)
-        frames = [sidebar.widget(0), sidebar.widget(1)]
+        frames = [sidebar.widget(0), sidebar.widget(1), sidebar.widget(2)]
         self.assertTrue(all(isinstance(f, PanelFrame) for f in frames))
         self.assertEqual([f.panel for f in frames],
-                         [self.host.panels["branches"], self.host.panels["files"]])
+                         [self.host.panels["branches"], self.host.panels["worktrees"],
+                          self.host.panels["files"]])
         self.assertIsInstance(content, QTabWidget)  # History and Diff
         self.assertEqual([content.widget(i) for i in range(2)],
                          [self.host.panels["history"], self.host.panels["diff"]])
         self.assertEqual(content.currentIndex(), 0)
-        self.assertEqual([sidebar.widget(i).panel.panel_id for i in range(2, 6)],
+        self.assertEqual([sidebar.widget(i).panel.panel_id for i in range(3, 7)],
                          ["staged", "commit", "commit_details", "commit_files"])
 
     def test_tabs_use_the_panel_header_and_follow_it(self):
@@ -152,8 +154,9 @@ class LayoutHostTests(unittest.TestCase):
         self.app.processEvents()
         # Only Diff, History's other tab, and the collapsed Unstaged Files, Staged
         # Files and Commit: a commit is selected, so Commit Files is in their place.
+        # Worktrees is collapsed too: it has no worktrees to list (no reader here).
         self.assertEqual({pid for pid, p in self.host.panels.items() if not p.isVisible()},
-                         {"diff", "files", "staged", "commit"})
+                         {"diff", "files", "staged", "commit", "worktrees"})
 
     def test_header_changes_after_moving_out_of_tabs(self):
         self.host.apply(TABS)
@@ -174,14 +177,15 @@ class LayoutHostTests(unittest.TestCase):
         self.show()
         self.host.hide_panel("files")
         flush_deletes()
-        self.assertEqual(set(self.host.panels), {"controls", "branches", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
+        self.assertEqual(set(self.host.panels), {"controls", "branches", "worktrees", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
         self.assertEqual(set(self.host.hidden), {"files"})
         self.assertEqual(self.host.state().hidden, self.host.hidden)
 
         self.host.show_panel("files")
         self.assertEqual(self.host.hidden, {})
         sidebar = self.body().widget(0)
-        self.assertEqual([sidebar.widget(i).panel.panel_id for i in range(2)], ["branches", "files"])
+        self.assertEqual([sidebar.widget(i).panel.panel_id for i in range(3)],
+                         ["branches", "worktrees", "files"])
         self.assertEqual(len(changes), 3)  # apply, hide, show
 
     def test_the_last_panel_can_not_be_hidden(self):
@@ -423,6 +427,41 @@ class LayoutHostTests(unittest.TestCase):
         self.assertEqual(strip(read), strip(DEFAULT_LAYOUT))
         self.assertEqual(sum(read.children[1].sizes) + 1, 800)  # the 1px divider takes the rest
         self.assertEqual(sum(read.sizes) + 1, 600)
+
+
+class HeaderMenuHostTests(unittest.TestCase):
+    """The header menu in a split and in tabs (RZG-48, spec §6.2)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = qt_app()
+
+    def setUp(self):
+        self.ctx = make_panel_context()
+        self.host = LayoutHost(self.ctx)
+        self.host.resize(800, 600)
+        self.addCleanup(flush_deletes)
+        self.addCleanup(self.host.deleteLater)
+
+    def test_right_clicking_a_tab_shows_its_panel_s_actions(self):
+        self.host.apply(TABS)
+        history = self.host.panels["history"]
+        action = QAction("Sort by Date", history)
+        history.set_header_actions([action])
+        tabs = self.host.findChild(QTabWidget)
+        menu = tabs.menu_for(tabs.indexOf(history))
+        self.assertEqual(menu.actions(), [action])
+        self.assertIsNone(tabs.menu_for(tabs.indexOf(self.host.panels["files"])))
+        self.assertIsNone(tabs.menu_for(-1))
+
+    def test_a_press_on_the_button_starts_no_drag(self):
+        self.host.apply(SplitNode(H, (PanelNode("branches"), PanelNode("history"))))
+        history = self.host.panels["history"]
+        history.set_header_actions([QAction("One", history)])
+        frame = history.parentWidget()
+        self.assertIsInstance(frame, PanelFrame)
+        self.assertEqual(_drag_source(frame.header, QPoint(1, 1)), "history")
+        self.assertIsNone(_drag_source(frame.menu_button, QPoint(1, 1)))
 
 
 class DragDropTests(unittest.TestCase):

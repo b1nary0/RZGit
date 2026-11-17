@@ -29,6 +29,18 @@ class ColumnPrefsTests(unittest.TestCase):
     def test_nothing_hidden_by_default(self):
         self.assertEqual(ColumnPrefs().hidden("stash"), frozenset())
 
+    def test_columns_hidden_at_first_until_the_user_chooses(self):
+        """RZG-48: Worktrees' Branch and Path start hidden (spec §5.2)."""
+        default = frozenset({"Branch", "Path"})
+        prefs = ColumnPrefs(self.settings)
+        self.assertEqual(prefs.hidden("worktrees", default), default)
+        prefs.set_hidden("worktrees", "Branch", False, default)
+        self.assertEqual(prefs.hidden("worktrees", default), {"Path"})
+        prefs.set_hidden("worktrees", "Path", False, default)
+        self.assertEqual(prefs.hidden("worktrees", default), frozenset())  # none, kept
+        self.assertEqual(self.reopen().hidden("worktrees", default), frozenset())
+        self.assertEqual(self.settings.column_prefs, {"worktrees": {"hidden": []}})
+
     def test_hidden_columns_are_kept_per_panel(self):
         prefs = ColumnPrefs()
         prefs.set_hidden("stash", "Branch", True)

@@ -57,6 +57,20 @@ class AppActionsTests(unittest.TestCase):
         self.session.close()
         self.assertFalse(self.actions.refresh.isEnabled())
 
+    def test_worktrees_needs_a_repo_and_opening_a_worktree_is_asked_for(self):
+        self.assertFalse(self.actions.worktrees.isEnabled())
+        self.session.open(self.repo)
+        wait_idle(self.session)
+        self.assertTrue(self.actions.worktrees.isEnabled())
+        asked = []
+        self.actions.open_worktree_requested.connect(asked.append)
+        self.actions.request_open_worktree("/x/feature")
+        self.assertEqual(asked, ["/x/feature"])
+        here = []
+        self.actions.open_worktree_here_requested.connect(here.append)
+        self.actions.request_open_worktree_here("/x/other")
+        self.assertEqual((asked, here), (["/x/feature"], ["/x/other"]))
+
     def test_enabled_state_matches_a_session_opened_earlier(self):
         self.session.open(self.repo)
         wait_idle(self.session)

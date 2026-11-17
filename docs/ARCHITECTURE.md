@@ -67,8 +67,8 @@ into each other.
 src/rzgitclient/
   app.py                        composition root
   git/
-    git_models.py               Commit, Stash, Branch, FileStatus, FileDiff, Hunk, DiffLine
-    repo.py                     Repo: runs git, returns models; canonical_path
+    git_models.py               Commit, Stash, Branch, FileStatus, FileDiff, Hunk, DiffLine, Worktree, WorktreeState
+    repo.py                     Repo: runs git, returns models; canonical_path; worktree_state
   core/
     repo_session.py             RepoSession: the open repo, its data, git commands
     diff_request.py             DiffRequest, the size limit, load_diff (the worker side of diffs)
@@ -79,6 +79,7 @@ src/rzgitclient/
     selection.py                Selection: what the user has selected (commit, file)
     repo_watcher.py             RepoWatcher: refreshes the session when the repository changes on disk
     inotify_watcher.py          InotifyWatcher: Linux inotify on a QSocketNotifier (folders → named events)
+    worktree_reader.py          WorktreeReader: a repository's worktrees and their state, kept up to date
     app_settings.py             AppSettings: typed wrapper over QSettings (last_repo, layout, …)
   ui/
     main_window.py              MainWindow: thin shell (menus, status bar, LayoutHost)
@@ -106,6 +107,7 @@ src/rzgitclient/
       controls_panel.py         ControlsPanel: Open, Refresh, current branch (replaces the toolbar)
       branches_panel.py         BranchesPanel
       stash_panel.py            StashPanel: the stashes; apply, pop and drop them
+      worktrees_panel.py        WorktreesPanel: the repository's worktrees and their state; open one
       history_panel.py          HistoryPanel
       history_model.py          HistoryModel: the commit table's Qt model, paged
       files_panel.py            FilesPanel: "Unstaged Files"
@@ -447,6 +449,7 @@ class RepoSession(QObject):
 - **Reads write nothing.** Git runs with `GIT_OPTIONAL_LOCKS=0`, so `git status` doesn't
   refresh `.git/index` behind the app's back. **Why:** the watcher (§4.3) would see that
   write and refresh again, for ever.
+- **Worktrees** aren't a session part: each window's `WorktreeReader` reads them (§4.4).
 
 ### 4.3 RepoWatcher
 
@@ -580,6 +583,77 @@ Files row is `FileSelection(path, COMMIT, sha)`.
   the selected commit (a reload keeps every commit down to the oldest loaded, §4.1), so
   one missing from it is gone.
 
+### 4.4 WorktreeReader
+
+`WorktreeReader(QObject)` (`core/worktree_reader.py`, RZG-48) keeps the list of the
+worktrees of a window's repository and each one's state, for the Worktrees panel (§5.4).
+Each main window has one, made by `AppWindows` (§8.1) and passed in `PanelContext`. It
+follows the window's session, but it only reads, so it has a worker thread of its own,
+like the watcher's (§4.3): it can't clash with any window's session.
+
+```python
+class WorktreeReader(QObject):
+    worktrees_changed = Signal(object)      # tuple[Worktree, ...], the main worktree first
+    state_changed     = Signal(str, object) # path, WorktreeState | None
+    error_occurred    = Signal(str)         # listing failed (once per new error); the list is empty
+
+    def __init__(self, session: RepoSession, parent=None, *, delay_ms=300, max_delay_ms=2000)
+    def attach(self) -> None                # a panel shows the list: read it, and watch
+    def detach(self) -> None                # that panel is gone: stop
+    def refresh(self) -> None               # the list, then every worktree's state
+    def set_active(self, active: bool) -> None   # the app is active (app.py, like the watcher)
+    def shutdown(self) -> None
+    attached: bool
+    worktrees: tuple[Worktree, ...]
+    error: str | None                       # the last listing's error, if it failed
+    def state(self, path) -> WorktreeState | None   # None: not read yet, or missing
+    busy: bool                              # work queued or running, or a change waits
+```
+
+- **Only while it is used:** the Worktrees panel calls `attach()` when it is built and
+  `detach()` when it is deleted (hidden, §6.6). Detached, the reader reads nothing and
+  watches nothing, and forgets its list, so a hidden panel costs nothing. `refresh()`
+  does nothing while it is detached, or with no repository open.
+- **It follows the session:** on `repo_changed` it forgets the list, the states and the
+  watches (a generation counter drops results still on their way) and, if attached,
+  reads the new repository's. A worktree of the same repository is the same list, read
+  again.
+- **Listing:** `Repo.worktrees()` runs `git worktree list --porcelain -z` in the common
+  dir (`list_worktrees`), so it works even when this window's worktree is gone, and returns a
+  `Worktree` (`git_models.py`) for each, the main worktree first, as git lists them; a
+  bare main repository's entry is left out. A `Worktree` has `path` (canonical), `head`
+  (its commit; None before the first), `branch` (the short name; None when detached),
+  `main`, `locked` and `lock_reason`, and `missing`: git calls it prunable, or its folder
+  isn't there. `name` is the folder's name.
+- **State:** `worktree_state(path)` (`git/repo.py`) runs one `git status --porcelain=v2
+  --branch -z` in the worktree and returns a `WorktreeState`: `changed` (the files with
+  staged, unstaged or untracked changes, each once), `upstream` (its name, or None), and
+  `ahead` and `behind` (None without an upstream, or when it's gone). A missing
+  worktree's state isn't read: it stays None.
+- **When:** on `attach()`, when a repository opens, again when the app becomes active
+  after it wasn't (`set_active`), and after a change the watch sees. A job lists the worktrees,
+  emits `worktrees_changed` if the list changed, then reads the states one worktree at a
+  time and emits each one that changed. So a slow worktree doesn't hold the others back,
+  and the list fills in as they come. A refresh asked for while a job waits joins it;
+  one asked for while a job runs makes one more job after it. A worktree no longer
+  listed loses its state.
+- **What it watches** (an `InotifyWatcher` of its own), rebuilt after each listing:
+  - the common dir: its `HEAD`, `index` and `packed-refs`, and `worktrees/` appearing;
+  - `worktrees/`, for worktrees added or removed, and each `worktrees/<name>/`, a linked
+    worktree's own git dir (its `HEAD`, `index`, `locked`); the worktree it belongs to
+    is read from its `gitdir` file;
+  - every folder under `refs/`.
+- **What a change reads again:** a linked worktree's git dir → the list and that
+  worktree's state; the common dir's `HEAD` or `index` → the list and the main
+  worktree's; `refs/`, `packed-refs` or `worktrees/` itself → the list and every state.
+  `*.lock` files and anything else change nothing. Changes are merged as the watcher's
+  are: sent 300 ms after the last one, at most 2 s after the first.
+- **Not live:** unstaged edits change no git dir, and a worktree's folder deleted outside
+  git changes none either. Both show on the next activation (RZG-42, decision 8).
+  Without inotify, only opening and activation read anything.
+- **Shutdown** (the window closing) drops queued work and waits for the running git
+  command; results that arrive after it are dropped.
+
 ## 5. Panels
 
 ### 5.1 Panel and PanelContext
@@ -593,6 +667,7 @@ class PanelContext:
     actions: AppActions
     drafts: CommitDrafts                           # the Commit panel's unfinished messages
     columns: ColumnPrefs                           # each panel's column choices (ColumnHeader)
+    worktrees: WorktreeReader | None = None        # the window's worktree reader (§4.4)
 
 class Panel(QWidget):
     panel_id: ClassVar[str]                        # stable, saved in layouts: "history"
@@ -605,6 +680,7 @@ class Panel(QWidget):
     header_changed = Signal(str)                   # emitted by set_header()
     activate_requested = Signal()                  # emitted by request_activation()
     collapsed_changed = Signal(bool)               # emitted by set_collapsed()
+    header_actions_changed = Signal()              # emitted by set_header_actions()
 
     def __init__(self, ctx: PanelContext, parent=None): ...   # final: panels don't override it
     def _setup(self) -> None: ...                         # the panel builds its widgets here
@@ -614,7 +690,17 @@ class Panel(QWidget):
     def request_activation(self) -> None: ...             # "bring me to the front" (a tab)
     collapsed: bool                                       # read-only; False until set_collapsed()
     def set_collapsed(self, collapsed: bool) -> None: ... # "nothing to show here now"; emits on change
+    header_actions: tuple[QAction, ...]                   # read-only; () until set_header_actions()
+    def set_header_actions(self, actions) -> None: ...    # the header menu's; emits on change
 ```
+
+**The header menu** (RZG-48): `header_actions` are the panel's commands for the panel as a
+whole: Open and Refresh in Worktrees, later Prune Missing Worktrees… (RZG-49) and a sort
+order (RZG-43). The layout shows them (§6.2): a **⋯** button at the right of the section
+header in a split, and the menu of the panel's tab when it is right-clicked in a tab
+group. A panel with none shows no button and no menu. The panel owns its actions (they
+are its children, or come from `ctx.actions`) and keeps their enabled state; the layout
+adds none of its own.
 
 `set_collapsed(True)` asks the layout to give the panel's space to its neighbours for now,
 without hiding it (§6.2): the panel stays in the tree, View → Panels still shows it
@@ -716,6 +802,10 @@ theme's `column_header_*` tokens (§7.1); the owning panel passes the theme on i
   columns. The first column (the main one: Subject, Message, Name) is always shown, so
   its entry is disabled. The choice is saved per panel in `ctx.columns` (`ColumnPrefs`,
   §6.3) and applied whenever the list's columns or labels are (re)created.
+- **Hidden at first** (RZG-48): a panel can name columns that start hidden
+  (`ColumnHeader(..., hidden_by_default=...)`: Worktrees' Branch and Path). They are
+  hidden until the user shows them; once the user changes any column of that panel, its
+  own choice is kept, even "none hidden".
 
 **Column widths** (RZG-40), the same in every panel with labels, kept by `ColumnHeader`:
 - **Always the full width.** The columns fill the list's width exactly: the first
@@ -748,10 +838,11 @@ theme's `column_header_*` tokens (§7.1); the owning panel passes the theme on i
 
 `panels/panel_registry.py` has an explicit `PANEL_TYPES = (ControlsPanel, BranchesPanel,
 HistoryPanel, FilesPanel, StagedPanel, DiffPanel, CommitPanel, CommitDetailsPanel,
-CommitFilesPanel, StashPanel)` and a `panel_type(panel_id)` lookup that raises `KeyError` for an unknown id.
+CommitFilesPanel, StashPanel, WorktreesPanel)` and a `panel_type(panel_id)` lookup that raises `KeyError` for an unknown id.
 **Why explicit:** no import-time side effects or decorator magic, and one place to see
 every panel. The lookup table is built at import by `index_panel_types()`, which raises
 `ValueError` on a duplicate id, so a clash fails at startup and in every test run.
+`WorktreesPanel` is the last of them.
 
 ### 5.4 Panels
 
@@ -770,6 +861,7 @@ The first three are extracted from the original `main_window.py` with the same b
 | StagedPanel | `staged` | sidebar | "Staged Files": the index's changes; collapsed when empty | `selection.select()`; unstages |
 | DiffPanel | `diff` | content | the diff of `selection.file`, unified or side by side | stages, unstages and discards hunks and lines |
 | CommitPanel | `commit` | sidebar | the commit message being written | commits the staged changes |
+| WorktreesPanel | `worktrees` | sidebar | "Worktrees": each worktree's name, state and ahead/behind (branch and path on request); collapsed with only one worktree | opens a worktree, through `actions.request_open_worktree` and `request_open_worktree_here` |
 
 **Branches** (BranchesPanel, RZG-35) is where branches are worked with. It never runs
 git or shows a dialog: it asks `actions.request_branch(op, name)` (§8), and the list
@@ -783,6 +875,39 @@ follows the session.
   current branch, or "HEAD" when detached. On the current branch, Switch, Delete, Merge
   and Rebase are disabled and say why: "(current branch)". The "(no commits)" row and
   the empty space below the list have no menu.
+
+**Worktrees** (WorktreesPanel, RZG-48), below Branches, lists `ctx.worktrees.worktrees`,
+the main worktree first, in labelled columns (§5.2): **Name** (the main column),
+**State** and **↑↓**, and **Branch** and **Path**, which start hidden (right-click the labels
+to show them). Branch, ↑↓ and path are muted (`text_muted`). The other columns fit their
+text, the path up to about 48 characters (shown with `~` for the home folder, elided in
+the middle), so the name keeps room. A row's tooltip gives its path and branch whatever
+is shown. The header counts them ("Worktrees (3)"). With no reader, or none listed, the
+list says "No worktrees"; when listing failed, it says why instead. Like Stashes, it never
+runs git or shows a dialog.
+- **Its reader:** the panel attaches to `ctx.worktrees` when it is built and detaches
+  when it is deleted (§4.4).
+- **Collapsed** (§5.1) while the repository has only its main worktree (or none is open),
+  so it takes no space until there is a second one. A failed listing isn't collapsed: it
+  shows why. Like Staged Files, it builds its list the first time it isn't collapsed
+  (about 10 ms of startup otherwise).
+- **Branch:** its name, "detached at *sha*" (8 characters), or "(no commits)".
+- **State:** "…" until read, "clean", "1 changed file", "3 changed files", or "missing
+  folder"; a locked worktree adds " · locked", and its tooltip gives the reason.
+- **↑↓:** `↑2 ↓1`, leaving out a count of 0, so a branch even with its upstream, or with
+  none, shows nothing. The tooltip names the upstream ("2 ahead of, 1 behind
+  origin/main", "up to date with origin/main", "no upstream").
+- **This window's worktree** (the one `ctx.session` shows) is in bold, and its tooltip
+  says "(this window)".
+- **Open:** double-clicking a row, Enter, or **Open** in the header menu asks
+  `ctx.actions.request_open_worktree(path)` (§8): a main window of its own. Open acts on
+  the selected row: it is disabled with none selected and for a missing worktree, and
+  double-clicking a missing one does nothing. **Refresh** in the header menu calls
+  `ctx.worktrees.refresh()`.
+- **Right-click** a worktree for **Open in New Window** (as Open) and **Open in This
+  Window** (`ctx.actions.request_open_worktree_here(path)`). Open in This Window is
+  disabled on this window's own worktree; both are disabled on a missing one.
+- The selection is kept by path through refreshes.
 
 **Stashes** (StashPanel, RZG-36) lists `session.stashes`, newest first, in three
 labelled columns: **Message**, **Branch** and **Age** ("now", "5 min", "3 h", "2 days", "3 weeks",
@@ -1134,15 +1259,16 @@ class LayoutState: root: LayoutNode; hidden: Mapping[str, Anchor] = {}   # what'
 has the Controls panel across the top, above the arrangement described. In every preset,
 History and Diff are tabs of one group, with History current, and Staged Files, Commit,
 Commit Details and Commit Files are directly below Unstaged Files (`files`), in that order:
-- **Standard** (`DEFAULT_LAYOUT`): Branches, Unstaged Files, Staged Files, Commit,
-  Commit Details, Commit Files and Stashes stacked in a left sidebar, History and Diff on
-  the right: `Split(V, [controls, Split(H, [Split(V, [branches, files, staged, commit,
-  commit_details, commit_files, stash], sizes=(180, 220, 120, 160, 0, 0, 170)),
-  Tabs([history, diff])], sizes=(220, 880))])`. Commit Details' and Commit Files' sizes are 0 in every
+- **Standard** (`DEFAULT_LAYOUT`): Branches, Worktrees, Unstaged Files, Staged Files,
+  Commit, Commit Details, Commit Files and Stashes stacked in a left sidebar, History and
+  Diff on the right: `Split(V, [controls, Split(H, [Split(V, [branches, worktrees, files,
+  staged, commit, commit_details, commit_files, stash], sizes=(180, 140, 220, 120, 160, 0,
+  0, 170)), Tabs([history, diff])], sizes=(220, 880))])`. Commit Details' and Commit Files' sizes are 0 in every
   preset: they have no space of their own (§6.2, swaps).
-- **Sidebar Tabs:** Branches, Unstaged Files and Stashes as tabs on the left, Staged
+- **Sidebar Tabs:** Branches, Worktrees, Unstaged Files and Stashes as tabs on the left, Staged
   Files and Commit below the tabs; History and Diff on the right.
-- **Stacked:** History and Diff across the top; below, Branches with Stashes below it,
+- **Stacked:** History and Diff across the top; below, Branches with Worktrees and
+  Stashes below it,
   beside Unstaged Files, with Staged Files, Commit, Commit Details and Commit Files below
   it.
 
@@ -1199,6 +1325,12 @@ Commit Details and Commit Files are directly below Unstaged Files (`files`), in 
   or a drop elsewhere cancels (Qt's `QDrag`). The drop is applied after `QDrag.exec`
   returns, never inside it, because `apply` deletes the header or tab bar the drag
   started from.
+- **The header menu** (§5.1): in a split, `PanelFrame` puts a **⋯** `QToolButton`
+  (`Role.HEADER_MENU`: on the header's background, with the theme's hover) at the right
+  of the section header, inside it, so a press on it never starts a drag. It pops up a
+  menu of the panel's `header_actions`, follows `header_actions_changed`, and is made
+  the first time the panel has actions (most have none), hidden while it has none again. In a tab group, right-clicking a panel's tab shows a menu of
+  the same actions (`menu_for(index)`), and nothing when it has none.
 - An empty tree (everything dropped by `normalize`) shows an empty area. Falling back to
   `DEFAULT_LAYOUT` is the loader's job (§6.3).
 
@@ -1221,7 +1353,8 @@ in files of its own, owned by that feature: the commit drafts are kept by `Commi
 **Column choices** (`ColumnPrefs`, `core/column_prefs.py`, RZG-41, RZG-40) are
 app-wide, the same in every layout and repository, keyed by panel id and then by column
 label: `column_prefs` is JSON, `{"stash": {"hidden": ["Branch"], "widths": {"Age":
-60}}}`: the hidden columns and the widths the user dragged. Malformed entries are
+60}}}`: the hidden columns and the widths the user dragged. A panel with columns hidden
+at first (§5.2) keeps `"hidden": []` once the user shows them all. Malformed entries are
 dropped (logged). Each change is written at once.
 
 **Stored folder paths** (RZG-29) are canonical: `canonical_path(path)` (`git/repo.py`)
@@ -1240,7 +1373,7 @@ canonical parent of the common dir, when that is a `.git` folder). Otherwise
 
 **The last repository** (`last_repo`) is always a **main repository**: the main
 worktree's root (`Repo.main_root`), never a linked worktree, so a restart opens the
-repository, and the Worktrees window is the way back to a worktree. A window sets it
+repository, and the Worktrees panel is the way back to a worktree. A window sets it
 when it opens a repository and when it becomes the active window, so with several
 windows it's the repository of the one focused last.
 
@@ -1437,7 +1570,8 @@ def colour_blind_theme(base: AppTheme) -> AppTheme   # LIGHT_THEME → LIGHT_CB_
 `style_roles.py` defines `Surface` (SIDEBAR, CONTENT, CHROME) and `Role` (SECTION_HEADER,
 SEGMENT_HEADER for the header strip of a segment inside a panel (§5.2),
 PLACEHOLDER for a muted "nothing to show" message, DIFF_VIEW for the borderless diff text,
-HINT and HINT_WARNING for a small muted note and the same past a limit).
+HINT and HINT_WARNING for a small muted note and the same past a limit, HEADER_MENU for
+the ⋯ button of a section header's menu, §6.2).
 Widgets get them as Qt dynamic properties through `set_surface()` / `set_role()`, and the
 stylesheet targets those (`QWidget[surface="sidebar"]`). The theme decides what "sidebar"
 looks like; panels only say what they are.
@@ -1561,6 +1695,17 @@ Per-widget sheets are slow to apply and scatter the rules.
   is enabled with nothing staged. `actions.confirm_amend(last)` asks MainWindow's
   confirmer (`set_amend_confirmer`; True without one): for a pushed commit, "Amend a
   pushed commit?", saying the remote keeps the old one, with Cancel the default.
+- **Show Worktrees** (Ctrl+Shift+W, `actions.worktrees`, at the end of the Repository
+  menu; RZG-48) is enabled when a repository is open. MainWindow shows the Worktrees
+  panel if it is hidden (`layout_host.show_panel`, §6.6) and brings its tab to the front
+  (`request_activation`). While the repository has only one worktree the panel stays
+  collapsed (§5.4).
+- **Opening a worktree:** the Worktrees panel calls `actions.request_open_worktree(path)`,
+  which sends `open_worktree_requested`. MainWindow opens it with `open_in_window` (§8.1):
+  the window already showing it is raised, or a new one opens.
+  `actions.request_open_worktree_here(path)` (**Open in This Window**) sends
+  `open_worktree_here_requested`, and MainWindow opens it with `open_repo`: here, unless
+  another window shows it, which is raised instead.
 - **`MainWindow`** is a thin shell: menus built from `AppActions`, the status
   bar summary (from session signals: path · branch · commits · changed files), error dialogs (from `error_occurred`), and a
   `LayoutHost` as the central widget. The Open, Quit and Reset Layout handlers live here
@@ -1584,12 +1729,12 @@ The app can have several main windows open, each on its own repository or worktr
 
 - **Shared by every window:** `AppSettings`, `ThemeManager`, `CommitDrafts` (§5.4) and
   `ColumnPrefs` (§6.3): one of each, made by app.py and passed to `AppWindows`.
-  **Each window's own:** `RepoSession`, `RepoWatcher`, `Selection`, `AppActions`, its
-  `PanelContext` and its `MainWindow`. Staging, committing and switching in one window
+  **Each window's own:** `RepoSession`, `RepoWatcher`, `WorktreeReader`, `Selection`,
+  `AppActions`, its `PanelContext` and its `MainWindow`. Staging, committing and switching in one window
   never touch another, and each follows its own repository on disk (§4.3).
 - **One window per worktree:** a worktree root is shown in at most one window. Opening a
   worktree that a window already shows raises that window instead.
-- **API** (for the Worktrees window, RZG-48, and anything else that opens windows):
+- **API** (for the Worktrees panel, RZG-48, and anything else that opens windows):
 
   ```python
   class AppWindows(QObject):
@@ -1626,7 +1771,11 @@ The app can have several main windows open, each on its own repository or worktr
   down anything still open.
 - **A restart** brings back only the last repository (§6.3), not every window. A second
   `rzgitclient <path>` started while the app runs is a second process, as before.
-- Not yet: a Window menu, and which main window owns child windows (RZG-51).
+- **Each window's worktree reader** (`WorktreeReader`, §4.4) is one of its own objects,
+  like its watcher: made with it, told when the app is active, and shut down when it
+  closes.
+- Not yet: a Window menu, and a fuller rule for which main window owns child windows
+  (RZG-51).
 
 ## 9. Performance stance
 

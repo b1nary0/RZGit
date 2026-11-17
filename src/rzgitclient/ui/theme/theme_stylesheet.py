@@ -172,6 +172,20 @@ QLabel[role="section-header"] {
     font-size: ${section_header_point_size}pt;
     padding: 7px 8px 4px 8px;
 }
+QToolButton[role="header-menu"] {
+    background: $header_bg;
+    color: $text_muted;
+    padding: 0px 6px;
+    font-weight: bold;
+}
+QToolButton[role="header-menu"]:hover {
+    background: $button_hover;
+    color: $text;
+}
+QToolButton[role="header-menu"]::menu-indicator {
+    image: none;
+    width: 0px;
+}
 QWidget[role="segment-header"] {
     background: $header_bg;
 }
