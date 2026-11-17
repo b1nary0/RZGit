@@ -92,6 +92,47 @@ class DiffPanelTests(unittest.TestCase):
         self.ctx.actions.side_by_side_diff.setChecked(False)
         self.assertEqual(self.page(), "unified")
 
+    def hint(self):
+        return "" if self.panel._hint.isHidden() else self.panel._hint.text()
+
+    def test_a_whole_added_or_deleted_file_shows_unified_with_a_hint(self):
+        """RZG-61 (spec §5.4): side by side, one half would be empty."""
+        (self.repo / "new.txt").write_text("one\ntwo\n")
+        (self.repo / "b.txt").unlink()
+        commit_file(self.repo, "c.txt", "c\n", "third")
+        sha = git(self.repo, "rev-parse", "HEAD").strip()
+        self.session.refresh()  # so new.txt is known as untracked
+        wait_idle(self.session)
+        side_by_side = self.ctx.actions.side_by_side_diff
+        side_by_side.setChecked(True)
+        for file, why in ((FileSelection("new.txt", FileSource.WORKTREE), "added"),
+                          (B, "deleted"),
+                          (FileSelection("c.txt", FileSource.COMMIT, sha), "added")):
+            with self.subTest(file=file):
+                self.select(file)
+                self.assertEqual(self.page(), "unified")
+                self.assertEqual(self.hint(), f"Unified: whole file {why}")
+                self.assertTrue(side_by_side.isChecked())
+        self.select(A)  # changes on both sides: side by side again
+        self.assertEqual(self.page(), "split")
+        self.assertEqual(self.hint(), "")
+        self.select(B)
+        side_by_side.setChecked(False)  # chosen unified: no hint needed
+        self.assertEqual(self.page(), "unified")
+        self.assertEqual(self.hint(), "")
+        side_by_side.setChecked(True)
+        self.assertEqual(self.hint(), "Unified: whole file deleted")
+        self.select(None)
+        self.assertEqual(self.hint(), "")
+
+    def test_a_staged_new_file_shows_unified(self):
+        (self.repo / "new.txt").write_text("one\n")
+        git(self.repo, "add", "new.txt")
+        self.ctx.actions.side_by_side_diff.setChecked(True)
+        self.select(FileSelection("new.txt", FileSource.INDEX))
+        self.assertEqual(self.page(), "unified")
+        self.assertEqual(self.hint(), "Unified: whole file added")
+
     def test_both_views_highlight_changed_words(self):
         self.select(A)
         view = self.panel._unified

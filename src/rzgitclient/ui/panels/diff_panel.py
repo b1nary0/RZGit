@@ -25,6 +25,7 @@ from rzgitclient.ui.panels.diff_rows import (
     split_rows,
     unified_partners,
     unified_rows,
+    whole_file,
 )
 from rzgitclient.ui.panels.diff_view import DiffView, Numbers
 from rzgitclient.ui.panels.panel import Panel
@@ -46,6 +47,7 @@ class DiffPanel(Panel):
     title = "Diff"
 
     _path: QLabel
+    _hint: QLabel  # why a side-by-side diff shows unified
     _stack: QStackedWidget
     _message: QLabel
     _show_anyway: QPushButton
@@ -100,6 +102,10 @@ class DiffPanel(Panel):
         self._path.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         bar.addWidget(self._path, 1)
+        self._hint = QLabel()
+        set_role(self._hint, Role.HINT)
+        self._hint.hide()
+        bar.addWidget(self._hint)
         toggle = QToolButton()
         toggle.setDefaultAction(self.ctx.actions.side_by_side_diff)
         toggle.setAutoRaise(True)
@@ -217,7 +223,11 @@ class DiffPanel(Panel):
             return
         verb, why = self._patching()
         link = f"{verb} Hunk" if verb and not why else ""
-        if self.ctx.actions.side_by_side_diff.isChecked():
+        side_by_side = self.ctx.actions.side_by_side_diff.isChecked()
+        whole = whole_file(diff) if side_by_side else None
+        self._hint.setText(f"Unified: whole file {whole}" if whole else "")
+        self._hint.setVisible(bool(whole))
+        if side_by_side and not whole:
             left_rows, right_rows = split_rows(diff)
             left_partners, right_partners = split_partners(left_rows, right_rows)
             left, right = self._split_views()
@@ -307,6 +317,7 @@ class DiffPanel(Panel):
     def _show_message(self, text: str, show_anyway: bool = False) -> None:
         self._message.setText(text)
         self._show_anyway.setVisible(show_anyway)
+        self._hint.hide()
         self._stack.setCurrentWidget(self._message_page)
 
 

@@ -58,6 +58,22 @@ def unified_rows(diff: FileDiff) -> tuple[DiffRow, ...]:
     return tuple(rows)
 
 
+def whole_file(diff: FileDiff) -> str | None:
+    """"added" or "deleted" when ``diff`` adds or deletes the whole file, else None.
+
+    Told from the hunks alone, so it holds for any source: every hunk has only
+    added lines and an old start of 0, or only removed lines and a new start of 0.
+    """
+    if not diff.hunks:
+        return None
+    for kind, start, name in ((LineKind.ADDED, "old_start", "added"),
+                              (LineKind.REMOVED, "new_start", "deleted")):
+        if all(getattr(h, start) == 0 and h.lines and all(line.kind is kind for line in h.lines)
+               for h in diff.hunks):
+            return name
+    return None
+
+
 def split_rows(diff: FileDiff) -> tuple[tuple[DiffRow, ...], tuple[DiffRow, ...]]:
     """Old on the left, new on the right; both sides have the same number of rows.
 

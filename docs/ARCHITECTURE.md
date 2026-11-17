@@ -1109,6 +1109,14 @@ than rebuilding them.
   (old on the left, new on the right, with filler rows so the sides line up). The
   checkable **Side by Side Diff** action (§8) switches between them, from the View menu or
   the panel's own button.
+  - **A whole added or deleted file shows unified**, even with Side by Side Diff on: side
+    by side, one half would be empty. `whole_file(diff)` (`diff_rows.py`) tells it from the
+    diff itself: every hunk has only added lines and an old start of 0 (`"added"`), or only
+    removed lines and a new start of 0 (`"deleted"`). That covers untracked, staged,
+    commit and stash files alike. A partial add (lines appended) still shows side by side.
+    While this applies, a muted hint (`Role.HINT`) beside the toggle says "Unified: whole
+    file added" or "… deleted". The action stays checked; the next file with both sides
+    shows side by side again.
 - **Rows** come from `diff_rows.py`, plain Python tested without Qt: `unified_rows(diff)`
   and `split_rows(diff)` turn a `FileDiff` into `DiffRow`s (hunk header, context, added,
   removed, filler, note) with their line numbers. In side by side, a run of removed lines
@@ -1677,7 +1685,8 @@ Per-widget sheets are slow to apply and scatter the rules.
   The menu bar, context menus and the Controls panel all show the same objects.
   **Side by Side Diff** is checkable: the Diff panel follows its `toggled`. MainWindow sets
   it from `AppSettings.side_by_side_diff` before the panels are built, and saves it on close
-  with the layout, so panels never touch settings. **Show Files as Tree** works the same
+  with the layout, so panels never touch settings. The Diff panel may show a whole added or
+  deleted file unified while it is on (§5.4); that never unchecks or changes it. **Show Files as Tree** works the same
   way (`AppSettings.file_tree`, on by default): every `FileList` follows its `toggled`.
   Both are in the **View** menu.
 - **Theme** (View → Theme): **Light**, **Dark** and **System**, three checkable actions in

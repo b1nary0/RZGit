@@ -10,6 +10,7 @@ from rzgitclient.ui.panels.diff_rows import (
     split_rows,
     unified_partners,
     unified_rows,
+    whole_file,
     word_spans,
 )
 
@@ -76,6 +77,32 @@ class SplitRowsTests(unittest.TestCase):
         left, right = split_rows(diff)
         self.assertEqual([(l.text, r.text) for l, r in zip(left[1:], right[1:])],
                          [("", "a"), ("r", "b")])
+
+
+class WholeFileTests(unittest.TestCase):
+    """RZG-61: a whole added or deleted file shows unified (spec §5.4)."""
+
+    ADDED = FileDiff("n", (Hunk("@@ -0,0 +1,2 @@", 0, 1, (
+        DiffLine(A, None, 1, "a"), DiffLine(A, None, 2, "b"))),))
+    DELETED = FileDiff("d", (Hunk("@@ -1,2 +0,0 @@", 1, 0, (
+        DiffLine(R, 1, None, "a"), DiffLine(R, 2, None, "b"))),))
+
+    def test_a_whole_added_or_deleted_file(self):
+        self.assertEqual(whole_file(self.ADDED), "added")
+        self.assertEqual(whole_file(self.DELETED), "deleted")
+
+    def test_lines_appended_to_a_file_are_not_a_whole_file(self):
+        appended = FileDiff("f", (Hunk("@@ -2,0 +3,1 @@", 2, 3, (DiffLine(A, None, 3, "c"),)),))
+        self.assertIsNone(whole_file(appended))
+        cut = FileDiff("f", (Hunk("@@ -3,1 +2,0 @@", 3, 2, (DiffLine(R, 3, None, "c"),)),))
+        self.assertIsNone(whole_file(cut))
+
+    def test_a_diff_with_both_sides_or_no_hunks(self):
+        self.assertIsNone(whole_file(DIFF))
+        self.assertIsNone(whole_file(FileDiff("e")))
+        mixed = FileDiff("m", (Hunk("@@ -0,0 +1,2 @@", 0, 1, (
+            DiffLine(A, None, 1, "a"), DiffLine(R, 1, None, "b"))),))
+        self.assertIsNone(whole_file(mixed))
 
 
 if __name__ == "__main__":
