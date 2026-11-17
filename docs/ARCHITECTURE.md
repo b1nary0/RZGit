@@ -1529,8 +1529,8 @@ never disappears. Each area holds a free tree of splits and tab groups, the
   The preset chooses the arrangement; the user moves panels, not areas. `sizes` is the
   split between the Sidebar and the Main pane, Sidebar first (None: the preset's).
 - **Which area:** `state.area_of(panel_id) -> Area | None` (None: hidden or unknown), and
-  `LayoutHost.area_of` for what's on screen. RZG-55 asks it ("is History on the Main
-  pane?").
+  `LayoutHost.area_of` for what's on screen. A window opening asks it ("is History on
+  the Main pane?", §6.3).
 - **Default area:** the area a panel has in `DEFAULT_LAYOUT` (`default_area(panel_id)`,
   `layout_presets.py`). Panels don't declare one.
 - **Surfaces follow the area** (§7.2): Controls is on `CHROME`, the Sidebar on `SIDEBAR`,
@@ -1539,7 +1539,9 @@ never disappears. Each area holds a free tree of splits and tab groups, the
 - **Edits of a whole state** are `LayoutState` methods, each returning a new state:
   `normalized(known_ids)`, `hide(id)`, `show(id, fallback)`, `move(id, target, zone)`
   (beside a panel, in the target's area), `move_to_area(id, area)` (into an empty area,
-  which the panel then fills) and `insert(id, anchor, fallback)`. They keep every area,
+  which the panel then fills), `insert(id, anchor, fallback)` and
+  `with_current_tab(id)` (its tab group's current tab is that panel; the state itself
+  when it isn't in a tab group, or is already current). They keep every area,
   so the Main pane stays when its last panel leaves.
 - **Controls holds only the Controls panel:** it can't be moved (§6.2), and the Controls
   area is never a drop target.
@@ -1777,6 +1779,20 @@ by `restore_layout`), before the steps above:
   neighbours is in that area; otherwise it's dropped, and showing the panel uses its
   default place.
 - The migrated layout is written as version 3 the next time it's saved.
+
+**Windows open on History** (RZG-55). As a window is built, after `restore_layout`,
+`MainWindow._build_ui` applies one rule: if History is on the Main pane
+(`area_of("history") is Area.MAIN`), its tab group opens on History
+(`with_current_tab("history")`), whatever tab was current when the layout was saved.
+So a window closed with Diff in front doesn't open on an empty Diff.
+- It holds for every window as it's built: the first at startup and every one
+  `AppWindows.new_window` spawns (New Window, Open Repository in New Window, a worktree
+  opened in a new window). A window that already exists keeps its tabs: opening a
+  repository in it, or raising it because it already shows that repository.
+- Only History's group, and only on the Main pane. History in the Sidebar, alone, or
+  hidden: the saved tabs stand. Other tab groups always keep their saved current tab.
+- The current tab is still saved as it is, and applying a layout to an open window
+  (View → Layout, Reset Layout) shows it as saved.
 
 **View → Reset Layout** applies `DEFAULT_LAYOUT` at once, showing every panel.
 

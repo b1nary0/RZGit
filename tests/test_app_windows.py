@@ -12,6 +12,8 @@ from rzgitclient.core.column_prefs import ColumnPrefs
 from rzgitclient.core.commit_drafts import CommitDrafts
 from rzgitclient.ui.app_actions import WorktreeOp
 from rzgitclient.ui.app_windows import AppWindows
+from rzgitclient.ui.layout.layout_model import Area, to_dict
+from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
 from rzgitclient.ui.worktree_dialogs import REMOVE, NewWorktree
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
 from rzgitclient.ui.theme.theme_manager import ThemeManager, ThemeMode
@@ -205,6 +207,24 @@ class AppWindowsTests(unittest.TestCase):
         self.assertIsNot(a, b)
         self.assertEqual(b.session.repo.root, self.two)
         self.assertIs(b.open_in_window(self.one), a)
+
+    # ---- windows open on History (RZG-55) ------------------------------------
+
+    def main_tabs(self, window):
+        return window.layout_host.state().tree(Area.MAIN).children[0]
+
+    def test_a_spawned_window_opens_on_history_and_an_open_one_keeps_its_tabs(self):
+        self.settings.layout = to_dict(DEFAULT_LAYOUT.with_current_tab("diff"))
+        a = self.open(self.one)
+        self.assertEqual(self.main_tabs(a).current, 0)  # History
+        a.layout_host.apply(a.layout_host.state().with_current_tab("diff"))
+        b = self.open(self.two)  # spawned: from the same settings
+        self.assertEqual(self.main_tabs(b).current, 0)
+        self.assertIs(self.open(self.one), a)  # raised, not built
+        self.assertEqual(self.main_tabs(a).current, 1)
+        a.session.open(self.repo("three"))  # a repository opened in it
+        wait_idle(a.session)
+        self.assertEqual(self.main_tabs(a).current, 1)
 
     # ---- File → Open Repository in New Window… (RZG-52) -------------------------
 

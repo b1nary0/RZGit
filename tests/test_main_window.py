@@ -459,6 +459,51 @@ class MainWindowTests(unittest.TestCase):
         self.quit(third)
         self.assertIsNone(AppSettings(self.settings_path).layout_preset)
 
+    # ---- windows open on History (RZG-55) ------------------------------------
+
+    def tabs_of(self, window, panel_id):
+        """The tab group holding ``panel_id``, on screen."""
+        state = window.layout_host.state()
+        nodes = [state.tree(state.area_of(panel_id))]
+        while nodes:
+            node = nodes.pop()
+            if isinstance(node, TabsNode) and PanelNode(panel_id) in node.children:
+                return node
+            nodes.extend(getattr(node, "children", ()))
+        return None
+
+    def start_with(self, state):
+        settings = AppSettings(self.settings_path)
+        settings.layout, settings.layout_preset = to_dict(state), None
+        settings.sync()
+        return self.start()
+
+    def test_a_window_opens_on_history_when_it_is_on_the_main_pane(self):
+        sidebar = TabsNode((PanelNode("branches"), PanelNode("worktrees"), PanelNode("files"),
+                            PanelNode("stash")), current=2)
+        saved = DEFAULT_LAYOUT.with_tree(Area.SIDEBAR, sidebar).with_current_tab("diff")
+        window = self.start_with(saved)
+        self.assertEqual(self.tabs_of(window, "history"),
+                         TabsNode((PanelNode("history"), PanelNode("diff")), current=0))
+        self.assertTrue(window.layout_host.panels["history"].isVisible())
+        self.assertEqual(self.tabs_of(window, "files").current, 2)  # other groups keep theirs
+        # Applying a layout to an open window shows it as saved.
+        window.layout_host.apply(saved)
+        self.assertEqual(window.layout_host.state().tree(Area.MAIN).children[0].current, 1)
+        self.quit(window)
+        self.assertEqual(  # and the current tab is saved as it is
+            AppSettings(self.settings_path).layout["areas"]["main"]["children"][0]["current"], 1)
+
+    def test_history_elsewhere_keeps_the_saved_tab(self):
+        sidebar = TabsNode((PanelNode("branches"), PanelNode("history")), current=0)
+        main = TabsNode((PanelNode("diff"), PanelNode("commit_details")), current=1)
+        saved = LayoutState({Area.CONTROLS: PanelNode("controls"), Area.SIDEBAR: sidebar,
+                             Area.MAIN: main})
+        window = self.start_with(saved)
+        self.assertEqual(window.layout_host.area_of("history"), Area.SIDEBAR)
+        self.assertEqual(self.tabs_of(window, "history").current, 0)  # Branches, not History
+        self.assertEqual(self.tabs_of(window, "diff").current, 1)
+
     def test_whole_file_and_hunk_headers_are_remembered(self):
         window = self.start()
         actions = window.ctx.actions

@@ -156,6 +156,24 @@ class LayoutState:
         return state.with_tree(area, insert_panel(self.areas[area], panel_id, None,
                                                   make_current=make_current))
 
+    def with_current_tab(self, panel_id: str) -> LayoutState:
+        """With ``panel_id`` the current tab of its tab group; ``self`` when it
+        isn't in one, or is already current."""
+        area = self.area_of(panel_id)
+        if area is None:
+            return self
+        tree = self.areas[area]
+        assert tree is not None
+        path = _path(tree, panel_id)
+        assert path is not None
+        if not path:
+            return self
+        group = _at(tree, path[:-1])
+        if not isinstance(group, TabsNode) or group.current == path[-1]:
+            return self
+        return self.with_tree(area, _replace(tree, path[:-1],
+                                             TabsNode(group.children, path[-1])))
+
     def move(self, panel_id: str, target: str, zone: DropZone) -> LayoutState:
         """With ``panel_id`` moved to ``target``'s ``zone``, in ``target``'s area
         (spec §6.1, §6.2). Returns ``self`` when nothing would change."""

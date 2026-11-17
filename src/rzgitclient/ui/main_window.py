@@ -15,9 +15,10 @@ from rzgitclient.ui.app_actions import HunkHeaders
 from rzgitclient.ui.branch_dialogs import BranchDialogs
 from rzgitclient.ui.layout.layout_host import LayoutHost
 from rzgitclient.ui.layout.layout_menu import LayoutMenu
-from rzgitclient.ui.layout.layout_model import to_dict
+from rzgitclient.ui.layout.layout_model import Area, to_dict
 from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT, matching_preset, restore_layout
 from rzgitclient.ui.layout.panels_menu import PanelsMenu
+from rzgitclient.ui.panels.history_panel import HistoryPanel
 from rzgitclient.ui.panels.panel import PanelContext
 from rzgitclient.ui.panels.worktrees_panel import WorktreesPanel
 from rzgitclient.ui.stash_dialogs import StashDialogs
@@ -132,7 +133,10 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         self.layout_host = LayoutHost(self.ctx)
         settings = self.settings
-        self.layout_host.apply(restore_layout(settings.layout, settings.layout_preset))
+        state = restore_layout(settings.layout, settings.layout_preset)
+        if state.area_of(HistoryPanel.panel_id) is Area.MAIN:  # opens on History (§6.3)
+            state = state.with_current_tab(HistoryPanel.panel_id)
+        self.layout_host.apply(state)
         self.setCentralWidget(self.layout_host)
         self.statusBar().showMessage("No repository open")
         # Beside the summary, not replacing it.

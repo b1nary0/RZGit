@@ -314,6 +314,21 @@ class AreaStateTests(unittest.TestCase):
         self.assertIs(full.move_to_area("a", Area.MAIN), full)  # not empty
         self.assertIs(full.move_to_area("gone", Area.CONTROLS), full)
 
+    def test_with_current_tab_brings_the_panel_to_the_front_of_its_group(self):
+        s = state(TabsNode((A, B), current=1),
+                  SplitNode(V, (TabsNode((C, X), current=1), PanelNode("d"))))
+        front = s.with_current_tab("c")
+        self.assertEqual(front.tree(Area.MAIN),
+                         SplitNode(V, (TabsNode((C, X), current=0), PanelNode("d"))))
+        self.assertEqual(front.tree(Area.SIDEBAR), TabsNode((A, B), current=1))  # its own
+        self.assertEqual(s.with_current_tab("a").tree(Area.SIDEBAR), TabsNode((A, B)))
+
+    def test_with_current_tab_leaves_a_panel_in_no_group_or_in_front_alone(self):
+        s = state(TabsNode((A, B), current=1), C, hidden={"x": Anchor(("c",), V, False)})
+        for pid in ("b", "c", "x", "gone"):  # current, in no group, hidden, unknown
+            with self.subTest(pid):
+                self.assertIs(s.with_current_tab(pid), s)
+
     def test_flatten_is_the_old_single_tree(self):
         s = state(A, C, X, sizes=(30, 70))
         self.assertEqual(flatten(s), SplitNode(V, (X, SplitNode(H, (A, C), sizes=(30, 70)))))
