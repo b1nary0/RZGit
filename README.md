@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="src/rzgitclient/ui/assets/splash/splash-transparent_dark@2x.png">
+    <img src="src/rzgitclient/ui/assets/splash/splash-transparent_light@2x.png" alt="RZGit" width="640">
+  </picture>
+</p>
+
 # RZGitClient
 
 A Qt (PySide6) git client for Linux. It drives the `git` command-line tool,
