@@ -251,6 +251,41 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class GraphLaneTests(unittest.TestCase):
+    """History's branch graph lanes (RZG-58): lines that show, neighbours apart."""
+
+    def neighbours(self, lanes):
+        return [(lanes[i], lanes[(i + 1) % len(lanes)]) for i in range(len(lanes))]
+
+    def test_eight_valid_colours_in_every_theme(self):
+        for theme in ALL_THEMES:
+            self.assertEqual(len(theme.graph.lanes), 8, theme.name)
+            for colour in theme.graph.lanes:
+                self.assertRegex(colour, r"^#[0-9a-f]{6}$", theme.name)
+
+    def test_a_line_shows_on_every_row_background(self):
+        for theme in ALL_THEMES:
+            c = theme.colors
+            for colour in theme.graph.lanes:
+                with self.subTest(theme.name, colour=colour):
+                    self.assertGreaterEqual(contrast(colour, c.content_bg), 3)
+                    self.assertGreaterEqual(contrast(colour, c.row_alt_bg), 3)
+                    self.assertGreaterEqual(contrast(colour, c.content_selection), 2.5)
+
+    def test_neighbouring_colours_stay_apart(self):
+        for theme in THEMES:
+            for a, b in self.neighbours(theme.graph.lanes):
+                self.assertGreaterEqual(delta_e(a, b), 20, (theme.name, a, b))
+            self.assertEqual(len(set(theme.graph.lanes)), 8, theme.name)
+
+    def test_neighbouring_colours_stay_apart_under_every_kind_of_colour_vision(self):
+        for base, variant in VARIANTS:
+            self.assertNotEqual(variant.graph, base.graph)
+            for a, b in self.neighbours(variant.graph.lanes):
+                self.assertGreaterEqual(min_delta_e(a, b), 12, (variant.name, a, b))
+                self.assertGreaterEqual(delta_e(a, b), 20, (variant.name, a, b))
+
+
 class DarkThemeTests(unittest.TestCase):
     """The dark theme (RZG-32): its own colours, readable on its backgrounds."""
 

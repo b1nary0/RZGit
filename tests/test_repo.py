@@ -3,11 +3,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rzgitclient.git.git_models import Commit, DiffLine, DiffSource, FileStatus, LineKind
+from rzgitclient.git.git_models import (Commit, DiffLine, DiffSource, FileStatus, HistoryOrder,
+                                        LineKind)
 from rzgitclient.git.git_models import Worktree, WorktreeState
 from rzgitclient.git.repo import (GitError, Repo, canonical_path, parse_diff, parse_worktree_status,
                                   parse_worktrees, worktree_state)
-from tests.support import commit_file, git, make_repo
+from tests.support import commit_file, git, make_branched_repo, make_repo
 
 
 class CanonicalPathTests(unittest.TestCase):
@@ -135,6 +136,24 @@ class RepoTests(unittest.TestCase):
         self.assertEqual(repo.log(2, skip=5), [])
         self.assertEqual(repo.head_sha(), repo.log(1)[0].sha)
         self.assertEqual(repo.commit_count(), 5)
+
+    def test_log_reads_parents_first_parent_first(self):
+        repo = Repo(make_branched_repo(Path(self._tmp.name) / "branched"))
+        log = {c.subject: c for c in repo.log()}
+        self.assertEqual(log["merge"].parents, (log["m1"].sha, log["s2"].sha))
+        self.assertEqual(log["s1"].parents, (log["a"].sha,))
+        self.assertEqual(log["a"].parents, ())
+
+    def test_log_in_date_or_topological_order(self):
+        repo = Repo(make_branched_repo(Path(self._tmp.name) / "branched"))
+        date = [c.subject for c in repo.log()]
+        self.assertEqual(date, ["merge", "s2", "m1", "s1", "a"])  # the default
+        self.assertEqual([c.subject for c in repo.log(order=HistoryOrder.DATE)], date)
+        topo = [c.subject for c in repo.log(order=HistoryOrder.TOPO)]
+        self.assertNotEqual(topo, date)
+        self.assertEqual(abs(topo.index("s1") - topo.index("s2")), 1)  # a branch kept together
+        self.assertEqual([c.subject for c in repo.log(2, skip=2, order=HistoryOrder.TOPO)],
+                         topo[2:4])
 
     def test_detached_head(self):
         commit_file(self.path, "a.txt", "1", "first")

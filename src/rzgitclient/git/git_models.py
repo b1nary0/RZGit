@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 
@@ -13,10 +13,20 @@ class Commit:
     author: str
     date: datetime
     subject: str
+    # The parents' shas, first parent first (History's graph, spec §4.1). Keyword-only,
+    # so subclasses add positional fields after it.
+    parents: tuple[str, ...] = field(default=(), kw_only=True)
 
     @property
     def short_sha(self) -> str:
         return self.sha[:8]
+
+
+class HistoryOrder(StrEnum):
+    """The order History lists commits in (spec §4.1); the value is git log's option."""
+
+    DATE = "--date-order"
+    TOPO = "--topo-order"
 
 
 @dataclass(frozen=True)

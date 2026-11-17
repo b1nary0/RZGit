@@ -69,6 +69,11 @@ class AppSettingsTests(unittest.TestCase):
         self.settings.theme_mode = "purple"
         self.assertEqual(self.reopen().theme_mode, "system")
 
+    def test_topo_order_defaults_to_off_and_survives_a_reopen(self):
+        self.assertFalse(self.settings.topo_order)
+        self.settings.topo_order = True
+        self.assertTrue(self.reopen().topo_order)
+
     def test_file_tree_defaults_to_on_and_survives_a_reopen(self):
         self.assertTrue(self.settings.file_tree)
         self.settings.file_tree = False

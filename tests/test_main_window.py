@@ -10,7 +10,7 @@ from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.commit_drafts import CommitDrafts
 from rzgitclient.core.diff_patch import hunk_lines
 from rzgitclient.core.selection import FileSelection, FileSource
-from rzgitclient.git.git_models import DiffSource
+from rzgitclient.git.git_models import DiffSource, HistoryOrder
 from rzgitclient.git.repo import Repo
 from rzgitclient.ui.layout.layout_model import (
     LayoutState,
@@ -179,7 +179,8 @@ class MainWindowTests(unittest.TestCase):
         view = next(a.menu() for a in window.menuBar().actions() if a.text() == "&View")
         self.assertEqual([a.text() for a in view.actions()],
                          ["&Layout", "&Panels", "", "Show Files as &Tree",
-                          "&Side by Side Diff", "", "&Theme", "", "&Reset Layout"])
+                          "&Side by Side Diff", "&Topological Order", "", "&Theme", "",
+                          "&Reset Layout"])
 
     def test_the_theme_menu_switches_live_and_is_remembered(self):
         self.addCleanup(ThemeManager, self.app, LIGHT_THEME)  # leave the shared app light
@@ -447,6 +448,15 @@ class MainWindowTests(unittest.TestCase):
         window.ctx.actions.file_tree.setChecked(False)
         self.quit(window)
         self.assertFalse(self.start().ctx.actions.file_tree.isChecked())
+
+    def test_topological_order_is_remembered(self):
+        window = self.start()
+        self.assertFalse(window.ctx.actions.topo_order.isChecked())
+        window.ctx.actions.topo_order.setChecked(True)
+        self.quit(window)
+        again = self.start()
+        self.assertTrue(again.ctx.actions.topo_order.isChecked())
+        self.assertIs(again.session.history_order, HistoryOrder.TOPO)
 
     def test_discard_lines_asks_first(self):
         repo = make_repo(self.tmp / "repo")

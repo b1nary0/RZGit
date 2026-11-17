@@ -25,10 +25,10 @@ class ColumnHeaderTests(unittest.TestCase):
         self.prefs = ColumnPrefs()
         self.view, self.header = self.make_view()
 
-    def make_view(self) -> tuple[QTreeView, ColumnHeader]:
+    def make_view(self, **options) -> tuple[QTreeView, ColumnHeader]:
         view = QTreeView()
         self.addCleanup(view.deleteLater)
-        header = ColumnHeader("stash", self.prefs, LIGHT_THEME)
+        header = ColumnHeader("stash", self.prefs, LIGHT_THEME, **options)
         view.setHeader(header)
         model = QStandardItemModel(0, len(LABELS), view)
         model.setHorizontalHeaderLabels(LABELS)
@@ -102,6 +102,20 @@ class ColumnHeaderTests(unittest.TestCase):
         self.assertTrue(all(a.isCheckable() and a.isChecked() for a in actions))
         self.assertFalse(actions[0].isEnabled())
         self.assertTrue(actions[1].isEnabled())
+
+    def test_another_main_column_is_the_one_always_shown_and_taking_the_rest(self):
+        """History's graph comes before its main column, Subject (RZG-58)."""
+        _view, header = self.make_view(main_column=1)
+        actions = header.columns_menu().actions()[:len(LABELS)]
+        self.assertEqual([a.isEnabled() for a in actions], [True, False, True])
+        header.set_fitted(0, 50)
+        header.set_fitted(2, 60)
+        self.assertEqual(header.sectionSize(0), 50)
+        self.assertEqual(header.sectionSize(1), header.width() - 110)
+        header.set_column_shown("Message", False)
+        self.assertTrue(header.isSectionHidden(0))
+        header.set_column_shown("Branch", False)  # the main one: never hidden
+        self.assertFalse(header.isSectionHidden(1))
 
     def test_unchecking_a_column_hides_it_and_saves_the_choice(self):
         self.header.columns_menu().actions()[1].setChecked(False)

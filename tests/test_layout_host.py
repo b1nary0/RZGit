@@ -29,6 +29,7 @@ from rzgitclient.ui.layout.layout_model import (
 )
 from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
 from rzgitclient.ui.layout.panel_frame import PanelFrame
+from rzgitclient.ui.panels.history_model import SUBJECT_COLUMN
 from tests.support import commit_file, make_panel_context, make_repo, qt_app, wait_idle
 
 H, V = Orientation.HORIZONTAL, Orientation.VERTICAL
@@ -142,7 +143,7 @@ class LayoutHostTests(unittest.TestCase):
         self.host.apply(DEFAULT_LAYOUT)
         self.show()
         history = self.host.panels["history"]
-        history._view.setCurrentIndex(history._model.index(2, 0))  # row 0: Uncommitted
+        history._view.setCurrentIndex(history._model.index(2, SUBJECT_COLUMN))  # row 0: Uncommitted
 
         self.host.apply(TabsNode((PanelNode("files"), PanelNode("history")), current=1))
         flush_deletes()

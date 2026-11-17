@@ -98,6 +98,13 @@ _STATUS_CODES = {
 }
 
 
+@dataclass(frozen=True)
+class GraphColors:
+    """History's branch graph (RZG-58): the lane colours, taken in turn by new lanes."""
+
+    lanes: tuple[str, ...]
+
+
 class FontKind(StrEnum):
     """A kind of text with its own size; the value names its ThemeFonts field."""
 
@@ -144,6 +151,9 @@ class ThemeMetrics:
     scrollbar_width: int = 10
     row_padding: int = 2
     row_min_height: int = 18
+    graph_lane_width: int = 14  # History's branch graph (RZG-58)
+    graph_line_width: float = 1.6
+    graph_dot_radius: float = 3.5
 
 
 @dataclass(frozen=True)
@@ -151,6 +161,7 @@ class AppTheme:
     name: str
     colors: ThemeColors
     status: StatusColors
+    graph: GraphColors
     fonts: ThemeFonts = field(default_factory=ThemeFonts)
     metrics: ThemeMetrics = field(default_factory=ThemeMetrics)
     dark: bool = False  # the colour scheme Qt is told, so its own drawing matches (§7.3)
@@ -267,6 +278,9 @@ LIGHT_THEME = AppTheme(
         conflict="#d9822b",
         untracked="#3a9a9a",
     ),
+    graph=GraphColors(lanes=(
+        "#0969da", "#c4520a", "#1a7f37", "#8250df", "#cf222e", "#0a7f86", "#bf3989", "#8a6100",
+    )),
 )
 
 
@@ -333,6 +347,9 @@ DARK_THEME = AppTheme(
         conflict="#f0bf00",
         untracked="#2ebdc9",
     ),
+    graph=GraphColors(lanes=(
+        "#58a6ff", "#f0883e", "#3fb950", "#bc8cff", "#ff7b72", "#39c5cf", "#f778ba", "#d29922",
+    )),
 )
 
 
@@ -340,9 +357,10 @@ DARK_THEME = AppTheme(
 # apart swapped for blue and orange (Okabe–Ito) in place of green and red. Every other
 # token is the base's. Checked under simulated deuteranopia, protanopia and tritanopia.
 
-def _colour_blind_variant(base: AppTheme, status: StatusColors, **colors: str) -> AppTheme:
+def _colour_blind_variant(base: AppTheme, status: StatusColors, graph: GraphColors,
+                          **colors: str) -> AppTheme:
     return dataclasses.replace(base, name=f"{base.name}, colour-blind", status=status,
-                               colors=dataclasses.replace(base.colors, **colors))
+                               graph=graph, colors=dataclasses.replace(base.colors, **colors))
 
 
 LIGHT_CB_THEME = _colour_blind_variant(
@@ -357,6 +375,9 @@ LIGHT_CB_THEME = _colour_blind_variant(
         conflict="#7a1010",  # dark red: apart from gold and violet by lightness
         untracked="#007079",
     ),
+    GraphColors(lanes=(
+        "#0072b2", "#c75400", "#5a5a5a", "#b0428a", "#0b8a6c", "#8f6a00", "#3d4fd6", "#a03800",
+    )),
     warning="#b84c00",
     diff_added_bg="#c6e1fb",
     diff_added_word="#9fc8f2",
@@ -382,6 +403,9 @@ DARK_CB_THEME = _colour_blind_variant(
         conflict="#ff7a45",  # vermillion
         untracked="#2ebdc9",
     ),
+    GraphColors(lanes=(
+        "#56b4e9", "#e69f00", "#c8c8c8", "#e07ab8", "#2fbf9a", "#f0e442", "#8a9bff", "#ff7a45",
+    )),
     warning="#f0e442",
     diff_added_bg="#12364e",
     diff_added_word="#1d5479",

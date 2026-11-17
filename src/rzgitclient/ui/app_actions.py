@@ -14,7 +14,7 @@ from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import FileSource, Selection
-from rzgitclient.git.git_models import FileDiff, LastCommit, Stash
+from rzgitclient.git.git_models import FileDiff, HistoryOrder, LastCommit, Stash
 from rzgitclient.ui.theme.theme_manager import ThemeMode
 
 
@@ -85,6 +85,11 @@ class AppActions(QObject):
         self.file_tree = self._action("view-list-tree", "Show Files as &Tree")
         self.file_tree.setCheckable(True)
         self.file_tree.setChecked(True)
+        # History's order (spec §4.1): date order unless checked.
+        self.topo_order = self._action("view-sort", "&Topological Order")
+        self.topo_order.setCheckable(True)
+        self.topo_order.toggled.connect(lambda on: session.set_history_order(
+            HistoryOrder.TOPO if on else HistoryOrder.DATE))
         # View → Theme: one of three, checked by MainWindow (spec §8).
         self._theme_group = QActionGroup(self)
         self.theme_modes: dict[ThemeMode, QAction] = {}

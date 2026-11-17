@@ -7,6 +7,7 @@ from PySide6.QtGui import QKeySequence
 
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import FileSelection, FileSource, Selection
+from rzgitclient.git.git_models import HistoryOrder
 from rzgitclient.ui.app_actions import AppActions, BranchOp, WorktreeOp
 from rzgitclient.ui.theme.theme_manager import ThemeMode
 from tests.support import commit_file, git, make_repo, qt_app, wait_idle
@@ -34,6 +35,15 @@ class AppActionsTests(unittest.TestCase):
         a = self.actions
         return {name for name in ("stage", "unstage", "discard", "stage_all", "unstage_all")
                 if getattr(a, name).isEnabled()}
+
+    def test_topological_order_sets_the_sessions_order(self):
+        action = self.actions.topo_order
+        self.assertTrue(action.isCheckable())
+        self.assertFalse(action.isChecked())
+        action.setChecked(True)
+        self.assertIs(self.session.history_order, HistoryOrder.TOPO)
+        action.setChecked(False)
+        self.assertIs(self.session.history_order, HistoryOrder.DATE)
 
     def test_theme_modes_are_one_of_three(self):
         modes = self.actions.theme_modes

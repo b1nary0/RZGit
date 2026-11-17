@@ -67,7 +67,7 @@ into each other.
 src/rzgitclient/
   app.py                        composition root
   git/
-    git_models.py               Commit, Stash, Branch, FileStatus, FileDiff, Hunk, DiffLine, Worktree, WorktreeState
+    git_models.py               Commit, HistoryOrder, Stash, Branch, FileStatus, FileDiff, Hunk, DiffLine, Worktree, WorktreeState
     repo.py                     Repo: runs git, returns models; canonical_path; worktree_state
   core/
     repo_session.py             RepoSession: the open repo, its data, git commands
@@ -76,6 +76,7 @@ src/rzgitclient/
     git_commands.py             GitCommand, run_command (the worker side of commands: stage, commit, …)
     commit_drafts.py            CommitDrafts: the unfinished commit message of each repository (a file each)
     column_prefs.py             ColumnPrefs: each panel's column choices (hidden columns, widths)
+    commit_graph.py             CommitGraph, GraphRow: History's branch graph lanes (plain Python)
     selection.py                Selection: what the user has selected (commit, file)
     repo_watcher.py             RepoWatcher: refreshes the session when the repository changes on disk
     inotify_watcher.py          InotifyWatcher: Linux inotify on a QSocketNotifier (folders → named events)
@@ -94,7 +95,7 @@ src/rzgitclient/
       logo/                     mark + "RZGit"; _dark (for dark backgrounds) and _light files
       splash/                   splash images, solid and transparent; _dark and _light
     theme/
-      app_theme.py              AppTheme, ThemeColors, StatusColors, ThemeFonts, ThemeMetrics, LIGHT_THEME
+      app_theme.py              AppTheme, ThemeColors, StatusColors, GraphColors, ThemeFonts, ThemeMetrics, LIGHT_THEME
       theme_stylesheet.py       build_stylesheet(theme) -> str
       style_roles.py            Surface and Role enums (semantic style hooks)
       theme_manager.py          ThemeManager: current theme + theme_changed
@@ -111,6 +112,7 @@ src/rzgitclient/
       worktrees_panel.py        WorktreesPanel: the repository's worktrees and their state; open one
       history_panel.py          HistoryPanel
       history_model.py          HistoryModel: the commit table's Qt model, paged
+      graph_painter.py          GraphPainter: draws a row of History's branch graph
       files_panel.py            FilesPanel: "Unstaged Files"
       staged_panel.py           StagedPanel: "Staged Files"
       file_list.py              FileList: one source's changed files, the body of both
@@ -183,6 +185,7 @@ class RepoSession(QObject):
     def close(self) -> None
     def refresh(self, parts: Refresh = Refresh.ALL) -> None   # Flag: HEAD|BRANCHES|HISTORY|STATUS|STASHES|COUNT
     def load_more_history(self) -> None   # the next page of history, in the background
+    def set_history_order(self, order: HistoryOrder) -> None   # DATE or TOPO; reloads history
     def request_diff(self, file: FileSelection | None, full: bool = False) -> None
     def request_commit_files(self, sha: str | None) -> None   # the files a commit changed
     def request_commit_details(self, sha: str | None) -> None # its message, people, parents, refs
@@ -213,7 +216,8 @@ class RepoSession(QObject):
     commands_in_flight: tuple[GitCommand, ...]   # queued or running, until command_finished
 
     # Latest values, so a panel created later renders at once (read-only properties):
-    repo, head, head_sha, branches, history, status, stashes, commit_count, history_complete, diff_file, diff,
+    repo, head, head_sha, branches, history, history_order, status, stashes, commit_count, history_complete,
+    diff_file, diff,
     commit_files_sha, commit_files, commit_details_sha, commit_details, last_commit
 ```
 
@@ -253,6 +257,15 @@ class RepoSession(QObject):
   - `busy_changed(True)` when the first job is queued, `False` when the queue is empty. The
     window shows it in the status bar at once. Tests wait with `wait_idle()`.
 - **History loads in pages** of `HISTORY_PAGE` (500) commits, from `HEAD`.
+  - **Order and parents** (RZG-58): `Repo.log()` reads each commit's parents (`%P`, into
+    `Commit.parents`) for the branch graph (§5.4), and passes `--date-order` (the default)
+    or `--topo-order`, the session's `history_order` (`HistoryOrder.DATE` / `TOPO`,
+    `git_models.py`). Both keep every commit above its parents, which the graph needs; git's
+    default order doesn't when commit clocks are skewed. `--topo-order` keeps a branch's
+    commits together, so the graph has fewer lanes side by side; it is as fast as
+    `--date-order` with a commit-graph file, and reads the whole history first without
+    one. `set_history_order()` reloads the history from the top (same order: nothing).
+    The **Topological Order** action (§8) sets it; `AppSettings.topo_order` keeps it.
   - `history` holds every commit loaded so far; `history_complete` is True once the oldest
     commit is in it (and with no repo, so nothing asks for more).
   - `load_more_history()` queues the next page on the worker. It does nothing when history
@@ -826,7 +839,8 @@ theme's `column_header_*` tokens (§7.1); the owning panel passes the theme on i
   shortens its label: only a column made narrower than that does.
 - **Not clickable:** labels don't sort or select.
 - **Showing and hiding columns:** right-clicking the labels gives a checkable list of the
-  columns. The first column (the main one: Subject, Message, Name) is always shown, so
+  columns. The main column (Subject, Message, Name; the first, except in History,
+  whose first is the Graph, `ColumnHeader(main_column=...)`) is always shown, so
   its entry is disabled. The choice is saved per panel in `ctx.columns` (`ColumnPrefs`,
   §6.3) and applied whenever the list's columns or labels are (re)created.
 - **Hidden at first** (RZG-48): a panel can name columns that start hidden
@@ -1127,6 +1141,40 @@ theme when Qt asks, so a theme change is one `dataChanged`.
   session for the next page (§4.1). It watches its scroll bar rather than using Qt's
   `canFetchMore` / `fetchMore`, which Qt also calls while laying rows out, before they have
   a position, so it would load pages nobody scrolled to.
+- **The branch graph** (RZG-58) is the first column, **Graph**; Subject stays the main
+  column (`ColumnHeader(main_column=1)`, §5.2). A dot marks each commit in its lane, and
+  lines join it to its parents.
+  - **The layout is plain Python:** `CommitGraph` (`core/commit_graph.py`) turns the
+    commits, in order, into a `GraphRow` per commit: its lane, its colour, and the lines
+    through the row's top half (straight down: lanes into its dot, or passing by) and
+    bottom half (from its dot to its parents' lanes, or passing by). Each lane holds the
+    commit it waits for, and no two lanes wait for the same one. A commit takes the lane
+    waiting for it; a branch tip opens the leftmost free lane. Its first parent continues
+    in its lane, unless another lane already waits for that parent (a fork, seen from
+    below): then the two join at once, into the left one, as `git log --graph` does.
+    Another parent (a merge) joins the lane waiting for it, or opens the leftmost free
+    one. Lanes don't move sideways, and a free lane is reused. A new lane takes the next
+    of the theme's lane colours that no open lane has, and keeps it down to where it
+    ends. On RZE (2,422 commits) the graph is at most 6 lanes wide in date order and 33 in
+    topological order (a run of merges from one branch), as wide as git's own.
+  - **Built as it's drawn.** Rows are worked out when first asked for, and kept, so the
+    first page costs only the rows in view. An appended page adds commits to the same
+    `CommitGraph`, which carries on with its open lanes: rows already shown don't change.
+    A reset builds a new one.
+  - **Drawing:** the delegate draws the graph over the cell's stripe, hover and selection,
+    antialiased: straight lines down a lane, a short curve where a line changes lane,
+    and a dot at the commit. Uncommitted changes has a hollow dot above HEAD's, in its
+    lane, joined to it (in the pinned row too). The sizes are `graph_*` metrics and the
+    colours `graph.lanes` (§7.1).
+  - **Width:** the column fits the widest row in view (`set_fitted`, unless the user sized
+    it), up to `GRAPH_MAX_LANES` (8) lanes. A row with more lanes is cut off there and its
+    last lane fades out (a gradient to transparent, so nothing past it shows). The graph
+    is clipped to its cell, for a column made narrower.
+  - **Cost:** a graph cell that isn't selected, hovered or current skips the style's item
+    painting (it has no text, and the style draws no background for it), which costs more
+    than the graph; pens and brushes are made once per theme. A full repaint of History
+    on RZE costs about 19 ms against 16 ms without the graph (offscreen).
+  - History keeps commit order: it isn't sortable while the graph is shown (RZG-43).
 - **Updates:** an appended page inserts rows. Any other change resets the model; the panel
   then re-selects the same commit and keeps the same commit at the top of the view (or
   stays at the top, so new commits show).
@@ -1592,6 +1640,8 @@ class ThemeColors:   menubar_bg: str; toolbar_bg: str; tab_bg: str; header_bg: s
 class StatusColors:  modified, added, deleted, renamed, copied, type_changed, conflict, untracked: str
                      def for_code(self, code: str) -> str | None   # porcelain letter → colour; None if unknown
 @dataclass(frozen=True)
+class GraphColors:   lanes: tuple[str, ...]   # History's branch graph (RZG-58): 8 lane colours, used in turn
+@dataclass(frozen=True)
 class ThemeFonts:    default_point_size: float = 10; mono_family: str = "monospace"
                      ui_point_size, menu_point_size, status_bar_point_size, list_point_size,
                      column_header_point_size, tab_point_size, tooltip_point_size,
@@ -1600,10 +1650,11 @@ class ThemeFonts:    default_point_size: float = 10; mono_family: str = "monospa
                      def point_size(self, kind: FontKind) -> float   # its own size, else the default
 @dataclass(frozen=True)
 class ThemeMetrics:  splitter_width: int = 1; scrollbar_width: int = 10; row_padding: int = 2; row_min_height: int = 18
+                     graph_lane_width: int = 14; graph_line_width: float = 1.6; graph_dot_radius: float = 3.5
 
 @dataclass(frozen=True)
 class AppTheme:
-    name: str; colors: ThemeColors; status: StatusColors; fonts: ThemeFonts; metrics: ThemeMetrics
+    name: str; colors: ThemeColors; status: StatusColors; graph: GraphColors; fonts: ThemeFonts; metrics: ThemeMetrics
     dark: bool = False   # the colour scheme Qt is told (§7.3)
     def stylesheet(self) -> str     # generated from the tokens by theme_stylesheet.py
     def palette(self) -> QPalette
@@ -1633,9 +1684,13 @@ def colour_blind_theme(base: AppTheme) -> AppTheme   # LIGHT_THEME → LIGHT_CB_
   hovered label a step stronger, and the line under the row `border`. The separators are
   at least 1.5:1 on the label background, so a 1 px line shows: `border` in the light
   theme, a step lighter in the dark one.
+- **Graph lanes** (RZG-58): `graph.lanes` are 8 colours a lane takes in turn, so
+  neighbouring lanes differ. Each is at least 3:1 on the content background (a line
+  shows), and tests require a minimum ΔE between neighbours, under every simulated kind
+  of colour vision in the colour-blind variants. The stylesheet doesn't use them.
 - **Colour-blind variants** (RZG-33): `LIGHT_CB_THEME` and `DARK_CB_THEME` derive from
   their base with `dataclasses.replace`, so they share every token except those that tell
-  kinds apart: `status.*`, `diff_added*` / `diff_removed*`, `diff_line_button*` and
+  kinds apart: `status.*`, `graph.lanes`, `diff_added*` / `diff_removed*`, `diff_line_button*` and
   `warning`. Those use one palette built on blue and orange instead of green and red
   (Okabe–Ito): added is blue, deleted orange. Tests simulate deuteranopia, protanopia and
   tritanopia (Machado et al. 2009) and require a minimum ΔE between the pairs that must
@@ -1729,7 +1784,9 @@ Per-widget sheets are slow to apply and scatter the rules.
   with the layout, so panels never touch settings. The Diff panel may show a whole added or
   deleted file unified while it is on (§5.4); that never unchecks or changes it. **Show Files as Tree** works the same
   way (`AppSettings.file_tree`, on by default): every `FileList` follows its `toggled`.
-  Both are in the **View** menu.
+  Both are in the **View** menu. **Topological Order** (RZG-58, `AppSettings.topo_order`,
+  off by default) too: AppActions sets the session's `history_order` (§4.1) on `toggled`.
+  It is also in History's header menu.
 - **Theme** (View → Theme): **Light**, **Dark** and **System**, three checkable actions in
   one exclusive group (`AppActions.theme_modes`, by `ThemeMode`). MainWindow checks the
   current mode, calls `ctx.theme.set_mode` when one is triggered, and saves it on close
@@ -1918,6 +1975,7 @@ cheap to fix **later**, without paying for them now:
 |---|---|---|---|
 | git on the UI thread | large repos, network ops | **done:** one worker thread inside RepoSession (§4.1) | push-based signals (§4.1); panels never run git (§5.2) |
 | History rebuilds as item widgets | 10k+ commits | **done:** `QAbstractTableModel` + paging (§4.1, §5.4) | HistoryPanel is the only place that changes |
+| The branch graph's layout | 100k+ commits loaded | **done:** rows worked out as they're drawn, and kept; a page carries on from the last row (§5.4) | `CommitGraph` is plain Python, apart from the model |
 | Full rebuild on every refresh | frequent refreshes | granular signals, emitted only on change | §4.1 (done now: cheap, and the right semantics anyway) |
 | Layout changes recreating panels | layout switching | panel reuse in `LayoutHost.apply` | §6.2 (done now: needed to keep panel state anyway) |
 | Restyling | theme switch | one app-wide stylesheet | §7.3 |

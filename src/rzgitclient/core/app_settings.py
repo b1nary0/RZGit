@@ -27,6 +27,7 @@ _LAYOUT_PRESET = "layout_preset"
 _WINDOW_GEOMETRY = "window/geometry"
 _SIDE_BY_SIDE_DIFF = "diff/side_by_side"
 _FILE_TREE = "files/tree"
+_TOPO_ORDER = "history/topo_order"
 _THEME_MODE = "theme/mode"
 _COLOUR_BLIND = "theme/colour_blind"
 _COMMIT_DRAFTS = "commit/drafts"  # older versions only; moved to files
@@ -104,6 +105,15 @@ class AppSettings:
     @file_tree.setter
     def file_tree(self, on: bool) -> None:
         self._set(_FILE_TREE, bool(on))
+
+    @property
+    def topo_order(self) -> bool:
+        """Whether History lists commits in topological order (default: date order)."""
+        return self._settings.value(_TOPO_ORDER, False, bool)
+
+    @topo_order.setter
+    def topo_order(self, on: bool) -> None:
+        self._set(_TOPO_ORDER, bool(on))
 
     @property
     def theme_mode(self) -> str:

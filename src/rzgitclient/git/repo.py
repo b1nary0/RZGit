@@ -21,6 +21,7 @@ from rzgitclient.git.git_models import (
     DiffSource,
     FileDiff,
     FileStatus,
+    HistoryOrder,
     Hunk,
     LastCommit,
     LineKind,
@@ -180,21 +181,22 @@ class Repo:
             return 0
         return int(self.git("rev-list", "--count", "HEAD"))
 
-    def log(self, limit: int = 500, skip: int = 0) -> list[Commit]:
-        """Up to ``limit`` commits reachable from HEAD, newest first, after ``skip``."""
+    def log(self, limit: int = 500, skip: int = 0,
+            order: HistoryOrder = HistoryOrder.DATE) -> list[Commit]:
+        """Up to ``limit`` commits reachable from HEAD, after ``skip``, in ``order``
+        (newest first; every commit above its parents), with their parents."""
         if not self.has_commits():
             return []
-        fmt = "%H%x1f%an%x1f%aI%x1f%s%x1e"
-        out = self.git("log", f"--format={fmt}", f"-n{limit}", f"--skip={skip}")
+        fmt = "%H%x1f%P%x1f%an%x1f%aI%x1f%s%x1e"
+        out = self.git("log", str(order), f"--format={fmt}", f"-n{limit}", f"--skip={skip}")
         commits = []
         for record in out.split("\x1e"):
             record = record.strip("\n")
             if not record:
                 continue
-            sha, author, date, subject = record.split("\x1f", 3)
-            commits.append(
-                Commit(sha, author, datetime.fromisoformat(date), subject)
-            )
+            sha, parents, author, date, subject = record.split("\x1f", 4)
+            commits.append(Commit(sha, author, datetime.fromisoformat(date), subject,
+                                  parents=tuple(parents.split())))
         return commits
 
     def status(self) -> list[FileStatus]:

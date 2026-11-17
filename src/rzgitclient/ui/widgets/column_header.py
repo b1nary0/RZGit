@@ -7,7 +7,8 @@ its first letter and "..".
 
 Widths (RZG-40): the columns always fill the list's width exactly; its left
 and right edges are pinned. The panel fits the other columns to their contents
-(``fit``, ``set_fitted``) and the first, main column takes what they leave.
+(``fit``, ``set_fitted``) and the main column (the first, unless the panel
+names another) takes what they leave.
 Dragging a separator moves only the two columns beside it; the widths the
 user gives the other columns are kept, and saved per panel in
 ``ColumnPrefs``. Double-clicking a separator fits its column again; **Reset
@@ -31,7 +32,7 @@ from rzgitclient.ui.theme.app_theme import AppTheme
 SHORT_SUFFIX = ".."  # "Status" → "S.."
 PADDING_X, PADDING_Y = 6, 4  # around a label's text
 SEPARATOR_INSET = 0.2  # of the row's height, above and below a separator (60% drawn)
-MAIN_COLUMN = 0  # Subject, Message, Name: always shown; takes what the others leave
+MAIN_COLUMN = 0  # the default main column: always shown; takes what the others leave
 RESET_WIDTHS = "Reset Column Widths"
 
 
@@ -42,12 +43,16 @@ def short_label(label: str) -> str:
 
 class ColumnHeader(QHeaderView):
     """The labels of a list's columns, painted from ``theme``. ``panel_id`` keys
-    the columns' saved widths and the columns it hides in ``prefs``."""
+    the columns' saved widths and the columns it hides in ``prefs``. ``main_column``
+    (Subject, Message, Name) is always shown and takes what the others leave: the
+    first, except where another comes before it (History's graph)."""
 
     def __init__(self, panel_id: str, prefs: ColumnPrefs, theme: AppTheme,
-                 parent: QWidget | None = None, *, hidden_by_default: Iterable[str] = ()):
+                 parent: QWidget | None = None, *, hidden_by_default: Iterable[str] = (),
+                 main_column: int = MAIN_COLUMN):
         super().__init__(Qt.Orientation.Horizontal, parent)
         self.panel_id, self._prefs = panel_id, prefs
+        self.main_column = main_column
         self._hidden_by_default = frozenset(hidden_by_default)  # until the user chooses
         self._theme = theme
         self.hover_section = -1  # the label under the pointer
@@ -127,22 +132,22 @@ class ColumnHeader(QHeaderView):
         wanted width, the main column taking the rest. When even the main
         column's minimum doesn't fit, the others shrink for now, in proportion
         (their wanted widths are kept for when there is room again)."""
-        if self.count() <= MAIN_COLUMN:
+        if self.count() <= self.main_column:
             return
         minimum = self.minimumSectionSize()
-        others = {c: max(minimum, self._wanted(c)) for c in self._shown() if c != MAIN_COLUMN}
+        others = {c: max(minimum, self._wanted(c)) for c in self._shown() if c != self.main_column}
         room = self.width() - minimum
         total = sum(others.values())
         if total > room > 0:
             others = {c: max(minimum, w * room // total) for c, w in others.items()}
         for logical, width in others.items():
             self.resizeSection(logical, width)
-        self.resizeSection(MAIN_COLUMN, max(minimum, self.width() - sum(others.values())))
+        self.resizeSection(self.main_column, max(minimum, self.width() - sum(others.values())))
 
     def _set_user_width(self, logical: int, width: int) -> None:
         """Keep the user's ``width`` for ``logical`` (the main column has none: it
         takes the rest)."""
-        if logical != MAIN_COLUMN:
+        if logical != self.main_column:
             self._user[logical] = width
 
     def fit_column(self, left: int) -> None:
@@ -152,7 +157,7 @@ class ColumnHeader(QHeaderView):
         right = self._right_of(left)
         if right < 0:
             return
-        target, other = (left, right) if left != MAIN_COLUMN else (right, left)
+        target, other = (left, right) if left != self.main_column else (right, left)
         if target not in self._fitted:
             self.fit(target)
         fitted = self._fitted[target]
@@ -160,7 +165,7 @@ class ColumnHeader(QHeaderView):
         change = min(fitted - self.sectionSize(target), self.sectionSize(other) - minimum)
         self._user.pop(target, None)
         self._prefs.set_width(self.panel_id, self.label(target), None)
-        if other != MAIN_COLUMN:
+        if other != self.main_column:
             self._set_user_width(other, self.sectionSize(other) - change)
             self._prefs.set_width(self.panel_id, self.label(other), self._user[other])
         self.fill()
@@ -335,7 +340,7 @@ class ColumnHeader(QHeaderView):
         self._user.clear()
         for logical in range(self.count()):
             label = self.label(logical)
-            self.setSectionHidden(logical, logical != MAIN_COLUMN and label in hidden)
+            self.setSectionHidden(logical, logical != self.main_column and label in hidden)
             if label in widths:
                 self._set_user_width(logical, widths[label])
         self._update_minimum()
@@ -350,7 +355,7 @@ class ColumnHeader(QHeaderView):
             action = menu.addAction(label)
             action.setCheckable(True)
             action.setChecked(not self.isSectionHidden(logical))
-            if logical == MAIN_COLUMN:
+            if logical == self.main_column:
                 action.setEnabled(False)
             else:
                 action.toggled.connect(

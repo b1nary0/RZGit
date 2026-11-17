@@ -1,7 +1,8 @@
 """Uncommitted changes and the commit table; the selected row is
 ``selection.commit``, None for Uncommitted changes (spec §5.4). No row is
 selected while a stash is (the Stash panel's). Commits are striped, and
-Uncommitted changes stays pinned at the top while the table scrolls."""
+Uncommitted changes stays pinned at the top while the table scrolls. The first
+column is the branch graph (RZG-58), as wide as the widest row in view."""
 
 from __future__ import annotations
 
@@ -20,7 +21,9 @@ from PySide6.QtWidgets import (
 
 from rzgitclient.core.repo_session import HISTORY_PAGE
 from rzgitclient.git.git_models import Commit, Stash
-from rzgitclient.ui.panels.history_model import MUTED_COLUMNS, HistoryModel
+from rzgitclient.ui.panels.graph_painter import GraphPainter
+from rzgitclient.ui.panels.history_model import (GRAPH_COLUMN, MUTED_COLUMNS, SUBJECT_COLUMN,
+                                                 HistoryModel)
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.widgets.column_header import ColumnHeader
@@ -41,8 +44,11 @@ class HistoryPanel(Panel):
     def _setup(self) -> None:
         self._quiet = False  # True while a reset re-selects; selection isn't written
         self._model = HistoryModel(self.ctx.theme.current)
-        self._view = _HistoryView()
-        self._labels = ColumnHeader(self.panel_id, self.ctx.columns, self.ctx.theme.current)
+        self._graph = GraphPainter(self.ctx.theme.current)
+        self._graph_lanes = 0  # the lanes the graph column was last fitted to
+        self._view = _HistoryView(self._graph)
+        self._labels = ColumnHeader(self.panel_id, self.ctx.columns, self.ctx.theme.current,
+                                    main_column=SUBJECT_COLUMN)
         self._view.setHorizontalHeader(self._labels)
         self._view.setModel(self._model)
         layout = QVBoxLayout(self)
@@ -53,6 +59,10 @@ class HistoryPanel(Panel):
         bar = self._view.verticalScrollBar()
         bar.valueChanged.connect(self._load_more_near_the_end)
         bar.rangeChanged.connect(self._load_more_near_the_end)
+        bar.valueChanged.connect(self._fit_graph)
+        bar.rangeChanged.connect(self._fit_graph)  # also when the view's height changes
+        self._model.rowsInserted.connect(self._fit_graph)
+        self.set_header_actions([self.ctx.actions.topo_order])
         self.ctx.selection.commit_changed.connect(self._follow_selection)
         session = self.ctx.session
         session.history_changed.connect(self._render)
@@ -82,7 +92,7 @@ class HistoryPanel(Panel):
         """Select ``row`` without scrolling to it: the commit at the top decides the scroll."""
         auto = self._view.hasAutoScroll()
         self._view.setAutoScroll(False)
-        self._view.setCurrentIndex(self._model.index(row, 0))
+        self._view.setCurrentIndex(self._model.index(row, SUBJECT_COLUMN))
         self._view.setAutoScroll(auto)
 
     def _render(self, commits: tuple[Commit, ...]) -> None:
@@ -99,6 +109,7 @@ class HistoryPanel(Panel):
         if was_empty or not appended:
             self._view.fit_row_height()
             self._fit_columns()
+        self._fit_graph()
         self._sync_selection()
 
     def _load_more_near_the_end(self, *_args: object) -> None:
@@ -128,6 +139,23 @@ class HistoryPanel(Panel):
             # Unless the user sized it (spec §5.2); the subject fills the rest.
             self._labels.set_fitted(col, max(width, self._labels.sectionSizeHint(col)))
 
+    def _fit_graph(self, *_args: object) -> None:
+        """Size the graph column to the widest row in view (``set_fitted``: unless
+        the user sized it), up to the cap. Only rows in view are worked out."""
+        view, model = self._view, self._model
+        rows = model.rowCount()
+        lanes = 1
+        if rows:
+            first = max(view.rowAt(0), 0)
+            last = view.rowAt(view.viewport().height() - 1)
+            for row in range(first, (last if last >= 0 else rows - 1) + 1):
+                graph = model.graph_row(row)
+                if graph is not None:
+                    lanes = max(lanes, graph.width)
+        if lanes != self._graph_lanes:
+            self._graph_lanes = lanes
+            self._labels.set_fitted(GRAPH_COLUMN, self._graph.width(lanes))
+
     def _restore(self, keep: Commit | None, top: Commit | None) -> None:
         row = self._model.row_of(keep.sha) if keep is not None else -1
         if row >= 0:
@@ -135,7 +163,8 @@ class HistoryPanel(Panel):
         row = self._model.row_of(top.sha) if top is not None else -1
         if row >= 0:
             self._view.scrollTo(
-                self._model.index(row, 0), QAbstractItemView.ScrollHint.PositionAtTop
+                self._model.index(row, SUBJECT_COLUMN),
+                QAbstractItemView.ScrollHint.PositionAtTop
             )
         else:  # was at the top: stay there, so new commits show
             self._view.scrollToTop()
@@ -143,6 +172,9 @@ class HistoryPanel(Panel):
     def apply_theme(self, theme: AppTheme) -> None:
         self._labels.set_theme(theme)
         self._model.set_theme(theme)
+        self._graph.set_theme(theme)
+        self._graph_lanes = 0  # the lane width may have changed: fit again
+        self._fit_graph()
         self._view.set_pinned_line(QColor(theme.colors.border_light))
         self._view.fit_row_height()
 
@@ -172,7 +204,7 @@ class HistoryPanel(Panel):
             row = self._model.row_of(commit.sha)
         if row < 0:
             return
-        index = self._model.index(row, 0)
+        index = self._model.index(row, SUBJECT_COLUMN)
         self._quiet = True
         try:
             self._view.setCurrentIndex(index)
@@ -203,9 +235,10 @@ class _HistoryView(QTableView):
     draws it over the top of the rows, which pass under it (spec §5.4).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, graph: GraphPainter) -> None:
         super().__init__()
         self.hover_row = -1
+        self.graph = graph  # draws the graph column; the panel keeps it themed
         self.pinned = _PinnedRow(self)
         self.setShowGrid(False)
         self.setWordWrap(False)
@@ -283,7 +316,8 @@ class _HistoryView(QTableView):
         """Every row is as tall as the first wants (a tree's uniformRowHeights)."""
         model = self.model()
         if model is not None and model.rowCount():
-            self.verticalHeader().setDefaultSectionSize(self._hint(model.index(0, 0)).height())
+            hint = self._hint(model.index(0, SUBJECT_COLUMN))  # text: the graph has none
+            self.verticalHeader().setDefaultSectionSize(hint.height())
         self._place_pinned()
 
     def width_hint(self, index: QModelIndex) -> int:
@@ -373,10 +407,14 @@ class _PinnedRow(QWidget):
         super().leaveEvent(event)
 
 
+_CELL_STATES = QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_HasFocus
+
+
 class _RowHoverDelegate(QStyledItemDelegate):
     """Marks every cell of the hovered row as hovered, as a tree view does, and
     paints a row's stripe (its BackgroundRole) under it: the stylesheet's item
-    rule keeps Qt from painting that brush itself."""
+    rule keeps Qt from painting that brush itself. Draws the graph column over
+    the cell (``GraphPainter``)."""
 
     def __init__(self, view: _HistoryView):
         super().__init__(view)
@@ -396,4 +434,16 @@ class _RowHoverDelegate(QStyledItemDelegate):
         stripe = index.data(Qt.ItemDataRole.BackgroundRole)
         if isinstance(stripe, QBrush):
             painter.fillRect(option.rect, stripe)  # hover and selection are drawn over it
-        super().paint(painter, option, index)
+        model = index.model()
+        if index.column() != GRAPH_COLUMN or not isinstance(model, HistoryModel):
+            super().paint(painter, option, index)
+            return
+        # A graph cell has no text: the style draws only its hover, selection or focus.
+        # Asking it for a plain cell costs more than the graph.
+        if (option.state & _CELL_STATES) or index.row() == self._view.hover_row:
+            super().paint(painter, option, index)
+        row, graph = index.row(), self._view.graph
+        if model.has_uncommitted and row == 0:
+            graph.paint_uncommitted(painter, option.rect, model.graph_row(1))
+        elif (commit := model.graph_row(row)) is not None:
+            graph.paint(painter, option.rect, commit, joined_above=model.has_uncommitted and row == 1)

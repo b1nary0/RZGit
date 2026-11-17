@@ -59,6 +59,36 @@ def commit_file(repo: str | Path, name: str, content: str, message: str) -> None
     git(repo, "commit", "-m", message)
 
 
+def make_branched_repo(path: str | Path) -> Path:
+    """A repo whose date order and topological order differ (RZG-58): ``a``; then
+    ``s1`` on a side branch, ``m1`` on main, ``s2`` on the side branch, each a
+    minute later; then ``merge`` of the side branch into main."""
+    repo = make_repo(path)
+    minute = iter(range(1, 10))
+
+    def commit(name: str, message: str) -> None:
+        date = f"2026-01-01T00:0{next(minute)}:00Z"
+        (repo / name).write_text(message)
+        env = {**os.environ, "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date}
+        subprocess.run(["git", "add", name], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-q", "-m", message], cwd=repo, check=True,
+                       capture_output=True, env=env)
+
+    commit("a.txt", "a")
+    git(repo, "switch", "-q", "-c", "side")
+    commit("s.txt", "s1")
+    git(repo, "switch", "-q", "main")
+    commit("m.txt", "m1")
+    git(repo, "switch", "-q", "side")
+    commit("s.txt", "s2")
+    git(repo, "switch", "-q", "main")
+    date = "2026-01-01T00:09:00Z"
+    env = {**os.environ, "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date}
+    subprocess.run(["git", "merge", "-q", "--no-ff", "-m", "merge", "side"], cwd=repo,
+                   check=True, capture_output=True, env=env)
+    return repo
+
+
 def wait_idle(session: RepoSession, timeout: float = 10.0) -> None:
     """Process events until the session's git worker has nothing left to do."""
     from PySide6.QtCore import QCoreApplication, QThread

@@ -10,9 +10,10 @@ from rzgitclient.core.diff_patch import hunk_lines
 from rzgitclient.core.git_commands import CommandKind
 from rzgitclient.core.repo_session import Refresh, RepoSession
 from rzgitclient.core.selection import FileSelection, FileSource
-from rzgitclient.git.git_models import DiffSource, FileStatus
+from rzgitclient.git.git_models import DiffSource, FileStatus, HistoryOrder
 from rzgitclient.git.repo import GitError, Repo
-from tests.support import SignalRecorder, commit_file, git, make_repo, qt_app, wait_idle
+from tests.support import (SignalRecorder, commit_file, git, make_branched_repo, make_repo, qt_app,
+                           wait_idle)
 
 DATA_SIGNALS = ("head_changed", "head_sha_changed", "branches_changed", "history_changed", "status_changed",
                 "stashes_changed", "commit_count_changed")
@@ -496,6 +497,75 @@ class HistoryPagingTests(unittest.TestCase):
         self.session.close()
         self.assertTrue(self.session.history_complete)
         self.assertEqual(self.session.history, ())
+
+
+class HistoryOrderTests(unittest.TestCase):
+    """History in date or topological order (RZG-58), in pages of three commits: the
+    first three differ between the two."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.path = make_branched_repo(Path(self._tmp.name) / "repo")
+        page = mock.patch("rzgitclient.core.repo_session.HISTORY_PAGE", 3)
+        page.start()
+        self.addCleanup(page.stop)
+        self.session = RepoSession()
+        self.addCleanup(self.session.shutdown)
+        self.repo = Repo(self.path)
+        self.assertNotEqual(self.expected(HistoryOrder.DATE, 3), self.expected(HistoryOrder.TOPO, 3))
+
+    def subjects(self):
+        return [c.subject for c in self.session.history]
+
+    def expected(self, order, n):
+        return [c.subject for c in self.repo.log(n, order=order)]
+
+    def more(self):
+        self.session.load_more_history()
+        wait_idle(self.session)
+
+    def test_date_order_by_default_with_parents(self):
+        self.assertIs(self.session.history_order, HistoryOrder.DATE)
+        self.session.open(self.path)
+        wait_idle(self.session)
+        self.more()
+        self.assertEqual(self.subjects(), ["merge", "s2", "m1", "s1", "a"])
+        self.assertEqual(len(self.session.history[0].parents), 2)
+
+    def test_another_order_reloads_from_the_top_and_pages_in_it(self):
+        self.session.open(self.path)
+        wait_idle(self.session)
+        self.more()  # all five, by date
+        rec = SignalRecorder(self.session, "history_changed")
+        self.session.set_history_order(HistoryOrder.TOPO)
+        self.assertIs(self.session.history_order, HistoryOrder.TOPO)
+        wait_idle(self.session)
+        self.assertEqual(self.subjects(), self.expected(HistoryOrder.TOPO, 3))  # not paged on
+        self.assertEqual(len(rec.events), 1)
+        self.assertFalse(self.session.history_complete)
+        self.more()
+        self.assertEqual(self.subjects(), self.expected(HistoryOrder.TOPO, 5))
+        self.session.refresh()  # HEAD hasn't moved: kept as it is
+        wait_idle(self.session)
+        self.assertEqual(self.subjects(), self.expected(HistoryOrder.TOPO, 5))
+
+    def test_the_same_order_does_nothing(self):
+        self.session.open(self.path)
+        wait_idle(self.session)
+        self.session.set_history_order(HistoryOrder.DATE)
+        self.assertFalse(self.session.busy)
+
+    def test_the_order_set_before_opening_is_the_first_loads(self):
+        self.session.set_history_order(HistoryOrder.TOPO)  # no repo: nothing to load
+        self.assertFalse(self.session.busy)
+        self.session.open(self.path)
+        wait_idle(self.session)
+        self.assertEqual(self.subjects(), self.expected(HistoryOrder.TOPO, 3))
 
 
 class RepoSessionDiffTests(unittest.TestCase):

@@ -6,6 +6,10 @@ repo is open, row 0 is "Uncommitted changes" and commits start at row 1. Every s
 commit, counted from the first, is striped (its BackgroundRole). Pages are
 asked for by the panel, not through Qt's fetchMore, which Qt also calls while
 laying out rows, so it would load pages nobody scrolled to.
+
+The first column is the branch graph (RZG-58): the model keeps a ``CommitGraph``
+of its commits, carried on by an appended page and built again on a reset, and
+the delegate draws its rows (``graph_row``).
 """
 
 from __future__ import annotations
@@ -13,12 +17,13 @@ from __future__ import annotations
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPersistentModelIndex, Qt
 from PySide6.QtGui import QBrush, QColor, QFont
 
+from rzgitclient.core.commit_graph import CommitGraph, GraphRow
 from rzgitclient.git.git_models import Commit
 from rzgitclient.ui.theme.app_theme import AppTheme
 
-COLUMNS = ("Subject", "Author", "Date", "Commit")
-MUTED_COLUMNS = (1, 2, 3)  # author, date, hash
-HASH_COLUMN = 3
+COLUMNS = ("Graph", "Subject", "Author", "Date", "Commit")
+GRAPH_COLUMN, SUBJECT_COLUMN, AUTHOR_COLUMN, DATE_COLUMN, HASH_COLUMN = range(len(COLUMNS))
+MUTED_COLUMNS = (AUTHOR_COLUMN, DATE_COLUMN, HASH_COLUMN)
 
 _Index = QModelIndex | QPersistentModelIndex
 _STYLE_ROLES = [Qt.ItemDataRole.ForegroundRole, Qt.ItemDataRole.FontRole,
@@ -29,6 +34,8 @@ class HistoryModel(QAbstractTableModel):
     def __init__(self, theme: AppTheme):
         super().__init__()
         self._commits: tuple[Commit, ...] = ()
+        self._lane_colors = len(theme.graph.lanes)
+        self._graph = CommitGraph(colors=self._lane_colors)
         self._uncommitted: int | None = None  # changed files; None: no Uncommitted changes row
         self._italic = QFont()
         self._italic.setItalic(True)  # only italic: the rest comes from the view's font
@@ -77,12 +84,19 @@ class HistoryModel(QAbstractTableModel):
                 first = n + self._offset
                 self.beginInsertRows(QModelIndex(), first, first + len(commits) - n - 1)
                 self._commits = commits
+                self._graph.extend(commits[n:])  # the lanes carry on
                 self.endInsertRows()
             return True
         self.beginResetModel()
         self._commits = commits
+        self._graph = CommitGraph(commits, self._lane_colors)
         self.endResetModel()
         return False
+
+    def graph_row(self, row: int) -> GraphRow | None:
+        """The branch graph's row for ``row``; None for Uncommitted changes and past the end."""
+        row -= self._offset
+        return self._graph.row(row) if 0 <= row < len(self._commits) else None
 
     @property
     def _offset(self) -> int:
@@ -96,15 +110,17 @@ class HistoryModel(QAbstractTableModel):
 
     def text(self, row: int, col: int) -> str:
         if row < self._offset:
-            return f"Uncommitted changes ({self._uncommitted:,})" if col == 0 else ""
+            return f"Uncommitted changes ({self._uncommitted:,})" if col == SUBJECT_COLUMN else ""
         commit = self._commits[row - self._offset]
-        if col == 0:
+        if col == SUBJECT_COLUMN:
             return commit.subject
-        if col == 1:
+        if col == AUTHOR_COLUMN:
             return commit.author
-        if col == 2:
+        if col == DATE_COLUMN:
             return commit.date.strftime("%Y-%m-%d %H:%M")
-        return commit.short_sha
+        if col == HASH_COLUMN:
+            return commit.short_sha
+        return ""  # the graph is drawn, not written
 
     def striped(self, row: int) -> bool:
         """Whether ``row`` has the stripe: every second commit, never Uncommitted changes."""
@@ -125,6 +141,9 @@ class HistoryModel(QAbstractTableModel):
         self._muted = QColor(theme.colors.text_muted)
         self._stripe = QBrush(QColor(theme.colors.row_alt_bg))
         self._mono = theme.mono_font()
+        if len(theme.graph.lanes) != self._lane_colors:  # colours are picked from their count
+            self._lane_colors = len(theme.graph.lanes)
+            self._graph = CommitGraph(self._commits, self._lane_colors)
         if self.rowCount():
             last = self.index(self.rowCount() - 1, len(COLUMNS) - 1)
             self.dataChanged.emit(self.index(0, 0), last, _STYLE_ROLES)
@@ -147,7 +166,7 @@ class HistoryModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.DisplayRole:
             return self.text(row, col)
         if row < self._offset:  # Uncommitted changes
-            return self._italic if role == Qt.ItemDataRole.FontRole and col == 0 else None
+            return self._italic if role == Qt.ItemDataRole.FontRole and col == SUBJECT_COLUMN else None
         if role == Qt.ItemDataRole.BackgroundRole:
             return self._stripe if self.striped(row) else None
         if role == Qt.ItemDataRole.ForegroundRole and col in MUTED_COLUMNS:

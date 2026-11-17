@@ -27,6 +27,7 @@ from rzgitclient.git.git_models import (
     CommitDetails,
     FileDiff,
     FileStatus,
+    HistoryOrder,
     LastCommit,
     Stash,
 )
@@ -97,6 +98,8 @@ class RepoSession(QObject):
         self._history_complete = True  # nothing to page in until a load says otherwise
         self._more_pending = False  # a history page waits for the next job
         self._loading_more = False  # the running job loads a history page
+        self._history_order = HistoryOrder.DATE  # how history is listed (spec §4.1)
+        self._loaded_order: HistoryOrder | None = None  # the order ``history`` was read in
         # The diff target (spec §4.1). Each request bumps the counter, so the
         # results of older requests are dropped.
         self._diff_request: DiffRequest | None = None
@@ -163,6 +166,10 @@ class RepoSession(QObject):
     @property
     def history(self) -> tuple[Commit, ...]:
         return self._values[Refresh.HISTORY]  # type: ignore[return-value]
+
+    @property
+    def history_order(self) -> HistoryOrder:
+        return self._history_order
 
     @property
     def status(self) -> tuple[FileStatus, ...]:
@@ -307,6 +314,13 @@ class RepoSession(QObject):
         self._more_pending = True
         if not self._running:
             self._start_next()
+
+    def set_history_order(self, order: HistoryOrder) -> None:
+        """List history in ``order`` from now on, reloading it from the top."""
+        if order is self._history_order:
+            return
+        self._history_order = order
+        self.refresh(Refresh.HISTORY)
 
     def request_diff(self, file: FileSelection | None, full: bool = False) -> None:
         """Make ``file`` the diff target and read its diff in the background.
@@ -517,18 +531,21 @@ class RepoSession(QObject):
             # Count in the next job, so it doesn't delay the history.
             parts &= ~Refresh.COUNT
             self._pending |= Refresh.COUNT
-        # The first load of a repo starts from nothing, not the old repo's history.
-        loaded = () if Refresh.HISTORY in self._forced else self.history
+        # The first load of a repo starts from nothing, not the old repo's history;
+        # so does the first in another order.
+        fresh = Refresh.HISTORY in self._forced or self._loaded_order is not self._history_order
+        loaded = () if fresh else self.history
         known = self.commit_files or ()
         job = _Job(self._repo, self._generation, parts, loaded, more,  # type: ignore[arg-type]
                    diff, self._diff_generation, self.status, commands,
                    files_sha, self._files_generation, known,
-                   details_sha, self._details_generation, files_stash)
+                   details_sha, self._details_generation, files_stash, self._history_order)
         relay = self._relay
         self._running = True
         self._loading_more = more
         self._set_busy(True)
-        self._pool.start(lambda: relay.done.emit(_run_job(job)))
+        self._pool.start(lambda: relay.done.emit(
+            dataclasses.replace(_run_job(job), history_order=job.history_order)))
 
     def _on_done(self, result: _JobResult) -> None:
         # _running stays True while the results are emitted: a listener that
@@ -538,6 +555,7 @@ class RepoSession(QObject):
         if result.generation == self._generation:
             if result.history_complete is not None:  # before history_changed fires
                 self._history_complete = result.history_complete
+                self._loaded_order = result.history_order
             for part, value in result.values:
                 self._store(part, value)
             if result.files_generation == self._files_generation and self._files_sha:
@@ -646,6 +664,7 @@ class _Job:
     details_sha: str | None = None  # the commit to read in full, after its files
     details_generation: int = 0
     files_stash: Stash | None = None  # files_sha's stash, if it is one
+    history_order: HistoryOrder = HistoryOrder.DATE
 
 
 @dataclass(frozen=True)
@@ -670,6 +689,7 @@ class _JobResult:
     details_read: bool = False  # it tried; ``details`` is None if that failed
     details: CommitDetails | None = None
     notices: tuple[str, ...] = ()  # the commands'
+    history_order: HistoryOrder = HistoryOrder.DATE  # the job's (history_complete says if it loaded)
 
 
 class _Relay(QObject):
@@ -780,7 +800,7 @@ def _load_history(job: _Job) -> tuple[tuple[Commit, ...], bool | None]:
         # HEAD hasn't moved, so the loaded commits are still exactly right.
         if not job.more:
             return loaded, None
-        new = job.repo.log(page + 1, skip=len(loaded))
+        new = job.repo.log(page + 1, skip=len(loaded), order=job.history_order)
         return loaded + tuple(new[:page]), len(new) <= page
     # Reload. Read a page more than was loaded, for commits that are new on
     # top, then keep everything down to the oldest commit loaded before, so
@@ -788,7 +808,7 @@ def _load_history(job: _Job) -> tuple[tuple[Commit, ...], bool | None]:
     pages = max(1, -(-len(loaded) // page)) * page  # loaded, in whole pages
     extra = page if job.more else 0
     want = pages + (page if loaded else 0) + extra
-    commits = job.repo.log(want + 1)
+    commits = job.repo.log(want + 1, order=job.history_order)
     keep = pages + extra
     if loaded:
         oldest = loaded[-1].sha
