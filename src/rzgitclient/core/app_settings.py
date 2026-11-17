@@ -2,6 +2,10 @@
 
 The only code that touches QSettings. Values are plain Python types; the
 layout is stored as a JSON string so its format is ours, not a QVariant tree.
+
+It holds options, settings and general app state (preferences, layout and theme
+customisation, the last repository, window geometry). State a feature explicitly
+preserves as its own result, such as the commit drafts, is in files of its own.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ _SIDE_BY_SIDE_DIFF = "diff/side_by_side"
 _FILE_TREE = "files/tree"
 _THEME_MODE = "theme/mode"
 _COLOUR_BLIND = "theme/colour_blind"
-_COMMIT_DRAFTS = "commit/drafts"
+_COMMIT_DRAFTS = "commit/drafts"  # older versions only; moved to files
 _SAVED_LAYOUTS = "layouts/saved"
 _COLUMN_PREFS = "columns/prefs"
 
@@ -122,8 +126,11 @@ class AppSettings:
         self._set(_COLOUR_BLIND, bool(on))
 
     @property
-    def commit_drafts(self) -> dict[str, str]:
-        """Unfinished commit messages by repository root ({} if none, or not valid)."""
+    def old_commit_drafts(self) -> dict[str, str]:
+        """The commit drafts older versions kept here, by repository root ({} if none,
+        or not valid). They now live in files of their own, kept by CommitDrafts
+        (spec §5.4, §6.3), which moves them once and then calls
+        ``drop_old_commit_drafts``."""
         raw = self._settings.value(_COMMIT_DRAFTS, "", str)
         try:
             data = json.loads(raw) if raw else {}
@@ -134,9 +141,8 @@ class AppSettings:
             return {}
         return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
 
-    @commit_drafts.setter
-    def commit_drafts(self, drafts: dict[str, str]) -> None:
-        self._set(_COMMIT_DRAFTS, json.dumps(drafts) if drafts else None)
+    def drop_old_commit_drafts(self) -> None:
+        self._settings.remove(_COMMIT_DRAFTS)
 
     @property
     def saved_layouts(self) -> list[tuple[str, dict[str, Any]]]:

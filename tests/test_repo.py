@@ -45,6 +45,43 @@ class CanonicalPathTests(unittest.TestCase):
         self.assertEqual(len(repo.log()), 1)
 
 
+class RepoWorktreeNameTests(unittest.TestCase):
+    """A window's title and the last repository, for linked worktrees (spec §6.3, RZG-47)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name).resolve()
+        self.main = make_repo(self.tmp / "main-repo")
+        commit_file(self.main, "a.txt", "1\n", "first")
+
+    def test_the_main_worktree_is_its_own_main_root(self):
+        repo = Repo(self.main)
+        self.assertEqual(repo.worktree_name, "main-repo")
+        self.assertEqual(repo.main_root, self.main)
+        sub = self.main / "sub"
+        sub.mkdir()
+        self.assertEqual(Repo(sub).main_root, self.main)  # opened from a subfolder
+
+    def test_a_linked_worktree_has_gits_name_and_the_main_root(self):
+        git(self.main, "worktree", "add", "-b", "lane", str(self.tmp / "lanes" / "lane-1"))
+        # git names it after its folder, made unique: a second "lane-1" folder is "lane-11".
+        git(self.main, "worktree", "add", "-b", "lane2", str(self.tmp / "other" / "lane-1"))
+        first, second = Repo(self.tmp / "lanes" / "lane-1"), Repo(self.tmp / "other" / "lane-1")
+        self.assertEqual(first.root, self.tmp / "lanes" / "lane-1")
+        self.assertEqual(first.worktree_name, "lane-1")
+        self.assertEqual(second.worktree_name, "lane-11")
+        self.assertEqual(first.main_root, self.main)
+        self.assertEqual(second.main_root, self.main)
+
+    def test_a_linked_worktree_reached_through_a_link(self):
+        git(self.main, "worktree", "add", "-b", "lane", str(self.tmp / "lane"))
+        (self.tmp / "link").symlink_to(self.main)
+        (self.tmp / "wt-link").symlink_to(self.tmp / "lane")
+        self.assertEqual(Repo(self.tmp / "wt-link").main_root, self.main)
+        self.assertEqual(Repo(self.tmp / "link").main_root, self.main)
+
+
 class RepoTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

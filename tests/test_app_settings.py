@@ -93,21 +93,26 @@ class AppSettingsTests(unittest.TestCase):
         self.assertIsNone(self.settings.layout)
 
 
-    def test_commit_drafts_survive_a_reopen(self):
-        self.assertEqual(self.settings.commit_drafts, {})
-        self.settings.commit_drafts = {"/repos/one": "Fix the thing\n\nBecause"}
-        self.assertEqual(self.reopen().commit_drafts, {"/repos/one": "Fix the thing\n\nBecause"})
-        self.settings.commit_drafts = {}
-        self.assertEqual(self.reopen().commit_drafts, {})
+    def test_old_commit_drafts_are_read_until_dropped(self):
+        self.assertEqual(self.settings.old_commit_drafts, {})
+        self.settings._settings.setValue("commit/drafts", '{"/repos/one": "Fix\\n\\nBody"}')
+        self.assertEqual(self.reopen().old_commit_drafts, {"/repos/one": "Fix\n\nBody"})
+        self.settings.drop_old_commit_drafts()
+        self.assertEqual(self.reopen().old_commit_drafts, {})
+        self.assertFalse(self.reopen()._settings.contains("commit/drafts"))
 
-    def test_drafts_that_are_not_valid_are_ignored(self):
+    def test_old_drafts_that_are_not_valid_are_ignored(self):
         self.settings._settings.setValue("commit/drafts", "{not json")
         with self.assertLogs("rzgitclient.core.app_settings", "WARNING"):
-            self.assertEqual(self.settings.commit_drafts, {})
+            self.assertEqual(self.settings.old_commit_drafts, {})
         self.settings._settings.setValue("commit/drafts", "[1, 2]")
-        self.assertEqual(self.settings.commit_drafts, {})
+        self.assertEqual(self.settings.old_commit_drafts, {})
         self.settings._settings.setValue("commit/drafts", '{"/a": 3, "/b": "ok"}')
-        self.assertEqual(self.settings.commit_drafts, {"/b": "ok"})
+        self.assertEqual(self.settings.old_commit_drafts, {"/b": "ok"})
+
+    def test_drafts_are_not_settings(self):
+        """Only the move from older versions reads drafts here (spec §6.3)."""
+        self.assertFalse(hasattr(AppSettings, "commit_drafts"))
 
     def test_column_prefs_survive_a_reopen(self):
         self.assertEqual(self.settings.column_prefs, {})

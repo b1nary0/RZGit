@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Protocol
+
+from PySide6.QtCore import QEvent, Signal
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QFileDialog, QLabel, QMainWindow, QMessageBox
+from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox
 
 from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.selection import FileSource
 from rzgitclient.git.git_models import FileDiff, LastCommit
-from rzgitclient.git.repo import Repo
+from rzgitclient.git.repo import GitError, Repo
 from rzgitclient.ui.branch_dialogs import BranchDialogs
 from rzgitclient.ui.layout.layout_host import LayoutHost
 from rzgitclient.ui.layout.layout_menu import LayoutMenu
@@ -17,22 +21,36 @@ from rzgitclient.ui.panels.panel import PanelContext
 from rzgitclient.ui.stash_dialogs import StashDialogs
 
 
+class WindowDirectory(Protocol):
+    """The open main windows (``AppWindows``, spec §8.1), as a window sees them."""
+
+    def window_for(self, root: str | Path) -> MainWindow | None: ...
+
+    def open(self, path: str | Path, *,
+             from_window: MainWindow | None = None) -> MainWindow | None: ...
+
+
 class MainWindow(QMainWindow):
-    def __init__(self, ctx: PanelContext, settings: AppSettings):
+    closed = Signal()  # after it saved, on a close that was accepted
+
+    def __init__(self, ctx: PanelContext, settings: AppSettings,
+                 windows: WindowDirectory | None = None, *, restore_geometry: bool = True):
+        """``windows``: the other main windows (§8.1); without it, everything opens
+        here. ``restore_geometry``: start at the saved size (the first window)."""
         super().__init__()
         self.ctx = ctx
         self.session = session = ctx.session
         self.settings = settings
+        self.windows = windows
 
         self.setWindowTitle("RZGitClient")
         self.resize(1100, 700)
-        if (geometry := settings.window_geometry) is not None:
+        if restore_geometry and (geometry := settings.window_geometry) is not None:
             self.restoreGeometry(geometry)
         # Before the panels are built, so the Diff panel starts in the saved view.
         ctx.actions.side_by_side_diff.setChecked(settings.side_by_side_diff)
         ctx.actions.file_tree.setChecked(settings.file_tree)
-        ctx.actions.theme_modes[ctx.theme.mode].setChecked(True)
-        ctx.actions.colour_blind.setChecked(ctx.theme.colour_blind)
+        self._check_theme_actions()
         self._build_ui()
         self._build_actions()
 
@@ -49,7 +67,7 @@ class MainWindow(QMainWindow):
     def _build_actions(self) -> None:
         actions = self.ctx.actions
         actions.open_repo.triggered.connect(self.choose_repo)
-        actions.quit.triggered.connect(self.close)
+        actions.quit.triggered.connect(QApplication.closeAllWindows)  # every window (§8.1)
 
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addActions([actions.open_repo, actions.refresh])
@@ -113,6 +131,32 @@ class MainWindow(QMainWindow):
         self.settings.theme_mode = self.ctx.theme.mode.value
         self.settings.colour_blind = self.ctx.theme.colour_blind
         super().closeEvent(event)
+        if event.isAccepted():
+            self.closed.emit()
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            # Another window may have changed the shared theme (§8.1).
+            self._check_theme_actions()
+            self._save_last_repo()
+
+    def _check_theme_actions(self) -> None:
+        actions, theme = self.ctx.actions, self.ctx.theme
+        actions.theme_modes[theme.mode].setChecked(True)
+        actions.colour_blind.setChecked(theme.colour_blind)
+
+    def _save_last_repo(self) -> None:
+        """The main repository of this window's, even for a linked worktree (§6.3)."""
+        if (repo := self.session.repo) is not None:
+            self.settings.last_repo = str(repo.main_root)
+
+    def bring_to_front(self) -> None:
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def discard_selected(self) -> None:
         """Discard the unstaged changes of the selected files, once confirmed."""
@@ -181,14 +225,37 @@ class MainWindow(QMainWindow):
         start = str(repo.root) if repo else ""
         path = QFileDialog.getExistingDirectory(self, "Open Git Repository", start)
         if path:
-            self.session.open(path)
+            self.open_repo(path)
+
+    def open_repo(self, path: str | Path) -> bool:
+        """Open ``path`` here, unless another window shows that worktree: then raise
+        that one and leave this window as it is (§8.1). False if it isn't a repo."""
+        if self.windows is None:
+            return self.session.open(path)
+        try:
+            repo = Repo(path)
+        except GitError as exc:
+            self._show_error(str(exc))
+            return False
+        other = self.windows.window_for(repo.root)
+        if other is not None and other is not self:
+            other.bring_to_front()
+            return True
+        return self.session.open(repo)
+
+    def open_in_window(self, path: str | Path) -> MainWindow | None:
+        """The window showing ``path``, raised, or a new one opened on it (§8.1).
+        Without other windows, ``path`` opens here."""
+        if self.windows is None:
+            return self if self.open_repo(path) else None
+        return self.windows.open(path, from_window=self)
 
     def _on_repo_changed(self, repo: Repo | None) -> None:
         if repo is None:
             self.setWindowTitle("RZGitClient")
         else:
-            self.setWindowTitle(f"{repo.name} — RZGitClient")
-            self.settings.last_repo = str(repo.root)
+            self.setWindowTitle(f"{repo.worktree_name} — RZGitClient")
+            self._save_last_repo()
         self._update_status_bar()
 
     def _show_error(self, message: str) -> None:

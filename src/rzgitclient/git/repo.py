@@ -106,8 +106,16 @@ class Repo:
         path = Path(path).expanduser()
         if not path.is_dir():
             raise GitError(f"Not a directory: {path}")
-        top = run_git(path, "rev-parse", "--show-toplevel").strip()
+        # One process: the top level, and the dirs that tell a linked worktree (spec §6.3).
+        out = run_git(path, "rev-parse", "--show-toplevel", "--path-format=absolute",
+                      "--git-dir", "--git-common-dir")
+        top, git_dir, common_dir = out.splitlines()[:3]
         self.root = canonical_path(top)
+        git_dir, common_dir = canonical_path(git_dir), canonical_path(common_dir)
+        linked = git_dir != common_dir
+        self.worktree_name = git_dir.name if linked else self.root.name
+        self.main_root = (common_dir.parent if linked and common_dir.name == ".git"
+                          else self.root)
 
     def git(self, *args: str) -> str:
         return run_git(self.root, *args)

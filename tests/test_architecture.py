@@ -13,7 +13,7 @@ SRC = Path(__file__).resolve().parent.parent / "src" / PACKAGE
 # Lower layers first; a module may import only its own layer or lower ones.
 TOP_LAYERS = ("git", "core", "ui", "app")
 UI_LAYERS = ("theme", "widgets", "app_actions", "panels", "layout", "branch_dialogs",
-             "main_window")
+             "main_window", "app_windows")
 
 
 # ---- collecting imports ------------------------------------------------------
@@ -172,6 +172,8 @@ class RuleTests(unittest.TestCase):
                           "ui panels is above ui app_actions")
         self.assertBreaks("rzgitclient.ui.layout.panel_frame", "from rzgitclient.ui.main_window import MainWindow",
                           "ui main_window is above ui layout")
+        self.assertBreaks("rzgitclient.ui.main_window", "from rzgitclient.ui.app_windows import AppWindows",
+                          "ui app_windows is above ui main_window")
 
     def test_relative_imports_are_resolved(self):
         self.assertEqual(

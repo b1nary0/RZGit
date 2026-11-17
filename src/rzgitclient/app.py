@@ -2,19 +2,13 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from rzgitclient import __version__
 from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.column_prefs import ColumnPrefs
-from rzgitclient.core.commit_drafts import CommitDrafts
-from rzgitclient.core.repo_session import RepoSession
-from rzgitclient.core.repo_watcher import RepoWatcher
-from rzgitclient.core.selection import Selection
-from rzgitclient.ui.app_actions import AppActions
-from rzgitclient.ui.main_window import MainWindow
-from rzgitclient.ui.panels.panel import PanelContext
+from rzgitclient.core.commit_drafts import CommitDrafts, drafts_folder
+from rzgitclient.ui.app_windows import AppWindows
 from rzgitclient.ui.theme.theme_manager import ThemeManager, ThemeMode
 
 
@@ -29,33 +23,20 @@ def main(argv: list[str] | None = None) -> int:
     # The saved theme, before any widget exists: the window never shows another first.
     theme = ThemeManager(app, mode=ThemeMode(settings.theme_mode),
                          colour_blind=settings.colour_blind)
-    session = RepoSession()
-    # The window follows the repository by itself (spec §4.3).
-    watcher = RepoWatcher(session)
-    app.applicationStateChanged.connect(
-        lambda state: watcher.set_active(state == Qt.ApplicationState.ApplicationActive))
+    # Shared by every window (spec §8.1); drafts saved by older versions move to files.
+    drafts = CommitDrafts(drafts_folder(), legacy=settings)
+    windows = AppWindows(app, settings, theme, drafts, ColumnPrefs(settings))
 
-    selection = Selection(session)
-    ctx = PanelContext(
-        session=session,
-        selection=selection,
-        theme=theme,
-        actions=AppActions(session, selection),
-        drafts=CommitDrafts(settings),
-        columns=ColumnPrefs(settings),
-    )
-
-    window = MainWindow(ctx, settings)
+    window = windows.new_window()
     window.show()
 
     # Open a repo from the command line (its errors shown), else the last one used.
     args = [a for a in argv[1:] if not a.startswith("-")]
     if args:
-        session.open(args[0])
+        window.session.open(args[0])
     else:
         window.open_last_repo()
 
     code = app.exec()
-    watcher.shutdown()
-    session.shutdown()  # wait for a git command still running
+    windows.shutdown()  # wait for a git command still running
     return code

@@ -220,15 +220,16 @@ class RepoSession(QObject):
 
     # ---- opening and closing ------------------------------------------------
 
-    def open(self, path: str | Path, *, report: bool = True) -> bool:
-        """Open the repository containing ``path``.
+    def open(self, path: str | Path | Repo, *, report: bool = True) -> bool:
+        """Open the repository containing ``path`` (or ``path`` itself, a ``Repo``
+        already read: the window manager reads it first to find its window, §8.1).
 
         Checks the folder now; the data loads in the background. On failure,
         reports through ``error_occurred`` (unless not ``report``), keeps the
         current repository open and returns False.
         """
         try:
-            repo = Repo(path)
+            repo = path if isinstance(path, Repo) else Repo(path)
         except GitError as exc:
             if report:
                 self.error_occurred.emit(str(exc))

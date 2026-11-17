@@ -37,9 +37,10 @@ one names the sections below that it covers.
   ↑
  core/  application state. QtCore only (QObject, Signal). No widgets.
   ↑
- ui/    widgets. theme/ → widgets/ → app_actions → panels/ → layout/ → branch_dialogs → main_window
+ ui/    widgets. theme/ → widgets/ → app_actions → panels/ → layout/ → branch_dialogs → main_window → app_windows
   ↑
- app.py composition root. The only place concrete objects are created and wired together.
+ app.py composition root. The only place concrete objects are created and wired together,
+        with AppWindows (§8.1), which app.py makes to build each main window's own objects.
 ```
 
 Rules (enforced by `tests/test_architecture.py`, which reads imports with `ast`):
@@ -73,7 +74,7 @@ src/rzgitclient/
     diff_request.py             DiffRequest, the size limit, load_diff (the worker side of diffs)
     diff_patch.py               build_patch: a patch of chosen lines of a FileDiff (plain Python)
     git_commands.py             GitCommand, run_command (the worker side of commands: stage, commit, …)
-    commit_drafts.py            CommitDrafts: the unfinished commit message of each repository
+    commit_drafts.py            CommitDrafts: the unfinished commit message of each repository (a file each)
     column_prefs.py             ColumnPrefs: each panel's column choices (hidden columns, widths)
     selection.py                Selection: what the user has selected (commit, file)
     repo_watcher.py             RepoWatcher: refreshes the session when the repository changes on disk
@@ -81,6 +82,7 @@ src/rzgitclient/
     app_settings.py             AppSettings: typed wrapper over QSettings (last_repo, layout, …)
   ui/
     main_window.py              MainWindow: thin shell (menus, status bar, LayoutHost)
+    app_windows.py              AppWindows: the open main windows; open a window on a path, or raise it
     app_actions.py              AppActions: every QAction, defined once; BranchOp, StashOp
     branch_dialogs.py           BranchDialogs: the confirmations and name boxes of branch operations
     stash_dialogs.py            StashDialogs: Stash Changes… and the Drop confirmation
@@ -142,6 +144,8 @@ code depends on, or (b) code that would otherwise be duplicated. Not for its own
 ### 4.1 RepoSession
 
 `RepoSession(QObject)` (`core/repo_session.py`) is the single owner of "the open repository".
+There is one per main window (§8.1), with its own `Selection`, `AppActions` and
+`RepoWatcher`: what one window does never reaches another's session.
 
 ```python
 class RepoSession(QObject):
@@ -161,7 +165,7 @@ class RepoSession(QObject):
     notice_occurred  = Signal(str)   # a command worked, but not quite as asked
     busy_changed     = Signal(bool)  # True while git work is queued or running
 
-    def open(self, path) -> bool
+    def open(self, path) -> bool          # path, or a Repo already read (§8.1)
     def close(self) -> None
     def refresh(self, parts: Refresh = Refresh.ALL) -> None   # Flag: HEAD|BRANCHES|HISTORY|STATUS|STASHES|COUNT
     def load_more_history(self) -> None   # the next page of history, in the background
@@ -444,7 +448,7 @@ fetch. It only ever calls `session.refresh(parts)`, so panels don't know it exis
 class RepoWatcher(QObject):
     def __init__(self, session, parent=None, *, delay_ms=300, max_delay_ms=2000,
                  max_folders=10_000, poll_ms=3000)
-    def set_active(self, active: bool) -> None   # the window is active (app.py)
+    def set_active(self, active: bool) -> None   # the app is active (AppWindows)
     def shutdown(self) -> None
     busy: bool          # a change waits, or the watch set is being built (tests wait on it)
     polling: bool       # over the cap: the working tree is polled, not watched
@@ -493,8 +497,9 @@ class RepoWatcher(QObject):
   watches), the working tree isn't watched, only `.git`. Instead `STATUS` is refreshed
   every 3 s while the window is active (`polling`).
 - **Focus:** `set_active(True)` after the window was inactive refreshes everything
-  (`Refresh.ALL`): it catches whatever the watcher missed. app.py calls it from
-  `QGuiApplication.applicationStateChanged`. The first activation at startup doesn't
+  (`Refresh.ALL`): it catches whatever the watcher missed. `AppWindows` (§8.1) calls it
+  on every window's watcher from `QGuiApplication.applicationStateChanged`, and on a new
+  window's watcher when it's made while the app is active. The first activation at startup doesn't
   refresh, since `open()` just loaded everything.
 - **Overflow:** if the kernel's event queue overflows, the watch set is rebuilt and
   everything refreshed.
@@ -1029,12 +1034,26 @@ RZG-26).
   switching repositories or restarting; it is split back into summary (the first line)
   and description (the rest, without the blank line). A cleared message removes the
   draft.
-  `CommitDrafts` writes through `AppSettings` (`commit/drafts`, JSON keyed by the
-  repository root); tests give it none, and it keeps drafts in memory. The key is the
-  root's `canonical_path` (§6.3), so every path to one repository finds the same draft
-  (on macOS, `/var/...` and `/private/var/...` are one folder). Keys saved before that
-  are re-keyed when the drafts are loaded; where two meet, the one already canonical
-  wins. A draft whose folder is gone is kept (it may be on a drive not mounted now).
+  **One `CommitDrafts`** is shared by every window (app.py makes it; §8.1). It keeps
+  **one file per repository** in its folder (app.py gives it `drafts_folder()`:
+  `commit-drafts/` in `QStandardPaths.AppDataLocation`, e.g.
+  `~/.local/share/RZGitClient/RZGitClient/commit-drafts/`). The file is named by the SHA-1
+  of the key and holds `{"root": key, "text": draft}` as JSON. It holds no copy in memory:
+  `get` reads the file, and `set` replaces it atomically (a temporary file in the same
+  folder, then a rename) or deletes it for a blank draft, and doesn't write an unchanged
+  draft. So a window, or a second app process, only ever writes its own repository's
+  file, and can't overwrite another's or be overwritten with an older copy. A file that
+  can't be read, isn't valid, or names another root reads as no draft (logged). Tests
+  give it no folder, and it keeps drafts in memory.
+  The key is the root's `canonical_path` (§6.3), so every path to one repository finds
+  the same draft (on macOS, `/var/...` and `/private/var/...` are one folder). A draft
+  whose folder is gone is kept (it may be on a drive not mounted now).
+  **Drafts saved by older versions** (`commit/drafts` in `AppSettings`, JSON keyed by the
+  root) are moved once: `CommitDrafts(folder, legacy=settings)` reads them
+  (`AppSettings.old_commit_drafts`), re-keys them canonically (where two meet, the one
+  already canonical wins) and writes each one whose repository has no draft file yet (a
+  file is newer). Only when every one is written does it remove the old value
+  (`drop_old_commit_drafts()`); if a write fails, they stay for the next start.
 - **Amend** (RZG-27): an **Amend** checkbox beside the button shows the `amend` action
   (§8), checked both ways. Turning it on puts the last commit's message in the fields
   (`refresh(LAST_COMMIT)`; at once if `session.last_commit` is already HEAD's), and the
@@ -1177,10 +1196,17 @@ Commit Details and Commit Files are directly below Unstaged Files (`files`), in 
 
 `AppSettings` (`core/app_settings.py`) is the only code that touches `QSettings`. It has
 typed accessors (`last_repo`, `layout`, `layout_preset`, `window_geometry`,
-`side_by_side_diff`, `commit_drafts`, `saved_layouts`, `column_prefs`) and takes a file path for tests. `app.py` creates it and passes it to
-`MainWindow`; panels don't get it. What panels save goes through a small object in
-`ctx` that holds only that: the commit draft through `CommitDrafts` (§5.4), column
+`side_by_side_diff`, `saved_layouts`, `column_prefs`, …) and takes a file path for tests.
+`app.py` creates it and `AppWindows` passes it to each `MainWindow`; panels don't get it.
+One `AppSettings` is shared by every window. What panels save goes through a small object
+in `ctx` that holds only that: the commit draft through `CommitDrafts` (§5.4), column
 choices through `ColumnPrefs`.
+
+**What goes where** (RZG-47): `AppSettings` holds options, settings and general app state:
+preferences, layout and theme customisation (column choices among them), `last_repo`,
+window geometry. State that a feature explicitly needs to preserve as its own result goes
+in files of its own, owned by that feature: the commit drafts are kept by `CommitDrafts`
+(§5.4), one file per repository.
 
 **Column choices** (`ColumnPrefs`, `core/column_prefs.py`, RZG-41, RZG-40) are
 app-wide, the same in every layout and repository, keyed by panel id and then by column
@@ -1195,14 +1221,27 @@ one path per folder. There is no case-folding: git's top level has the case stor
 disk (macOS, Windows), and folding would be wrong on a case-sensitive volume. git's text
 output is read as UTF-8 on every platform, so non-ASCII folder names work.
 
-**The last repository** is reopened at startup by `MainWindow.open_last_repo()`, quietly:
+**Worktrees** (RZG-47): `Repo(path)` reads the top level, git dir and common dir in its one
+`rev-parse`, so these cost no extra git process. In a linked worktree the git dir
+(`.git/worktrees/<name>`) differs from the common dir. `Repo.worktree_name` is then
+`<name>`, git's name for it, and `Repo.main_root` is the main worktree's root (the
+canonical parent of the common dir, when that is a `.git` folder). Otherwise
+`worktree_name` is the root's folder name and `main_root` is `root`.
+
+**The last repository** (`last_repo`) is always a **main repository**: the main
+worktree's root (`Repo.main_root`), never a linked worktree, so a restart opens the
+repository, and the Worktrees window is the way back to a worktree. A window sets it
+when it opens a repository and when it becomes the active window, so with several
+windows it's the repository of the one focused last.
+
+It is reopened at startup by `MainWindow.open_last_repo()`, quietly:
 if it was moved, deleted or is no longer a repository, the window starts with none, the
 status bar says "Last repository not found: <path>", and the setting is kept (the drive
 may be back next time). `RepoSession.open(path, report=False)` is the quiet open. A path
 given on the command line is opened as usual and shows its error.
 
 On close, the window saves the host's `state()` (as JSON, so the format is ours) and its
-geometry: size and maximized state, plus position where the platform allows it (not on
+geometry (with several windows, each saves as it closes, so the last one closed wins): size and maximized state, plus position where the platform allows it (not on
 Wayland). With the layout it saves `layout_preset`: the title of the preset the layout
 is, if it is one (`matching_preset(state)`: the preset whose shape, without sizes or
 current tabs and with the saved hidden panels taken out, is the layout's), else None.
@@ -1516,12 +1555,68 @@ Per-widget sheets are slow to apply and scatter the rules.
   bar summary (from session signals: path · branch · commits · changed files), error dialogs (from `error_occurred`), and a
   `LayoutHost` as the central widget. The Open, Quit and Reset Layout handlers live here
   because they need dialogs or the window. Target: around 100 lines.
+- **Title:** `<worktree name> — RZGitClient` (`Repo.worktree_name`: git's name for a linked
+  worktree, the folder's name for the main one), or `RZGitClient` with none open.
+- **File → Open Repository…** opens the folder in this window, unless another window
+  already shows that worktree: then that window is raised and this one is unchanged
+  (§8.1). **File → Quit** closes every window (`QApplication.closeAllWindows`).
 - **Commit count text** (`commit_summary`): the exact `commit_count` with separators
   ("2,421 commits", "1 commit"). Until it arrives, or if it failed, the loaded count, with a
   plus while more history is unloaded ("500+ commits").
 - **No toolbar:** its buttons are the **Controls panel** (§5.4), placed by the layout across
   the top and styled like the toolbar was. Remote controls (fetch/pull/push) join it when
   those commands exist; switching branches is in the Branches panel.
+
+### 8.1 Windows
+
+The app can have several main windows open, each on its own repository or worktree
+(RZG-47). **`AppWindows`** (`ui/app_windows.py`), made once by app.py, holds them.
+
+- **Shared by every window:** `AppSettings`, `ThemeManager`, `CommitDrafts` (§5.4) and
+  `ColumnPrefs` (§6.3): one of each, made by app.py and passed to `AppWindows`.
+  **Each window's own:** `RepoSession`, `RepoWatcher`, `Selection`, `AppActions`, its
+  `PanelContext` and its `MainWindow`. Staging, committing and switching in one window
+  never touch another, and each follows its own repository on disk (§4.3).
+- **One window per worktree:** a worktree root is shown in at most one window. Opening a
+  worktree that a window already shows raises that window instead.
+- **API** (for the Worktrees window, RZG-48, and anything else that opens windows):
+
+  ```python
+  class AppWindows(QObject):
+      def open(self, path, *, from_window: MainWindow | None = None) -> MainWindow | None
+          # the window showing the worktree at `path`, raised; else a new window on it.
+          # None if `path` isn't a repository (the error is shown over from_window).
+      def new_window(self, *, from_window: MainWindow | None = None) -> MainWindow
+          # an empty window (app.py makes the first one this way)
+      def window_for(self, root) -> MainWindow | None   # by worktree root (canonical)
+      def windows(self) -> tuple[MainWindow, ...]        # in the order opened
+      def shutdown(self) -> None                         # after the event loop (app.py)
+  ```
+
+  Each `MainWindow` it makes gets `windows` (this object), so a window or its dialogs
+  can call `window.open_in_window(path)`: `AppWindows.open(path, from_window=window)`.
+  A `MainWindow` made without it (tests) opens everything in itself.
+- **Where a new window appears:** the first window restores the saved geometry. A window
+  opened from another (`from_window`, else the active window) is half the width and half
+  the height of the screen's available area (a quarter of a maximized window), and its
+  top-left is the other window's, moved down and right by a title bar's height
+  (`QStyle.PM_TitleBarHeight`), kept on the screen. Where the platform doesn't let the
+  app place windows (Wayland), only the size applies.
+- **The layout:** every window starts from the one saved layout, view toggles (Side by
+  Side Diff, Show Files as Tree) and theme. Each window saves them as it closes, so the
+  last one closed wins. The toggles are per window while it's open.
+- **The theme is app-wide:** a window checks its Theme and Colour-blind actions from
+  `ctx.theme` whenever it becomes active, so a change made in another window shows in
+  its menu (menus are only opened in the active window).
+- **Closing a window** closes only it. It saves, as above, then its watcher and session
+  shut down (the session waits for a running git command, as on quit), and it is deleted
+  (`WA_DeleteOnClose`) with its own objects, which are its children: they go after its
+  panels, the session last. **File → Quit** closes every window. The app ends when the last window closes
+  (`quitOnLastWindowClosed`), and `AppWindows.shutdown()` after the event loop shuts
+  down anything still open.
+- **A restart** brings back only the last repository (§6.3), not every window. A second
+  `rzgitclient <path>` started while the app runs is a second process, as before.
+- Not yet: a Window menu, and which main window owns child windows (RZG-51).
 
 ## 9. Performance stance
 
@@ -1553,7 +1648,8 @@ cheap to fix **later**, without paying for them now:
   `test_diff_request`, `test_diff_rows`, `test_diff_view`, `test_diff_gutter` and `test_line_selection` (the diff's
   worker side, its rows, the links, and the marks and line buttons the gutter paints),
   `test_diff_patch` (patches applied by git to temp repos),
-  `test_git_commands` (commands on temp repos), `test_commit_drafts`,
+  `test_git_commands` (commands on temp repos), `test_commit_drafts`, `test_app_windows`
+  (several windows on temp repos),
   `test_inotify_watcher` and `test_repo_watcher` (real file changes in temp repos), and
   `test_architecture` (§2 import rules, unique panel ids).
 - Stays on stdlib `unittest`: there are no extra dependencies, and VS Code's test panel is

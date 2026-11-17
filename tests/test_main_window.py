@@ -111,13 +111,13 @@ class MainWindowTests(unittest.TestCase):
         window = self.start()
         self.assertTrue(window.session.open(repo))
         wait_idle(window.session)
-        CommitDrafts(AppSettings(self.settings_path)).set(window.session.repo.root, "Fix é 日本")
+        CommitDrafts(self.tmp / "drafts").set(window.session.repo.root, "Fix é 日本")
         self.quit(window)
         again = self.start()
         again.open_last_repo()
         self.assertEqual(again.session.repo.root, repo.resolve())
         self.assertEqual(again.windowTitle(), "café 日本 — RZGitClient")
-        self.assertEqual(CommitDrafts(AppSettings(self.settings_path)).get(repo), "Fix é 日本")
+        self.assertEqual(CommitDrafts(self.tmp / "drafts").get(repo), "Fix é 日本")
 
     def test_first_start_uses_the_default_layout(self):
         window = self.start()
