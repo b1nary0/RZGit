@@ -3,7 +3,8 @@
 The text goes in with one ``setPlainText``: QPlainTextEdit lays out lazily,
 so a long diff costs little until it's scrolled to. Row backgrounds are
 painted for the visible rows only, under the text, from each row's kind,
-and so are the changed words of a paired removed and added line.
+and so are the changed words of a paired removed and added line, and Find's
+matches.
 Hunk headers can show a link at the right edge. The text is selectable, with a
 caret, and copies as code only (``copy_text``); the gutter selects whole changed
 lines (a LineSelection), for staging. Only one of the two is there at a time.
@@ -30,6 +31,7 @@ from PySide6.QtGui import (
     QMouseEvent,
     QPainter,
     QPaintEvent,
+    QPen,
     QResizeEvent,
     QTextCharFormat,
     QTextCursor,
@@ -54,6 +56,7 @@ from rzgitclient.ui.theme.style_roles import Role, set_role
 _LINK_PADDING = 8  # px around a hunk header's link
 TAB_WIDTH = 4  # in spaces, unless set (a setting, spec §8.2)
 _WORD = re.compile(r"\w+")
+_FIND_OUTLINE = 1  # px: the current Find match's outline
 
 
 class Numbers(Enum):
@@ -84,6 +87,10 @@ class DiffView(QPlainTextEdit):
         self._word_bg: dict[RowKind, QColor] = {}
         self._partners: Mapping[int, str] = {}  # paired row → its partner's text
         self._spans: dict[int, Spans] = {}  # changed words per row, worked out when painted
+        self._find_spans: Mapping[int, Spans] = {}  # Find's matches per row (RZG-74)
+        self._find_bg = QColor()
+        self._find_current: tuple[int, int, int] | None = None  # (row, start, end)
+        self._find_outline = QColor()
         self._fold_marks: Mapping[int, FoldKey] = {}  # row → the stretch it starts
         self._has_folds = False  # a fold row is filled while the text selection covers it
         self._text_selection_bg = QColor()
@@ -132,6 +139,8 @@ class DiffView(QPlainTextEdit):
         self._fold_marks = fold_marks or {}
         self._has_folds = any(r.kind is RowKind.FOLD for r in rows)
         self._spans = {}
+        self._find_spans = {}  # for the old rows: the panel finds them again
+        self._find_current = None
         self.setPlainText("\n".join(r.text for r in self._rows))
         numbers = [n for r in self._rows for n in (r.old_no, r.new_no) if n is not None]
         self.gutter.set_digits(len(str(max(numbers, default=1))))
@@ -170,6 +179,25 @@ class DiffView(QPlainTextEdit):
             n = _nearest(self._rows, place.top)
             if n is not None:
                 bar.setValue(n)
+
+    def set_find_spans(self, spans: Mapping[int, Spans]) -> None:
+        """Fill Find's matches: each row's character ranges, by row number."""
+        self._find_spans = spans
+        self.viewport().update()
+
+    @property
+    def find_spans(self) -> Mapping[int, Spans]:
+        return self._find_spans
+
+    def set_find_current(self, match: tuple[int, int, int] | None) -> None:
+        """Outline the current Find match, ``(row, start, end)``; None for none."""
+        if match != self._find_current:
+            self._find_current = match
+            self.viewport().update()
+
+    @property
+    def find_current(self) -> tuple[int, int, int] | None:
+        return self._find_current
 
     def set_hunk_link(self, text: str, tooltip: str = "") -> None:
         """Show ``text`` as a link on every hunk header ("" for none), or with
@@ -467,6 +495,8 @@ class DiffView(QPlainTextEdit):
                              RowKind.NOTE: QColor(c.text_muted)}
         self._base = QColor(c.content_bg)
         self._text_selection_bg = QColor(c.text_selection)
+        self._find_bg = QColor(c.diff_find_match)
+        self._find_outline = QColor(c.diff_find_current)
         self._selected_bg = {RowKind.ADDED: QColor(c.diff_added_selected_bg),
                              RowKind.REMOVED: QColor(c.diff_removed_selected_bg)}
         self._word_bg = {RowKind.ADDED: QColor(c.diff_added_word),
@@ -490,14 +520,33 @@ class DiffView(QPlainTextEdit):
                 painter.fillRect(QRectF(0, top, width, height), color)
             if n in self._partners:
                 self._paint_words(painter, n, row, top, height)
+            found = self._find_spans.get(n)
+            if found:
+                for rect in self.span_rects(n, found, top, height):
+                    painter.fillRect(rect, self._find_bg)
         painter.end()
         super().paintEvent(event)
         if self.selection:
             painter = QPainter(self.viewport())
             self.selection.paint_outlines(painter, event.rect(), self._outline)
             painter.end()
+        if self._find_current is not None:
+            self._paint_find_current(event)
         if self._link:
             self._paint_links(event)
+
+    def _paint_find_current(self, event: QPaintEvent) -> None:
+        """The current Find match's outline, over the text and its selection."""
+        row, start, end = self._find_current  # type: ignore[misc]
+        for n, _row, top, height in self.visible_rows(event.rect()):
+            if n == row:
+                painter = QPainter(self.viewport())
+                painter.setPen(QPen(self._find_outline, _FIND_OUTLINE))
+                half = _FIND_OUTLINE / 2
+                for rect in self.span_rects(n, ((start, end),), top, height):
+                    painter.drawRect(rect.adjusted(half, half, -half, -half))
+                painter.end()
+                return
 
     def word_spans(self, n: int) -> Spans:
         """Row ``n``'s changed character ranges (none if it isn't paired, or its
@@ -516,7 +565,10 @@ class DiffView(QPlainTextEdit):
 
     def word_rects(self, n: int, top: float, height: float) -> list[QRectF]:
         """Where row ``n``'s changed words are, in viewport coordinates."""
-        spans = self.word_spans(n)
+        return self.span_rects(n, self.word_spans(n), top, height)
+
+    def span_rects(self, n: int, spans: Spans, top: float, height: float) -> list[QRectF]:
+        """Where character ranges ``spans`` of row ``n`` are, in viewport coordinates."""
         if not spans:
             return []
         block = self.document().findBlockByNumber(n)

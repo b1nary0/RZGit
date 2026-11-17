@@ -393,3 +393,28 @@ class FloatingButtonTests(unittest.TestCase):
                 for fill in (c.floating_button_bg, c.floating_button_hover):
                     self.assertGreaterEqual(contrast(c.floating_button_text, fill), 4.5)
                 self.assertGreaterEqual(contrast(c.floating_button_border, c.floating_button_bg), 1.5)
+
+
+class FindMatchColourTests(unittest.TestCase):
+    """Find's matches stand out from every diff background and read (RZG-74)."""
+
+    BACKGROUNDS = ("content_bg", "text_selection", "diff_added_bg", "diff_added_word",
+                   "diff_removed_bg", "diff_removed_word", "diff_added_selected_bg",
+                   "diff_removed_selected_bg", "diff_hunk_bg", "diff_filler_bg")
+
+    def test_text_reads_on_it_and_it_stands_apart_under_every_vision(self):
+        for theme in ALL_THEMES:
+            c = theme.colors
+            with self.subTest(theme.name):
+                self.assertGreaterEqual(contrast(c.text, c.diff_find_match), 4.5)
+                for name in self.BACKGROUNDS:
+                    self.assertGreaterEqual(min_delta_e(c.diff_find_match, getattr(c, name)), 6,
+                                            name)
+
+    def test_the_current_matchs_outline_shows_on_everything_under_it(self):
+        for theme in ALL_THEMES:
+            c = theme.colors
+            with self.subTest(theme.name):
+                for name in ("diff_find_match", *self.BACKGROUNDS):
+                    self.assertGreaterEqual(contrast(c.diff_find_current, getattr(c, name)), 3,
+                                            name)

@@ -135,6 +135,8 @@ src/rzgitclient/
       diff_gutter.py            DiffGutter: line buttons, line numbers and +/− marks beside a DiffView
       line_selection.py         LineSelection: which changed rows of a DiffView are selected (from the gutter)
       diff_rows.py              DiffRow, unified_rows, split_rows, *_partners, word_spans, copy_text (no Qt)
+      find_query.py             FindQuery, FindMatch, find_matches: Find in a diff (no Qt)
+      find_bar.py               FindBar: the Diff panel's find bar
       commit_panel.py           CommitPanel: the message box and Commit button
     layout/
       layout_model.py           PanelNode / SplitNode / TabsNode, (de)serialisation, normalize
@@ -1574,6 +1576,50 @@ than rebuilding them.
   - **Keeping the place:** toggling it keeps the selected lines selected (matched by
     their kind and old and new numbers) and in view; with nothing selected, the line at
     the top of the view stays at the top.
+- **Find** (RZG-74): **Ctrl+F** opens the find bar (`FindBar`, `find_bar.py`) at the bottom
+  of the panel and focuses its field, filled with the selected text when that is within one
+  row and isn't the current match. The shortcuts are the panel's own
+  (`WidgetWithChildrenShortcut`: focus anywhere in it), with no menu entry. Esc in the bar
+  closes it (the highlights go) and puts focus back in the view; Esc in the view still
+  clears the selection.
+  - **The bar:** the query field, toggles **Aa** (match case, off by default), **W** (whole
+    word), **.\*** (regex) and **Keep**, ↑ and ↓, the count and ×. The count is a hint
+    (`Role.HINT`): "3 of 12", "12 matches" while none is current, "No results", or
+    "Invalid pattern" (`Role.HINT_WARNING`) for a regex that doesn't compile (nothing is
+    found). The toggles are
+    kept while the app runs (a new bar starts with the last ones), not saved.
+  - **Searching** is live: 100 ms after the last keystroke, or at once for a toggle.
+    `FindQuery(text, case, word, regex).pattern()` (`find_query.py`, no Qt) compiles it
+    (raising `ValueError` if it can't); `find_matches(rows, pattern)` gives each
+    `FindMatch(row, start, end, hidden)` in a view's rows: on context, added and removed
+    rows and in a fold row's hidden lines (`hidden`: the index among them), never on hunk
+    headers, filler or notes, in the text as shown (`DiffRow.text`). Empty matches are
+    skipped; a match never spans rows. A query that can't match a line break (not a
+    regex: `FindQuery.joinable`) searches all the rows joined as one text, which is faster;
+    a regex searches row by row, so `^` and `$` are a row's ends. It runs on the UI thread:
+    the diff size limit (§4.1) caps the text, and Find stops at `MAX_MATCHES` (10,000:
+    "3 of 10,000+"), since Python's `re` takes about 50 ms per 100,000 matches. A diff
+    at the size limit takes under 40 ms, side by side included.
+  - **Stepping:** Enter / Shift+Enter in the field, F3 / Shift+F3 anywhere in the panel,
+    and ↓ / ↑, go to the next and the previous match, wrapping at the ends. Matches are in
+    row order; side by side, a row's left matches before its right ones. With no current
+    match, the first is the one at or after the start of the selection (or the caret).
+    The current match is the text selection (`select_text`), scrolled into view, on its
+    side (the other side's text selection is cleared), and has a 1 px outline in
+    `diff_find_current` (`DiffView.set_find_current`), so it doesn't rest on colour alone.
+    The outline goes round the whole word the match is part of (`word_around`, in
+    `find_query.py`: a match edge inside a run of word characters moves out to the run's
+    end), so "Command" found in "CommandQueue" outlines "CommandQueue"; the fill and the
+    selection stay on the match. Stepping onto a match in a fold row
+    unfolds that stretch first.
+  - **Highlights:** every match on a shown row is filled in `diff_find_match`
+    (`DiffView.set_find_spans`), over the row and word backgrounds and under the text,
+    for the visible rows only, placed like word highlights.
+  - **One diff at a time:** a search never spills into another file. A new diff of the same
+    file, or new rows (folds, headers, the view), searches again, and the current match
+    stays current while the selection is still on it. Switching to another file (a
+    different `FileSelection`) closes the bar, unless **Keep** is on: then the search
+    applies to the new file, and its first match is selected.
 - **States:** "Select a file to see its diff", "No changes to show", "Binary file", "Large
   diff (N lines) [Show anyway]" and "Couldn't read this diff" are a muted message instead
   of the view (`Role.PLACEHOLDER`). If a diff takes more than 150 ms, "Loading…" is shown.
@@ -2062,6 +2108,8 @@ class ThemeColors:   menubar_bg: str; toolbar_bg: str; tab_bg: str; header_bg: s
                      floating_button_border, floating_button_shadow: str   # a control floating over a list (History's Back to top, RZG-64)
                      text: str; text_muted: str; hover: str; selection: str; content_selection: str;
                      accent: str; button_*: str; scroll_*: str; diff_*: str (incl. diff_hunk_bg, diff_hunk_text, diff_line_button*, diff_*_selected_bg, diff_*_word); …
+                     diff_find_match: str   # every Find match in the diff (RZG-74): text ≥ 4.5:1 on it; ΔE ≥ 6 from the diff backgrounds, content_bg and text_selection, under every simulated vision
+                     diff_find_current: str   # the current Find match's outline: ≥ 3:1 on diff_find_match, text_selection and every diff background
 @dataclass(frozen=True)
 class StatusColors:  modified, added, deleted, renamed, copied, type_changed, conflict, untracked: str
                      def for_code(self, code: str) -> str | None   # porcelain letter → colour; None if unknown

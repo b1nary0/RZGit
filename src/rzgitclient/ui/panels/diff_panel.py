@@ -4,7 +4,7 @@ whole file (spec §5.4)."""
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -30,6 +30,7 @@ from rzgitclient.ui.panels.diff_rows import (
     DiffRow,
     FoldKey,
     Stretch,
+    TextPos,
     fold,
     split_partners,
     split_rows,
@@ -41,6 +42,8 @@ from rzgitclient.ui.panels.diff_rows import (
     whole_split_rows,
 )
 from rzgitclient.ui.panels.diff_view import TAB_WIDTH, DiffView, Numbers, Place
+from rzgitclient.ui.panels.find_bar import FindBar
+from rzgitclient.ui.panels.find_query import MAX_MATCHES, FindMatch, find_matches, word_around
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.theme.style_roles import Role, set_role
@@ -95,6 +98,7 @@ class DiffPanel(Panel):
     _left: DiffView | None
     _right: DiffView | None
     _loading: QTimer
+    find_bar: FindBar
 
     def _setup(self) -> None:
         self._file: FileSelection | None = None  # selected: shown, or on its way
@@ -106,6 +110,13 @@ class DiffPanel(Panel):
         self._fold_new = True  # the next render sets the folds as a diff opens
         self._place: list[Place] | None = None  # to go back to once the toggled diff is in
         self._unified = self._split = self._left = self._right = None
+        # Find (RZG-74): the matches in the shown views, as (side, match), in order.
+        self._matches: list[tuple[int, FindMatch]] = []
+        self._match_index: dict[tuple[int, int, int, int], int] = {}  # a shown match's place
+        self._current: int | None = None  # the match that is the text selection
+        self._invalid = False  # the query doesn't compile
+        self._more = False  # there are more than MAX_MATCHES matches
+        self._find_jump = False  # Keep is on and another file was picked: go to its first match
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -115,6 +126,20 @@ class DiffPanel(Panel):
         self._message_page = self._build_message()
         self._stack.addWidget(self._message_page)
         layout.addWidget(self._stack, 1)
+        self.find_bar = FindBar()
+        self.find_bar.hide()
+        self.find_bar.changed.connect(lambda: self._search(jump=True))
+        self.find_bar.next_requested.connect(lambda: self.find_step(1))
+        self.find_bar.previous_requested.connect(lambda: self.find_step(-1))
+        self.find_bar.closed.connect(self._on_find_closed)
+        layout.addWidget(self.find_bar)
+        context = Qt.ShortcutContext.WidgetWithChildrenShortcut
+        for keys, slot in ((QKeySequence.StandardKey.Find, self.open_find),
+                           (QKeySequence("F3"), lambda: self.find_step(1)),
+                           (QKeySequence("Shift+F3"), lambda: self.find_step(-1))):
+            shortcut = QShortcut(QKeySequence(keys), self)
+            shortcut.setContext(context)
+            shortcut.activated.connect(slot)
 
         self._loading = QTimer(self)
         self._loading.setSingleShot(True)
@@ -221,6 +246,7 @@ class DiffPanel(Panel):
     def _connect(self, view: DiffView) -> None:
         view.set_tab_width(self.ctx.prefs.value(TAB_SPACES))
         view.hunk_clicked.connect(self._on_hunk_link)
+        view.selectionChanged.connect(self._sync_current)
         view.lines_clicked.connect(self._apply)
         view.fold_clicked.connect(self._toggle_fold)
         view.customContextMenuRequested.connect(
@@ -239,6 +265,8 @@ class DiffPanel(Panel):
         session = self.ctx.session
         self._place = None
         if file is None:
+            if not self.find_bar.keep.isChecked():
+                self.find_bar.close_bar()
             session.request_diff(None)
             self._loading.stop()
             self._shown = None
@@ -248,6 +276,11 @@ class DiffPanel(Panel):
         self._request(file)
         if old is None or old.path != file.path:
             self.request_activation()  # the user picked another file
+        if file != old and self.find_bar.isVisible():
+            if self.find_bar.keep.isChecked():  # the search goes on in the new file
+                self._find_jump = True
+            else:  # a search never spills into another file
+                self.find_bar.close_bar()
         if self._cached(file):  # already read: an equal result won't be sent again
             self._show(file, session.diff)
         else:
@@ -383,6 +416,8 @@ class DiffPanel(Panel):
             view.set_rows(rows, keep_scroll, partners=unified_partners(rows), fold_marks=marks)
             view.set_hunk_link(link, why or "")
             self._stack.setCurrentWidget(view)
+        jump, self._find_jump = self._find_jump, False
+        self._search(jump=jump)
 
     # ---- folding the whole file (spec §5.4) ----------------------------------
 
@@ -482,6 +517,169 @@ class DiffPanel(Panel):
         self._changes_only.setVisible(changes_only)
         self._hint.hide()
         self._stack.setCurrentWidget(self._message_page)
+        self._search()  # nothing to find in a message
+
+
+    # ---- find (spec §5.4, RZG-74) --------------------------------------------
+
+    def open_find(self) -> None:
+        """Ctrl+F: open the find bar, filled with the selected text when that is
+        within one row and isn't the current match, and search."""
+        was_open = self.find_bar.isVisible()
+        text = None
+        for view in self._shown_views():
+            span = view.text_range()
+            if span is not None and span[0].row == span[1].row:
+                if self._place_of_selection(view) is None:
+                    text = view.rows[span[0].row].text[span[0].col:span[1].col]
+                break
+        changed = text is not None and text != self.find_bar.field.text()
+        self.find_bar.open(text)
+        if changed or not was_open:
+            self._search(jump=True)
+
+    def find_step(self, delta: int) -> None:
+        """F3 (``delta`` 1) or Shift+F3 (-1): the next or previous match, wrapping."""
+        bar = self.find_bar
+        if not bar.isVisible():
+            if not bar.field.text():
+                self.open_find()
+                return
+            bar.show()
+            self._search()
+        if bar.flush():  # the waiting search went to the first match itself
+            return
+        if not self._matches:
+            return
+        current = self._selected_match()
+        if current is None:
+            index = self._from_anchor(forward=delta > 0)
+        else:
+            index = (current + delta) % len(self._matches)
+        self._go(index)
+
+    def _search(self, jump: bool = False) -> None:
+        """Find the bar's query in the shown views and fill the matches; with
+        ``jump``, go to the first one at or after the selection or caret."""
+        views = self._shown_views() if self.find_bar.isVisible() else []
+        self._invalid = False
+        query = self.find_bar.query()
+        pattern = None
+        if views:
+            try:
+                pattern = query.pattern()
+            except ValueError:
+                self._invalid = True
+        matches = [(side, m) for side, view in enumerate(views)
+                   for m in find_matches(view.rows, pattern, query.joinable, MAX_MATCHES + 1)]
+        matches.sort(key=lambda sm: (*sm[1].order[:2], sm[0], sm[1].start))
+        self._more = len(matches) > MAX_MATCHES
+        del matches[MAX_MATCHES:]
+        self._matches = matches
+        self._match_index = {(side, m.row, m.start, m.end): i
+                             for i, (side, m) in enumerate(matches) if m.hidden is None}
+        for side, view in enumerate(views):
+            spans: dict[int, list[tuple[int, int]]] = {}
+            for s, m in matches:
+                if s == side and m.hidden is None:
+                    spans.setdefault(m.row, []).append((m.start, m.end))
+            view.set_find_spans({row: tuple(found) for row, found in spans.items()})
+        self._current = self._selected_match()
+        if jump and matches:
+            self._go(self._from_anchor(forward=True))
+        else:
+            self._update_count()
+            self._outline_current()
+
+    def _go(self, index: int) -> None:
+        """Make match ``index`` current: the text selection, in view, unfolding its
+        stretch first if it's in a fold row."""
+        side, match = self._matches[index]
+        views = self._shown_views()
+        if match.hidden is not None:
+            key = views[side].rows[match.row].fold
+            match = FindMatch(match.row + match.hidden, match.start, match.end)
+            if key is not None:
+                self._folded.discard(key)
+            self._rerender()  # searches again
+            views = self._shown_views()
+            index = self._match_index.get((side, match.row, match.start, match.end), -1)
+            if index < 0:
+                return
+        for n, view in enumerate(views):
+            if n != side:
+                view.clear_text_selection()
+        views[side].select_text(TextPos(match.row, match.start), TextPos(match.row, match.end))
+        self._current = index
+        self._update_count()
+        self._outline_current()
+
+    def _from_anchor(self, forward: bool) -> int:
+        """The first match at or after the selection's start (or the caret), or with
+        ``forward`` False the last before it; wrapping."""
+        views = self._shown_views()
+        side = next((n for n, v in enumerate(views) if v.text_range() is not None),
+                    next((n for n, v in enumerate(views) if v.hasFocus()), 0))
+        view = views[side]
+        span = view.text_range()
+        at = span[0] if span is not None else view.text_cursor()
+        anchor = (at.row, -1, side, at.col)
+        keys = [(*m.order[:2], s, m.start) for s, m in self._matches]
+        if forward:
+            return next((i for i, k in enumerate(keys) if k >= anchor), 0)
+        return next((i for i in range(len(keys) - 1, -1, -1) if keys[i] < anchor),
+                    len(keys) - 1)
+
+    def _place_of_selection(self, view: DiffView) -> int | None:
+        views = self._shown_views()
+        span = view.text_range()
+        if span is None or view not in views or span[0].row != span[1].row:
+            return None
+        start, end = span
+        return self._match_index.get((views.index(view), start.row, start.col, end.col))
+
+    def _selected_match(self) -> int | None:
+        """The match that is a shown view's text selection, if one is."""
+        for view in self._shown_views():
+            index = self._place_of_selection(view)
+            if index is not None:
+                return index
+        return None
+
+    def _sync_current(self) -> None:
+        if self.find_bar.isVisible() and self._matches:
+            self._current = self._selected_match()
+            self._update_count()
+            self._outline_current()
+
+    def _outline_current(self) -> None:
+        """Outline the whole word of the current match on its side, and nothing elsewhere."""
+        side, match = (self._matches[self._current] if self._current is not None
+                       else (None, None))
+        views = self._shown_views()
+        for view in (self._unified, self._left, self._right):
+            current = None
+            if view is None:
+                continue
+            if match is not None and view in views and views.index(view) == side:
+                current = (match.row, *word_around(view.rows[match.row].text,
+                                                   match.start, match.end))
+            view.set_find_current(current)
+
+    def _update_count(self) -> None:
+        self.find_bar.set_count(self._current, len(self._matches), self._invalid, self._more)
+
+    def _on_find_closed(self) -> None:
+        self._find_jump = False
+        self._search()  # the bar is hidden: no matches
+        for view in (self._unified, self._left, self._right):
+            if view is not None:
+                view.set_find_spans({})
+                view.set_find_current(None)
+        views = self._shown_views()
+        if views:
+            side = next((n for n, v in enumerate(views) if v.text_range() is not None), 0)
+            views[side].setFocus(Qt.FocusReason.OtherFocusReason)
 
 
 def _describe(file: FileSelection, diff: FileDiff | None) -> str:

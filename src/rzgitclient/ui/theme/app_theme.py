@@ -63,6 +63,8 @@ class ThemeColors:
     diff_removed_word: str
     diff_added_selected_bg: str  # a selected line: a stronger shade of its own colour
     diff_removed_selected_bg: str
+    diff_find_match: str  # every Find match (RZG-74), under the text
+    diff_find_current: str  # the outline of the current Find match
     diff_filler_bg: str
     diff_gutter_text: str
     diff_hunk_bg: str  # the "@@ -1,4 +1,5 @@" row
@@ -281,6 +283,8 @@ LIGHT_THEME = AppTheme(
         diff_removed_word="#e79a9a",
         diff_added_selected_bg="#b0e6a5",
         diff_removed_selected_bg="#ecaeae",
+        diff_find_match="#b98cf5",
+        diff_find_current="#3b1478",
         diff_filler_bg="#f0f0f0",
         diff_gutter_text="#9a9a9a",
         diff_hunk_bg="#e8eef6",
@@ -356,6 +360,8 @@ DARK_THEME = AppTheme(
         diff_removed_word="#6e333b",
         diff_added_selected_bg="#2d4b3a",
         diff_removed_selected_bg="#552f35",
+        diff_find_match="#6e4e9c",
+        diff_find_current="#eadcff",
         diff_filler_bg="#27282e",
         diff_gutter_text="#757783",
         diff_hunk_bg="#2f3447",
