@@ -424,8 +424,8 @@ class DiffPanel(Panel):
             unfold_all.triggered.connect(self.unfold_all)
             menu.addSeparator()
         copy = menu.addAction("Copy")
-        copy.setEnabled(bool(view.selection))
-        copy.triggered.connect(view.selection.copy)
+        copy.setEnabled(bool(view.selection) or view.text_range() is not None)
+        copy.triggered.connect(view.copy)
         return menu
 
     def _show_message(self, text: str, show_anyway: bool = False,

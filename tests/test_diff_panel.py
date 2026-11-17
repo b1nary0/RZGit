@@ -12,7 +12,7 @@ from rzgitclient.core.selection import FileSelection, FileSource
 from rzgitclient.ui.app_actions import HunkHeaders
 from rzgitclient.ui.panels import diff_panel
 from rzgitclient.ui.panels.diff_panel import DiffPanel
-from rzgitclient.ui.panels.diff_rows import RowKind, unified_rows
+from rzgitclient.ui.panels.diff_rows import RowKind, TextPos, unified_rows
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
@@ -434,6 +434,20 @@ class DiffPanelHunkTests(unittest.TestCase):
         self.assertEqual(QApplication.clipboard().text(), "line 5\nFIVE")
         self.trigger(menu, "Stage Selected Lines")
         self.assertIn("line 4\nFIVE\nline 6\n", self.index("a.txt"))
+
+    def test_the_menu_uses_a_text_selection_when_no_line_is_selected(self):
+        self.select("a.txt")
+        view = self.panel._unified
+        removed = next(n for n, r in enumerate(view.rows) if r.text == "line 5")
+        # From inside "line 4" (context) to inside "- line 5".
+        view.select_text(TextPos(removed - 1, 2), TextPos(removed, 2))
+        menu = self.panel.menu_for(view, QPoint(30, 5))  # a right-click elsewhere
+        self.addCleanup(menu.deleteLater)
+        self.assertIn(("Copy", True), self.entries(menu))
+        next(a for a in menu.actions() if a.text() == "Copy").trigger()
+        self.assertEqual(QApplication.clipboard().text(), "ne 4\nli")
+        self.trigger(menu, "Stage Selected Lines")
+        self.assertIn("line 4\nline 6\n", self.index("a.txt"))
 
     def test_no_line_buttons_where_there_is_no_link(self):
         sha = git(self.repo, "rev-parse", "HEAD").strip()

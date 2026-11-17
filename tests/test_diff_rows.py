@@ -6,6 +6,7 @@ from rzgitclient.ui.panels.diff_rows import (
     WORD_MAX_LENGTH,
     DiffRow,
     RowKind,
+    TextPos,
     FOLD_KEEP,
     FOLD_MIN_LINES,
     fold,
@@ -18,6 +19,8 @@ from rzgitclient.ui.panels.diff_rows import (
     whole_rows,
     whole_split_rows,
     word_spans,
+    copy_text,
+    touched_rows,
 )
 from rzgitclient.core.diff_request import split_whole
 
@@ -195,6 +198,60 @@ class WholeRowsTests(unittest.TestCase):
         self.assertEqual([n for n, r in enumerate(a) if r.kind is K.FOLD],
                          [n for n, r in enumerate(b) if r.kind is K.FOLD])
         self.assertEqual(marks_a, {})
+
+
+class CopyTextTests(unittest.TestCase):
+    """RZG-73: what a text selection copies (spec §5.4 "Text selection")."""
+
+    ROWS = unified_rows(DIFF)  # header, same, old 1, old 2, new 1, end, tail, note
+
+    def copy(self, start, end, rows=None):
+        return copy_text(rows or self.ROWS, TextPos(*start), TextPos(*end))
+
+    def test_code_only_without_headers_and_notes(self):
+        self.assertEqual(self.copy((0, 0), (7, len(NO_NEWLINE))),
+                         "same\nold 1\nold 2\nnew 1\nend\ntail")
+
+    def test_partial_first_and_last_rows_and_either_order(self):
+        self.assertEqual(self.copy((2, 4), (4, 3)), "1\nold 2\nnew")
+        self.assertEqual(self.copy((4, 3), (2, 4)), "1\nold 2\nnew")
+
+    def test_within_one_row_what_it_shows_a_header_too(self):
+        self.assertEqual(self.copy((1, 1), (1, 3)), "am")
+        self.assertEqual(self.copy((0, 3), (0, 6)), "-1,")
+
+    def test_a_whole_line_ends_with_its_newline(self):
+        self.assertEqual(self.copy((1, 0), (2, 0)), "same\n")
+        self.assertEqual(list(touched_rows(self.ROWS, TextPos(1, 0), TextPos(2, 0))), [1])
+        self.assertEqual(list(touched_rows(self.ROWS, TextPos(1, 4), TextPos(3, 1))), [2, 3])
+
+    def test_side_by_side_filler_is_skipped(self):
+        left, right = split_rows(DIFF)
+        self.assertIn(K.FILLER, [r.kind for r in left])
+        self.assertEqual(copy_text(left, TextPos(0, 0), TextPos(len(left) - 1, 0)),
+                         "same\nold 1\nold 2\nend")
+
+    def test_a_carriage_return_is_copied_as_one(self):
+        diff = FileDiff("f", (Hunk("@@ -1 +1 @@", 1, 1, (DiffLine(A, None, 1, "x\r"),)),))
+        rows = unified_rows(diff)
+        self.assertEqual(rows[1].text, "x␍")
+        self.assertEqual(copy_text(rows, TextPos(0, 0), TextPos(1, 2)), "x\r")
+        self.assertIsNone(self.ROWS[1].raw)  # only kept when it differs
+
+    def test_a_fold_row_copies_its_hidden_lines(self):
+        diff = whole_diff(80, {30, 60})
+        rows = whole_rows(diff, "full")
+        found = stretches(rows)
+        folded, _marks = fold(rows, found, {found[1].key})
+        n = next(i for i, r in enumerate(folded) if r.kind is K.FOLD)
+        hidden = [r.text for r in rows[found[1].start:found[1].end] if r.kind is K.CONTEXT]
+        self.assertEqual(copy_text(folded, TextPos(n - 1, 0), TextPos(n + 1, 0)),
+                         "\n".join([folded[n - 1].text, *hidden, ""]))
+        self.assertEqual(copy_text(folded, TextPos(n, 0), TextPos(n, 1)), "\n".join(hidden))
+        # Ending at its start, or starting at its end, leaves it out.
+        self.assertNotIn(hidden[0], copy_text(folded, TextPos(n - 1, 0), TextPos(n, 0)))
+        end = len(folded[n].text)
+        self.assertNotIn(hidden[0], copy_text(folded, TextPos(n, end), TextPos(n + 1, 2)))
 
 
 if __name__ == "__main__":

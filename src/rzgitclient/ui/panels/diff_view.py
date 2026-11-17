@@ -4,23 +4,29 @@ The text goes in with one ``setPlainText``: QPlainTextEdit lays out lazily,
 so a long diff costs little until it's scrolled to. Row backgrounds are
 painted for the visible rows only, under the text, from each row's kind,
 and so are the changed words of a paired removed and added line.
-Hunk headers can show a link at the right edge. Whole changed lines are
-selected (a LineSelection), not text. In the whole-file view, a click on a fold
-row or on a fold mark in the gutter asks the panel to fold or unfold.
+Hunk headers can show a link at the right edge. The text is selectable, with a
+caret, and copies as code only (``copy_text``); the gutter selects whole changed
+lines (a LineSelection), for staging. Only one of the two is there at a time.
+In the whole-file view, a click on a fold row or on a fold mark in the gutter asks
+the panel to fold or unfold.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import (
+    QClipboard,
     QColor,
     QCursor,
+    QGuiApplication,
     QHelpEvent,
     QKeyEvent,
+    QKeySequence,
     QMouseEvent,
     QPainter,
     QPaintEvent,
@@ -31,13 +37,23 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QFrame, QPlainTextEdit, QToolTip, QWidget
 
 from rzgitclient.ui.panels.diff_gutter import DiffGutter
-from rzgitclient.ui.panels.diff_rows import DiffRow, FoldKey, RowKind, Spans, word_spans
+from rzgitclient.ui.panels.diff_rows import (
+    DiffRow,
+    FoldKey,
+    RowKind,
+    Spans,
+    TextPos,
+    copy_text,
+    touched_rows,
+    word_spans,
+)
 from rzgitclient.ui.panels.line_selection import LineSelection
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.theme.style_roles import Role, set_role
 
 _LINK_PADDING = 8  # px around a hunk header's link
 _TAB_WIDTH = 4  # in spaces
+_WORD = re.compile(r"\w+")
 
 
 class Numbers(Enum):
@@ -68,14 +84,19 @@ class DiffView(QPlainTextEdit):
         self._partners: Mapping[int, str] = {}  # paired row → its partner's text
         self._spans: dict[int, Spans] = {}  # changed words per row, worked out when painted
         self._fold_marks: Mapping[int, FoldKey] = {}  # row → the stretch it starts
+        self._has_folds = False  # a fold row is filled while the text selection covers it
+        self._text_selection_bg = QColor()
+        self._words: tuple[int, int] | None = None  # the first word of a Ctrl-drag
         self.selection = LineSelection(self)
         self.selection.changed.connect(self._selection_changed)
+        self.selectionChanged.connect(self._text_selection_changed)
         set_role(self, Role.DIFF_VIEW)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setReadOnly(True)
         self.setUndoRedoEnabled(False)
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
+                                     | Qt.TextInteractionFlag.TextSelectableByKeyboard)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.gutter = DiffGutter(self, numbers.value)
         self.gutter.button_clicked.connect(self._on_button)
@@ -100,17 +121,26 @@ class DiffView(QPlainTextEdit):
         a row that starts a foldable stretch to the stretch."""
         v, h = self.verticalScrollBar().value(), self.horizontalScrollBar().value()
         rows = tuple(rows)
-        if not (keep_scroll and rows == self._rows):
+        same = keep_scroll and rows == self._rows
+        cursor = self.textCursor()
+        caret = (cursor.anchor(), cursor.position()) if same else None
+        if not same:
             self.selection.clear()
         self._rows = rows
         self._partners = partners or {}
         self._fold_marks = fold_marks or {}
+        self._has_folds = any(r.kind is RowKind.FOLD for r in rows)
         self._spans = {}
         self.setPlainText("\n".join(r.text for r in self._rows))
         numbers = [n for r in self._rows for n in (r.old_no, r.new_no) if n is not None]
         self.gutter.set_digits(len(str(max(numbers, default=1))))
         self._color_text()
         self._update_margins()
+        if caret is not None:  # the same text: the same caret and text selection
+            cursor = QTextCursor(self.document())
+            cursor.setPosition(caret[0])
+            cursor.setPosition(caret[1], QTextCursor.MoveMode.KeepAnchor)
+            self.setTextCursor(cursor)
         if keep_scroll:
             self.verticalScrollBar().setValue(v)
             self.horizontalScrollBar().setValue(h)
@@ -159,8 +189,108 @@ class DiffView(QPlainTextEdit):
         return self._rows[n] if 0 <= n < len(self._rows) else None
 
     def selected_lines(self) -> frozenset[tuple[int, int]]:
-        """``(hunk, line)`` of the selected lines."""
-        return self.selection.lines()
+        """``(hunk, line)`` of the selected lines, or else of the changed lines the
+        text selection touches."""
+        if self.selection:
+            return self.selection.lines()
+        span = self.text_range()
+        if span is None:
+            return frozenset()
+        return frozenset(self.selection.line(n) for n in touched_rows(self._rows, *span)
+                         if self.selection.selectable(n))
+
+    # ---- the text cursor and selection (RZG-73) ----------------------------------
+
+    def text_cursor(self) -> TextPos:
+        """Where the caret is."""
+        return self._text_pos(self.textCursor().position())
+
+    def text_range(self) -> tuple[TextPos, TextPos] | None:
+        """The selected text, start before end; None when none is."""
+        cursor = self.textCursor()
+        if not cursor.hasSelection():
+            return None
+        return self._text_pos(cursor.selectionStart()), self._text_pos(cursor.selectionEnd())
+
+    def select_text(self, start: TextPos, end: TextPos) -> None:
+        """Select from ``start`` to ``end``, with the caret at ``end``, in view."""
+        cursor = QTextCursor(self.document())
+        cursor.setPosition(self._position(start))
+        cursor.setPosition(self._position(end), QTextCursor.MoveMode.KeepAnchor)
+        self.setTextCursor(cursor)
+        self.ensureCursorVisible()
+
+    def clear_text_selection(self) -> None:
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            cursor.clearSelection()
+            self.setTextCursor(cursor)
+
+    def word_at_cursor(self) -> str:
+        """The word (a run of word characters) the caret is in or next to; "" for none."""
+        if not self._rows:
+            return ""
+        pos = self.text_cursor()
+        for match in _WORD.finditer(self._rows[pos.row].text):
+            if match.start() <= pos.col <= match.end():
+                return match.group()
+        return ""
+
+    def copied_text(self) -> str:
+        """What Copy copies: the selected text as code only, or else the selected lines."""
+        span = self.text_range()
+        return copy_text(self._rows, *span) if span is not None else self.selection.text()
+
+    def copy(self) -> None:
+        if self.text_range() is not None or self.selection:
+            QGuiApplication.clipboard().setText(self.copied_text())
+
+    def _set_primary(self) -> None:
+        """Linux's primary selection gets the code too, not the view's raw text."""
+        clipboard = QGuiApplication.clipboard()
+        if clipboard.supportsSelection() and self.text_range() is not None:
+            clipboard.setText(self.copied_text(), QClipboard.Mode.Selection)
+
+    def _text_pos(self, position: int) -> TextPos:
+        block = self.document().findBlock(position)
+        return TextPos(block.blockNumber(),
+                       _from_utf16(block.text(), position - block.position()))
+
+    def _position(self, pos: TextPos) -> int:
+        doc = self.document()
+        block = doc.findBlockByNumber(min(max(pos.row, 0), doc.blockCount() - 1))
+        text = block.text()
+        return block.position() + _utf16(text, min(max(pos.col, 0), len(text)))
+
+    def _text_selection_changed(self) -> None:
+        if self.textCursor().hasSelection():
+            self.selection.clear()  # one selection at a time
+        if self._has_folds:
+            self.viewport().update()  # a fold row inside it is filled
+            self.gutter.update()
+
+    def _word_span(self, pos: QPoint) -> tuple[int, int]:
+        cursor = self.cursorForPosition(pos)
+        cursor.select(QTextCursor.SelectionType.WordUnderCursor)
+        if cursor.hasSelection():
+            return cursor.selectionStart(), cursor.selectionEnd()
+        at = self.cursorForPosition(pos).position()
+        return at, at
+
+    def _select_words(self, pos: QPoint) -> None:
+        """A Ctrl-drag is at ``pos``: from its first word to the word there."""
+        if self._words is None:
+            return
+        start, end = self._words
+        word_start, word_end = self._word_span(pos)
+        cursor = QTextCursor(self.document())
+        if word_start < start:
+            cursor.setPosition(end)
+            cursor.setPosition(word_start, QTextCursor.MoveMode.KeepAnchor)
+        else:
+            cursor.setPosition(start)
+            cursor.setPosition(max(end, word_end), QTextCursor.MoveMode.KeepAnchor)
+        self.setTextCursor(cursor)
 
     def _on_button(self, n: int) -> None:
         """A selected line's button acts on the whole selection; another's on its line."""
@@ -168,14 +298,22 @@ class DiffView(QPlainTextEdit):
                                 else frozenset({self.selection.line(n)}))
 
     def _selection_changed(self) -> None:
+        if self.selection:
+            self.clear_text_selection()  # one selection at a time
         self.viewport().update()
         self.gutter.update()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        if self.selection.key(event):
+        if event.matches(QKeySequence.StandardKey.Copy):
+            self.copy()
+            event.accept()
+        elif event.key() == Qt.Key.Key_Escape and (self.selection or self.text_range()):
+            self.selection.clear()
+            self.clear_text_selection()
             event.accept()
         else:
             super().keyPressEvent(event)
+            self._set_primary()
 
     def row_number_at(self, y: int) -> int | None:
         """The number of the row at height ``y`` (viewport or gutter coordinates)."""
@@ -188,6 +326,10 @@ class DiffView(QPlainTextEdit):
         """Row ``n``'s background, or None for the view's own."""
         if n in self.selection:
             return self._selected_bg.get(row.kind)
+        if row.kind is RowKind.FOLD:
+            span = self.text_range()
+            if span is not None and n in touched_rows(self._rows, *span):
+                return self._text_selection_bg  # its hidden lines are selected too
         return self._backgrounds.get(row.kind)
 
     def visible_rows(self, rect: QRect) -> Iterator[tuple[int, DiffRow, float, float]]:
@@ -218,38 +360,72 @@ class DiffView(QPlainTextEdit):
         width = self.fontMetrics().horizontalAdvance(self._link) + 2 * _LINK_PADDING
         return QRect(self.viewport().width() - width, int(top), width, int(height))
 
+    def _clicks_through(self, pos: QPoint) -> bool:
+        """A left click at ``pos`` is a hunk link's or a fold row's, not the text's."""
+        row = self.row_at(pos)
+        return self.link_at(pos) is not None or (row is not None and row.kind is RowKind.FOLD)
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        pos = event.position().toPoint()
+        if event.button() is Qt.MouseButton.RightButton:
+            if not self.textCursor().hasSelection():  # keep a selection for its menu
+                self.setTextCursor(self.cursorForPosition(pos))
+            super().mousePressEvent(event)
+            return
         if event.button() is not Qt.MouseButton.LeftButton:
             super().mousePressEvent(event)
             return
-        hunk = self.link_at(event.position().toPoint())
-        row = self.row_at(event.position().toPoint())
+        hunk = self.link_at(pos)
+        row = self.row_at(pos)
         if hunk is not None:
             self.hunk_clicked.emit(hunk)
-        elif row is not None and row.kind is RowKind.FOLD:
+            event.accept()
+            return
+        if row is not None and row.kind is RowKind.FOLD:
             self.fold_clicked.emit(row.fold)
-        else:
-            self.selection.press_at(int(event.position().y()), event.modifiers())
-        event.accept()
+            event.accept()
+            return
+        self.selection.clear()  # one selection at a time
+        modifiers = event.modifiers()
+        if modifiers & Qt.KeyboardModifier.ControlModifier:  # word by word
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
+            self._words = self._word_span(pos)
+            self._select_words(pos)
+            event.accept()
+            return
+        if not modifiers & Qt.KeyboardModifier.ShiftModifier:
+            # Start afresh at the click, so a press inside the old selection
+            # selects anew rather than dragging the text away.
+            self.setTextCursor(self.cursorForPosition(pos))
+        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        y = int(event.position().y())
+        pos = event.position().toPoint()
         if event.buttons() & Qt.MouseButton.LeftButton:
-            self.selection.drag_to(y)
-        self.gutter.set_hover(self.row_number_at(y))
-        row = self.row_at(event.position().toPoint())
-        over = (self.link_at(event.position().toPoint()) is not None
-                or (row is not None and row.kind is RowKind.FOLD))
-        self.viewport().setCursor(Qt.CursorShape.PointingHandCursor if over
-                                  else Qt.CursorShape.ArrowCursor)
+            if self._words is not None:
+                self._select_words(pos)
+                self.ensureCursorVisible()
+            else:
+                super().mouseMoveEvent(event)
+        self.gutter.set_hover(self.row_number_at(pos.y()))
+        self.viewport().setCursor(Qt.CursorShape.PointingHandCursor if self._clicks_through(pos)
+                                  else Qt.CursorShape.IBeamCursor)
         event.accept()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        self._words = None
         self.selection.release()
-        event.accept()
+        super().mouseReleaseEvent(event)
+        self._set_primary()
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        self.mousePressEvent(event)  # no word selection: the same as a click
+        if event.button() is Qt.MouseButton.LeftButton and (
+                self._clicks_through(event.position().toPoint())
+                or event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            self.mousePressEvent(event)  # a link, a fold row or Ctrl: as a click
+        else:
+            self.selection.clear()
+            super().mouseDoubleClickEvent(event)  # a word
 
     def viewportEvent(self, event: QEvent) -> bool:
         if event.type() is QEvent.Type.Leave:
@@ -280,6 +456,7 @@ class DiffView(QPlainTextEdit):
                              RowKind.FOLD: QColor(c.diff_hunk_text),
                              RowKind.NOTE: QColor(c.text_muted)}
         self._base = QColor(c.content_bg)
+        self._text_selection_bg = QColor(c.text_selection)
         self._selected_bg = {RowKind.ADDED: QColor(c.diff_added_selected_bg),
                              RowKind.REMOVED: QColor(c.diff_removed_selected_bg)}
         self._word_bg = {RowKind.ADDED: QColor(c.diff_added_word),
@@ -449,3 +626,15 @@ def _utf16(text: str, i: int) -> int:
     """Qt's position for ``text[i]``: characters outside the BMP count twice."""
     head = text[:i]
     return i if head.isascii() else len(head.encode("utf-16-le")) // 2
+
+
+def _from_utf16(text: str, u: int) -> int:
+    """The index into ``text`` of Qt's position ``u`` (the inverse of ``_utf16``)."""
+    if text.isascii():
+        return u
+    units = 0
+    for i, ch in enumerate(text):
+        if units >= u:
+            return i
+        units += 2 if ord(ch) > 0xFFFF else 1
+    return len(text)

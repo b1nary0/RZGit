@@ -23,7 +23,8 @@ def long_rows(count=200):
 
 
 class LineSelectionTests(unittest.TestCase):
-    """Selecting whole changed lines (RZG-23 decision 7, spec §5.4 "Line selection")."""
+    """Selecting whole changed lines in the gutter (RZG-23 decision 7, RZG-73,
+    spec §5.4 "Line selection")."""
 
     @classmethod
     def setUpClass(cls):
@@ -58,11 +59,11 @@ class LineSelectionTests(unittest.TestCase):
         QApplication.processEvents()
 
     def click(self, index, modifiers=NONE, widget=None):
-        widget = widget or self.view.viewport()
+        widget = widget or self.view.gutter
         y = self.y(index)
-        self.send(widget, QEvent.Type.MouseButtonPress, y, modifiers,
-                  x=widget.width() - 4 if widget is self.view.gutter else 60)
-        self.send(widget, QEvent.Type.MouseButtonRelease, y, modifiers)
+        x = widget.width() - 4 if widget is self.view.gutter else 60
+        self.send(widget, QEvent.Type.MouseButtonPress, y, modifiers, x=x)
+        self.send(widget, QEvent.Type.MouseButtonRelease, y, modifiers, x=x)
 
     def selected(self, view=None):
         return sorted((view or self.view).selection.rows)
@@ -84,8 +85,12 @@ class LineSelectionTests(unittest.TestCase):
         self.click(2)
         self.assertFalse(self.view.textCursor().hasSelection())
 
+    def test_a_click_in_the_text_selects_no_lines(self):
+        self.click(2, widget=self.view.viewport())
+        self.assertEqual(self.selected(), [])
+
     def test_dragging_selects_the_changed_lines_between(self):
-        viewport = self.view.viewport()
+        viewport = self.view.gutter
         self.send(viewport, QEvent.Type.MouseButtonPress, self.y(1))  # from a context line
         self.send(viewport, QEvent.Type.MouseMove, self.y(3))
         self.assertEqual(self.selected(), [2, 3])
@@ -108,29 +113,23 @@ class LineSelectionTests(unittest.TestCase):
         self.click(1, Qt.KeyboardModifier.ControlModifier)  # a context line: nothing
         self.assertEqual(self.selected(), [2, 3, 5])
 
-    def test_clicks_in_the_gutter_select_too(self):
-        self.click(3, widget=self.view.gutter)
-        self.assertEqual(self.selected(), [3])
-        self.click(5, Qt.KeyboardModifier.ShiftModifier, widget=self.view.gutter)
-        self.assertEqual(self.selected(), [3, 5])
-
     def test_dragging_past_the_bottom_scrolls(self):
         view = self.make_view(long_rows())
         bar = view.verticalScrollBar()
-        self.send(view.viewport(), QEvent.Type.MouseButtonPress, self.y(2, view))
-        self.send(view.viewport(), QEvent.Type.MouseMove, view.viewport().height() + 20)
+        self.send(view.gutter, QEvent.Type.MouseButtonPress, self.y(2, view))
+        self.send(view.gutter, QEvent.Type.MouseMove, view.viewport().height() + 20)
         self.assertGreater(bar.value(), 0)
         QTest.qWait(200)  # the pointer stays there: it keeps scrolling
         self.assertGreater(bar.value(), 1)
         self.assertGreater(max(view.selection.rows), 10)
-        self.send(view.viewport(), QEvent.Type.MouseButtonRelease, 0)
+        self.send(view.gutter, QEvent.Type.MouseButtonRelease, 0)
         value = bar.value()
         QTest.qWait(150)
         self.assertEqual(bar.value(), value)
 
     def test_keys(self):
-        QTest.keyClick(self.view, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
-        self.assertEqual(self.selected(), [2, 3, 5])
+        self.click(2)
+        self.click(5, Qt.KeyboardModifier.ShiftModifier)
         QTest.keyClick(self.view, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
         self.assertEqual(QApplication.clipboard().text(), "old\nnew\nmore")
         QTest.keyClick(self.view, Qt.Key.Key_Escape)

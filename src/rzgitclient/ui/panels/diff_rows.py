@@ -43,6 +43,9 @@ class DiffRow:
     hunk: int | None = field(default=None, compare=False)
     line: int | None = field(default=None, compare=False)
     fold: FoldKey | None = field(default=None, compare=False)  # a fold row's stretch
+    # The line's own text when ``text`` shows it otherwise (a CR as "␍"), for copying.
+    raw: str | None = field(default=None, compare=False)
+    hidden: tuple[DiffRow, ...] = field(default=(), compare=False)  # a fold row's rows
 
 
 _FILLER = DiffRow(RowKind.FILLER)
@@ -214,7 +217,7 @@ def fold(rows: Sequence[DiffRow], found: Sequence[Stretch], folded: Collection[F
         stretch = starts.get(n)
         if stretch is not None and stretch.key in folded:
             out.append(DiffRow(RowKind.FOLD, f"⋯ {stretch.lines:,} unchanged lines",
-                               fold=stretch.key))
+                               fold=stretch.key, hidden=tuple(rows[n:stretch.end])))
             n = stretch.end
             continue
         if stretch is not None:
@@ -225,9 +228,68 @@ def fold(rows: Sequence[DiffRow], found: Sequence[Stretch], folded: Collection[F
 
 
 def _rows(line: DiffLine, hunk: int, index: int) -> list[DiffRow]:
-    row = DiffRow(_KINDS[line.kind], line.text.translate(_VISIBLE), line.old_no, line.new_no,
-                  hunk, index)
+    text = line.text.translate(_VISIBLE)
+    row = DiffRow(_KINDS[line.kind], text, line.old_no, line.new_no, hunk, index,
+                  raw=None if text == line.text else line.text)
     return [row, _NOTE] if line.no_newline else [row]
+
+
+# ---- copying text (RZG-73) ---------------------------------------------------
+
+_NOT_COPIED = (RowKind.HUNK, RowKind.FILLER, RowKind.NOTE)
+
+
+@dataclass(frozen=True, order=True)
+class TextPos:
+    """A place in a view's text: a row, and a column in Python characters."""
+
+    row: int
+    col: int
+
+
+def touched_rows(rows: Sequence[DiffRow], start: TextPos, end: TextPos) -> range:
+    """The rows a text selection from ``start`` to ``end`` covers: not the row it
+    ends on at column 0, nor the row it starts on at the end, when it goes on."""
+    start, end = min(start, end), max(start, end)
+    first, last = start.row, end.row
+    if last > first and end.col == 0:
+        last -= 1
+    if last > first and start.col >= len(rows[first].text):
+        first += 1
+    return range(first, last + 1)
+
+
+def copy_text(rows: Sequence[DiffRow], start: TextPos, end: TextPos) -> str:
+    """The code a text selection from ``start`` to ``end`` copies: each row's own
+    text, without hunk headers, filler and notes, and a fold row's hidden lines in
+    its place. Within one row, what it shows (a hunk header too)."""
+    start, end = min(start, end), max(start, end)
+    if start.row == end.row:
+        row = rows[start.row]
+        if row.kind is RowKind.FOLD:
+            return _hidden_text(row) if start.col < end.col else ""
+        return _raw(row)[start.col:end.col]
+    touched = touched_rows(rows, start, end)
+    parts: list[str] = []
+    for n in range(start.row, end.row + 1):
+        row = rows[n]
+        if row.kind in _NOT_COPIED:
+            continue
+        if row.kind is RowKind.FOLD:
+            parts.append(_hidden_text(row) if n in touched else "")
+            continue
+        text = _raw(row)
+        parts.append(text[start.col if n == start.row else 0:
+                          end.col if n == end.row else len(text)])
+    return "\n".join(parts)
+
+
+def _raw(row: DiffRow) -> str:
+    return row.raw if row.raw is not None else row.text
+
+
+def _hidden_text(row: DiffRow) -> str:
+    return "\n".join(_raw(r) for r in row.hidden if r.kind not in _NOT_COPIED)
 
 
 # ---- word highlights (RZG-22) ------------------------------------------------

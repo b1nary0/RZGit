@@ -1,8 +1,9 @@
 """Which changed lines of a DiffView are selected (spec §5.4, "Line selection").
 
-The diff selects whole changed lines, not text. The view (and its gutter) pass
-clicks, drags and keys here by row; ``changed`` says when to repaint. Only
-changed lines with a place in the diff are ever selected.
+The gutter selects whole changed lines, for staging (the text has a text
+selection of its own, RZG-73). The gutter passes clicks and drags here by row;
+``changed`` says when to repaint. Only changed lines with a place in the diff
+are ever selected.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QPoint, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QGuiApplication, QKeyEvent, QKeySequence, QPainter
+from PySide6.QtGui import QColor, QGuiApplication, QPainter
 
 from rzgitclient.ui.panels.diff_rows import RowKind
 
@@ -88,9 +89,6 @@ class LineSelection(QObject):
         if self._anchor is not None:
             self.set_rows(self._range(self._anchor, row))
 
-    def select_all(self) -> None:
-        self.set_rows(range(len(self._view.rows)))
-
     def clear(self) -> None:
         self._anchor = None
         self.set_rows(())
@@ -105,11 +103,12 @@ class LineSelection(QObject):
     def _range(a: int, b: int) -> range:
         return range(min(a, b), max(a, b) + 1)
 
-    # ---- from the pointer and keys (viewport or gutter coordinates) ---------------
+    # ---- from the pointer (gutter coordinates, which are the viewport's) -----------
 
     def press_at(self, y: int, modifiers: Qt.KeyboardModifier) -> None:
         view = self._view
         view.setFocus(Qt.FocusReason.MouseFocusReason)
+        view.clear_text_selection()  # one selection at a time
         shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
         ctrl = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
         self.press(view.row_number_at(y), shift=shift, ctrl=ctrl)
@@ -132,18 +131,6 @@ class LineSelection(QObject):
     def release(self) -> None:
         self._drag_y = None
         self._autoscroll.stop()
-
-    def key(self, event: QKeyEvent) -> bool:
-        """Copy, Select All and Esc; False for any other key."""
-        if event.matches(QKeySequence.StandardKey.Copy):
-            self.copy()
-        elif event.matches(QKeySequence.StandardKey.SelectAll):
-            self.select_all()
-        elif event.key() == Qt.Key.Key_Escape and self._rows:
-            self.clear()
-        else:
-            return False
-        return True
 
     # ---- painting ----------------------------------------------------------------
 

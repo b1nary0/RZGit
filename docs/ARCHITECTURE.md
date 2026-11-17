@@ -123,10 +123,10 @@ src/rzgitclient/
       commit_details_panel.py   CommitDetailsPanel: the selected commit's message, people, SHA, parents, refs
       commit_message_text.py    reflow: a hard-wrapped message body as paragraphs (plain Python, no Qt)
       diff_panel.py             DiffPanel
-      diff_view.py              DiffView: read-only diff text, row backgrounds, hunk header links
+      diff_view.py              DiffView: read-only diff text, text selection, row backgrounds, hunk header links
       diff_gutter.py            DiffGutter: line buttons, line numbers and +/− marks beside a DiffView
-      line_selection.py         LineSelection: which changed rows of a DiffView are selected
-      diff_rows.py              DiffRow, unified_rows, split_rows, *_partners, word_spans (no Qt)
+      line_selection.py         LineSelection: which changed rows of a DiffView are selected (from the gutter)
+      diff_rows.py              DiffRow, unified_rows, split_rows, *_partners, word_spans, copy_text (no Qt)
       commit_panel.py           CommitPanel: the message box and Commit button
     layout/
       layout_model.py           PanelNode / SplitNode / TabsNode, (de)serialisation, normalize
@@ -1314,19 +1314,43 @@ than rebuilding them.
     paints the visible rows only (the view's `visible_rows`). From the left: line buttons
     (when on, on the row under the pointer and on selected rows), the number columns, then
     the marks.
-  - **Line selection** (`LineSelection`, `line_selection.py`): the diff selects whole changed
-    lines (`+` or `−`), not text. A click on a changed line, in the text or the gutter,
+  - **Text selection** (RZG-73): the text is selectable like a read-only editor, with a
+    caret. A drag selects characters, a double click a word, a triple click a line, and
+    Ctrl-drag (or Ctrl-click) word by word; Shift-click extends. Arrows, PgUp/PgDn and
+    Home/End move the caret, and Shift extends. Ctrl+A selects all the text of the view
+    (side by side: of the focused side, so a selection never crosses sides). Hunk links
+    and fold rows keep their single click. A right-click inside the selection keeps it;
+    with nothing selected, it moves the caret. The selection is in `text_selection`
+    (the stylesheet's), over the row backgrounds and word highlights; a fold row inside
+    it is filled in that colour across the whole row, since its hidden lines are part of
+    it. A new diff of the same file with the same rows keeps it.
+    - **Copy** (Ctrl+C, the menu's Copy, and the primary selection on Linux) is code only:
+      `copy_text(rows, start, end)` in `diff_rows.py` (no Qt) takes each row's original
+      text (`DiffRow.raw`, so `␍` is a carriage return again), skips hunk headers,
+      filler and notes, and puts a fold row's hidden lines (`DiffRow.hidden`) in its place.
+      Unified copies removed and added lines in the order shown. A selection within one
+      row copies what it shows, a hunk header too. With no text selected, Copy copies the
+      selected lines.
+    - **The API** for find and go to definition: `TextPos(row, col)` (`diff_rows.py`;
+      `col` counts Python characters, not UTF-16 units), `text_cursor()`,
+      `text_range()` (start before end, or None), `select_text(start, end)` (the caret at
+      `end`, scrolled into view), `word_at_cursor()` and `copy()` on `DiffView`.
+      `touched_rows(rows, start, end)` gives the rows a selection covers (not the next
+      row's start, where a line selected whole ends).
+  - **Line selection** (`LineSelection`, `line_selection.py`): the gutter selects whole
+    changed lines (`+` or `−`), for staging. A click on a changed line in the gutter
     selects just it; dragging selects the changed lines from there to the pointer
     (scrolling when the pointer leaves the view); Shift-click selects from the last click;
-    Ctrl-click adds or removes one line. A click elsewhere, or Esc, clears it; Ctrl+A
-    selects every changed line. Context lines, hunk headers, filler and notes are never
-    selected. A selected line has a stronger background of its own colour
-    (`diff_added_selected_bg`, `diff_removed_selected_bg`, in the gutter too) and a 1 px
-    outline in its mark colour (`status.added`, `status.deleted`) around the text; a run of
-    selected lines of one kind shares one outline. Ctrl+C and Copy copy the selected lines'
-    text, joined by newlines (no marks). A new diff of the same file with the same rows
-    keeps the selection; any other clears it. Each view (side by side: each side) has its
-    own.
+    Ctrl-click adds or removes one line. A click elsewhere in the gutter clears it.
+    Context lines, hunk headers, filler and notes are never selected. A selected line has
+    a stronger background of its own colour (`diff_added_selected_bg`,
+    `diff_removed_selected_bg`, in the gutter too) and a 1 px outline in its mark colour
+    (`status.added`, `status.deleted`) around the text; a run of selected lines of one
+    kind shares one outline. A new diff of the same file with the same rows keeps the
+    selection; any other clears it. Each view (side by side: each side) has its own.
+  - **One selection at a time:** a click in the text clears the line selection, and a
+    click in the gutter clears the text selection. Esc clears both. `selected_lines()` is
+    the line selection, or else the changed lines the text selection touches.
   - **Line buttons:** with `set_line_buttons("Stage")` (or `"Unstage"`), every changed line
     (`+` or `−`) has a small button with that label at the left edge of the gutter. It
     shows while its row is under the pointer (in the text or the gutter; the view
@@ -1364,7 +1388,8 @@ than rebuilding them.
 - **Hunks and lines (DiffPanel):** for a worktree or index diff, each hunk header links
   **Stage Hunk** or **Unstage Hunk**, and each changed line's gutter button stages or
   unstages that line, or all the selected lines if it is one of them (it never discards). Right-click offers the hunk under the pointer and the
-  selected lines (the clicked line when nothing is selected): Stage/Unstage Hunk,
+  selected lines (`selected_lines()`: the line selection, or the changed lines the text
+  selection touches; the clicked line when neither): Stage/Unstage Hunk,
   Stage/Unstage Selected Lines and, for a tracked file's unstaged diff, Discard Hunk… and
   Discard Selected Lines…, then Copy. Commit diffs have none of these. A staged rename, or a
   diff with unreadable text, has no links or line buttons, and its menu entries are
@@ -1393,7 +1418,7 @@ than rebuilding them.
     (`diff_rows.py`) do it; a stretch is known by the old and new numbers of its first
     line, so side by side folds both sides at the same rows. Folds are for viewing only:
     they aren't saved, they survive switching views and header modes, and a new diff
-    resets them. Fold rows are never selected.
+    resets them. Fold rows are never line-selected; a text selection over one copies its hidden lines.
   - **Keeping the place:** toggling it keeps the selected lines selected (matched by
     their kind and old and new numbers) and in view; with nothing selected, the line at
     the top of the view stays at the top.
