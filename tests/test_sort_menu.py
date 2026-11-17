@@ -91,6 +91,17 @@ class SortMenuTests(unittest.TestCase):
         self.menu.choose("age")  # no change: no signal
         self.assertEqual(len(self.changes), 2)
 
+    def test_a_default_other_than_the_natural_order_is_saved_as_none(self):
+        """RZG-50: the natural order is then saved like any other."""
+        menu = SortMenu("stash", SortOptions(SORTS.options, default_key="size"),
+                        self.prefs, self.owner)
+        self.assertEqual(menu.order, SortOrder("size"))
+        self.assertTrue(menu._actions["size"].isChecked())
+        menu.choose("age")
+        self.assertEqual(self.prefs.order("stash"), SortOrder("age"))
+        menu.choose("size")
+        self.assertIsNone(self.prefs.order("stash"))
+
     def test_a_new_menu_starts_with_the_saved_order(self):
         self.prefs.set_order("stash", SortOrder("size", True))
         menu = self.make_menu()

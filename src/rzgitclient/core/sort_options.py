@@ -1,8 +1,9 @@
 """A panel's sort orders (spec §5.1, RZG-43). Plain Python, no Qt.
 
 A panel declares its orders as a ``SortOptions``: the first option is the
-natural order (git's or the app's own, no key function), the default and the
-way back. ``apply`` is a stable sort, so ties keep the natural order.
+natural order (git's or the app's own, no key function): the way back, and the
+default unless ``default_key`` names another. ``apply`` is a stable sort, so ties
+keep the natural order.
 ``SortMenu`` (ui/widgets) is the menu and column labels that choose one.
 """
 
@@ -35,8 +36,9 @@ class SortOption(Generic[T]):
 
 @dataclass(frozen=True)
 class SortOptions(Generic[T]):
-    options: tuple[SortOption[T], ...]  # the first is the natural order, the default
+    options: tuple[SortOption[T], ...]  # the first is the natural order
     first: Callable[[T], bool] | None = None  # rows kept at the top in every order
+    default_key: str | None = None  # the default option; None: the natural order
 
     def __post_init__(self) -> None:
         if not self.options or self.options[0].sort_key is not None:
@@ -44,20 +46,27 @@ class SortOptions(Generic[T]):
         keys = [o.key for o in self.options]
         if len(set(keys)) != len(keys):
             raise ValueError(f"duplicate sort keys: {keys}")
+        if self.default_key is not None and self.default_key not in keys:
+            raise ValueError(f"unknown default sort key: {self.default_key!r}")
+
+    @property
+    def natural(self) -> SortOption[T]:
+        return self.options[0]
 
     @property
     def default(self) -> SortOption[T]:
-        return self.options[0]
+        """What a panel is sorted by until the user picks another order."""
+        return next((o for o in self.options if o.key == self.default_key), self.natural)
 
     def option(self, key: str) -> SortOption[T]:
-        """The option saved as ``key``; the natural order for an unknown one."""
+        """The option saved as ``key``; the default for an unknown one."""
         return next((o for o in self.options if o.key == key), self.default)
 
     def for_column(self, label: str) -> SortOption[T] | None:
         return next((o for o in self.options if o.column == label), None)
 
     def resolve(self, order: SortOrder | None) -> SortOrder:
-        """``order`` with a known key: the natural order when it's None or unknown."""
+        """``order`` with a known key: the default when it's None or unknown."""
         if order is None or self.option(order.key).key != order.key:
             return SortOrder(self.default.key)
         return order

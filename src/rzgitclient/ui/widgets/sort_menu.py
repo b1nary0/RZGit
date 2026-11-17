@@ -58,8 +58,8 @@ class SortMenu(QMenu):
         if order == self._order:
             return
         self._order = order
-        natural = order == SortOrder(self.options.default.key)
-        self._prefs.set_order(self.panel_id, None if natural else order)
+        default = order == SortOrder(self.options.default.key)
+        self._prefs.set_order(self.panel_id, None if default else order)
         self._show_order()
         self.order_changed.emit()
 

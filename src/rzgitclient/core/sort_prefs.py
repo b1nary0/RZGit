@@ -2,7 +2,7 @@
 
 ``SortMenu`` reads and writes it. Panels don't get AppSettings; this holds
 only the sort orders, by panel id, the same in every layout and repository.
-A panel on its natural order (``None``) has no entry.
+A panel on its default order (``None``) has no entry.
 """
 
 from __future__ import annotations
@@ -33,11 +33,11 @@ class SortPrefs:
             self._orders[panel_id] = SortOrder(by, reversed_)
 
     def order(self, panel_id: str) -> SortOrder | None:
-        """The order ``panel_id`` was last sorted by; None for its natural order."""
+        """The order ``panel_id`` was last sorted by; None for its default order."""
         return self._orders.get(panel_id)
 
     def set_order(self, panel_id: str, order: SortOrder | None) -> None:
-        """Keep ``order`` for ``panel_id`` (None: its natural order). Saved at once."""
+        """Keep ``order`` for ``panel_id`` (None: its default order). Saved at once."""
         if self._orders.get(panel_id) == order:
             return
         if order is None:

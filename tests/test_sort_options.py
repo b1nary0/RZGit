@@ -49,6 +49,20 @@ class SortOptionsTests(unittest.TestCase):
         self.assertEqual(SORTS.resolve(None), SortOrder("given"))
         self.assertEqual(SORTS.resolve(SortOrder("name", True)), SortOrder("name", True))
 
+    def test_another_option_can_be_the_default(self):
+        """RZG-50: the default needn't be the natural order; unknown keys read as it."""
+        sorts = SortOptions(SORTS.options, default_key="length")
+        self.assertEqual(sorts.natural.key, "given")
+        self.assertEqual(sorts.default.key, "length")
+        self.assertEqual(sorts.resolve(None), SortOrder("length"))
+        self.assertEqual(sorts.resolve(SortOrder("gone", True)), SortOrder("length"))
+        self.assertEqual(sorts.option("gone").key, "length")
+        self.assertEqual(sorts.apply(WORDS, SortOrder("gone")), ["Apple", "apple", "pear", "fig"])
+        self.assertEqual(sorts.resolve(SortOrder("given")), SortOrder("given"))
+        self.assertEqual(SORTS.default.key, "given")
+        with self.assertRaises(ValueError):
+            SortOptions(SORTS.options, default_key="gone")
+
     def test_options_by_column(self):
         self.assertEqual(SORTS.for_column("Name").key, "name")
         self.assertIsNone(SORTS.for_column("Length"))

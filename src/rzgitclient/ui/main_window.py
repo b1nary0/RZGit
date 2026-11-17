@@ -195,6 +195,7 @@ class MainWindow(QMainWindow):
             # Another window may have changed the shared theme (§8.1).
             self._check_theme_actions()
             self._save_last_repo()
+            self._mark_used()
 
     def _check_theme_actions(self) -> None:
         actions, theme = self.ctx.actions, self.ctx.theme
@@ -205,6 +206,11 @@ class MainWindow(QMainWindow):
         """The main repository of this window's, even for a linked worktree (§6.3)."""
         if (repo := self.session.repo) is not None:
             self.settings.last_repo = str(repo.main_root)
+
+    def _mark_used(self) -> None:
+        """This window's worktree is the one in use: Recently Used (§5.4, §6.3)."""
+        if (repo := self.session.repo) is not None:
+            self.ctx.recent.touch(repo)
 
     def bring_to_front(self) -> None:
         if self.isMinimized():

@@ -1,3 +1,4 @@
+import itertools
 import tempfile
 import time
 import unittest
@@ -10,6 +11,7 @@ from PySide6.QtWidgets import QStyle
 from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.column_prefs import ColumnPrefs
 from rzgitclient.core.commit_drafts import CommitDrafts
+from rzgitclient.core.recent_repos import RecentRepos
 from rzgitclient.core.sort_prefs import SortPrefs
 from rzgitclient.ui.app_actions import WorktreeOp
 from rzgitclient.ui.app_windows import AppWindows
@@ -36,8 +38,9 @@ class AppWindowsTests(unittest.TestCase):
         self.theme = ThemeManager(self.app, LIGHT_THEME)
         self.drafts = CommitDrafts(self.tmp / "drafts")
         self.columns = ColumnPrefs()
+        self.recent = RecentRepos(clock=itertools.count(1).__next__)
         self.windows = AppWindows(self.app, self.settings, self.theme, self.drafts,
-                                  self.columns, SortPrefs())
+                                  self.columns, SortPrefs(), recent=self.recent)
         self.addCleanup(self.close_all)
         self.one = self.repo("one")
         self.two = self.repo("two")
@@ -406,6 +409,23 @@ class AppWindowsTests(unittest.TestCase):
         with mock.patch.object(type(a), "isActiveWindow", return_value=True):
             a.changeEvent(QEvent(QEvent.Type.ActivationChange))
         self.assertEqual(self.settings.last_repo, str(self.two))  # focused last
+
+    # ---- recently used: activation (RZG-50) -----------------------------------
+
+    def activate(self, window, active=True):
+        with mock.patch.object(type(window), "isActiveWindow", return_value=active):
+            window.changeEvent(QEvent(QEvent.Type.ActivationChange))
+
+    def test_a_window_touches_the_recent_list_when_it_becomes_active(self):
+        a, b = self.open(self.one), self.open(self.two)
+        self.assertIs(a.ctx.recent, self.recent)
+        self.activate(b)
+        self.activate(a)
+        self.assertGreater(self.recent.last_opened(self.one), self.recent.last_opened(self.two))
+        self.assertEqual(self.recent.repositories(), (self.one, self.two))
+        before = self.recent.last_opened(self.two)
+        self.activate(b, active=False)  # deactivated: no touch
+        self.assertEqual(self.recent.last_opened(self.two), before)
 
     # ---- the shared theme ---------------------------------------------------
 

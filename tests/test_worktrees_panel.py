@@ -1,12 +1,15 @@
 import dataclasses
+import itertools
 import shutil
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent, QThread
 from PySide6.QtGui import QColor
 
+from rzgitclient.core.recent_repos import RecentRepos
 from rzgitclient.core.worktree_reader import WorktreeReader
 from rzgitclient.git.git_models import Worktree, WorktreeState
 from rzgitclient.git.repo import canonical_path
@@ -317,9 +320,10 @@ class WorktreesPanelTests(unittest.TestCase):
         self.assertEqual(self.opened, [str(self.main), str(self.tmp / "loose")])
 
     def test_sort_by_keeps_the_main_worktree_first_and_the_selection(self):
-        """RZG-43: Git Order, Name, Branch and Path; State and ↑↓ don't sort."""
-        self.assertEqual([a.text() for a in self.panel.sort.actions()[:4]],
-                         ["Git Order", "Name", "Branch", "Path"])
+        """RZG-43: Git Order, Recently Used, Name, Branch and Path; State and ↑↓ don't sort."""
+        self.assertEqual([a.text() for a in self.panel.sort.actions()[:5]],
+                         ["Git Order", "Recently Used", "Name", "Branch", "Path"])
+        self.panel.sort.choose("git")
         names = lambda: [r[0] for r in self.rows()]
         self.assertEqual(names(), ["main", "feature", "gone", "loose"])  # git's order
         self.item("loose").setSelected(True)
@@ -334,6 +338,43 @@ class WorktreesPanelTests(unittest.TestCase):
         self.assertEqual(names(), ["main", "loose", "feature", "gone"])
         self.assertFalse(labels.is_sortable(STATE))
         self.assertFalse(labels.is_sortable(SYNC))
+
+    def names(self, panel=None):
+        tree = (panel or self.panel)._tree
+        return [tree.topLevelItem(i).text(0) for i in range(tree.topLevelItemCount())]
+
+    def use(self, recent, name):
+        """A window on the worktree ``name`` was opened or activated now (RZG-87)."""
+        recent.touch(mock.Mock(root=self.tmp / name, main_root=self.main))
+
+    def test_recently_used_is_the_default_this_window_s_worktree_next_after_main(self):
+        """RZG-50: most recent first; never used last, in git's order."""
+        self.assertEqual(self.panel.sort.order.key, "recent")
+        recent = RecentRepos(clock=itertools.count(1).__next__)
+        self.use(recent, "main")
+        self.use(recent, "loose")
+        self.use(recent, "feature")  # this window's: the most recent anyway
+        panel = WorktreesPanel(dataclasses.replace(self.ctx, recent=recent))
+        self.addCleanup(panel.deleteLater)
+        self.assertEqual(self.names(panel), ["main", "feature", "loose", "gone"])
+        self.use(recent, "gone")  # another window activated on it
+        self.assertEqual(self.names(panel), ["main", "feature", "gone", "loose"])
+        # Reversed: oldest first, never used at the top; this window's last.
+        git(self.main, "worktree", "add", "-q", "-b", "fresh", str(self.tmp / "fresh"))
+        self.settle()
+        self.assertEqual(self.names(panel), ["main", "feature", "gone", "loose", "fresh"])
+        panel.sort.set_reversed(True)
+        self.assertEqual(self.names(panel), ["main", "fresh", "loose", "gone", "feature"])
+
+    def test_a_new_use_keeps_the_selection_and_only_moves_rows_in_recently_used(self):
+        self.item("loose").setSelected(True)
+        self.use(self.ctx.recent, "loose")
+        self.assertEqual(self.names(), ["main", "feature", "loose", "gone"])
+        self.assertEqual(self.panel.selected_path(), str(self.tmp / "loose"))
+        self.panel.sort.choose("git")
+        self.assertEqual(self.ctx.sorts.order("worktrees").key, "git")  # saved: not the default
+        self.use(self.ctx.recent, "gone")
+        self.assertEqual(self.names(), ["main", "feature", "gone", "loose"])  # git's order
 
     def test_states_fill_the_right_rows_after_a_sort(self):
         self.panel.sort.set_reversed(True)  # git's order, reversed: main first still

@@ -874,15 +874,16 @@ adds none of its own.
 `SortOptions` (`core/sort_options.py`, plain Python): a tuple of `SortOption`s, each with
 a saved key, a label, a key function on the panel's own items, a default direction
 (newest first is descending) and optionally the column label that picks it. The first
-option is the **natural order**, git's or the app's own, with no key function: the
-default and the way back. `apply(items, order)` is a stable sort, so ties keep the
-natural order; `first` names rows kept at the top in every order (the main worktree).
+option is the **natural order**, git's or the app's own, with no key function: the way
+back, and the default unless `default_key` names another option (RZG-50: Worktrees' Recently
+Used). An unknown key reads as the default. `apply(items, order)` is a stable sort, so ties
+keep the natural order; `first` names rows kept at the top in every order (the main worktree).
 - **`SortMenu`** (`ui/widgets/sort_menu.py`) is a panel's **Sort By ▸** submenu: the options
   as radio items, a separator, then **Reversed** (relative to the option's default
   direction). The panel puts its `menuAction()` last in its header actions. It holds the
   panel's `SortOrder` (an option's key and `reversed`), read from `ctx.sorts` when it is
-  built and written there on each change, and emits `order_changed`; the panel renders
-  again with `sort.apply(items)`.
+  built and written there on each change (the default as no entry), and emits
+  `order_changed`; the panel renders again with `sort.apply(items)`.
 - **Column labels:** `attach(column_header)` makes the labels of its options' columns
   clickable (§5.2). Clicking one picks that option; clicking the current one flips
   Reversed. The sorted column's label shows an arrow.
@@ -1143,10 +1144,16 @@ runs git or shows a dialog.
   **Remove…**, disabled with the reason: "(main worktree)", "(this window)" or
   "(locked)". Each asks `ctx.actions.request_worktree(op, path)`.
 - The selection is kept by path through refreshes and re-sorts.
-- **Sort By** (RZG-43), last in the header menu: **Git Order** (the default), **Name**,
-  **Branch** and **Path**, the last three also from their column labels (ignoring case).
-  State and ↑↓ don't sort. The main worktree is first in every order. (RZG-50 adds
-  Recently used.)
+- **Sort By** (RZG-43), last in the header menu: **Git Order**, **Recently Used** (the
+  default, RZG-50), **Name**, **Branch** and **Path**, the last three also from their
+  column labels (ignoring case). State and ↑↓ don't sort. The main worktree is first in
+  every order.
+- **Recently Used** (RZG-50): most recent first, by `ctx.recent.last_opened(root)` (§6.3). This
+  window's own worktree counts as the most recent, so it comes right after the main one,
+  and a window's list doesn't move when the window is activated (no row jumps under the
+  click). Worktrees never used come last, in git's order. Reversed is a plain reverse:
+  oldest first, the never-used ones at the top. The panel renders again when a time
+  changes (another window was activated), keeping the selection.
 
 **Stashes** (StashPanel, RZG-36) lists `session.stashes`, newest first, in three
 labelled columns: **Message**, **Branch** and **Age** ("now", "5 min", "3 h", "2 days", "3 weeks",
@@ -1918,8 +1925,8 @@ dropped (logged). Each change is written at once.
 
 **Sort orders** (`SortPrefs`, `core/sort_prefs.py`, RZG-43) are app-wide too, per panel
 id: `sort_prefs` is JSON, `{"stash": {"by": "branch", "reversed": true}}`. A panel on its
-natural order, not reversed, has no entry. Malformed entries are dropped (logged), and an
-unknown key reads as the natural order. Each change is written at once. A panel reads
+default order, not reversed, has no entry. Malformed entries are dropped (logged), and an
+unknown key reads as the default. Each change is written at once. A panel reads
 its order when it is built; a change applies to that panel only, so other open windows
 keep theirs until they are built again (the last change wins).
 
@@ -1970,7 +1977,8 @@ class RecentRepos(QObject):
   emits `changed`.
 - `MainWindow` touches it on every `repo_changed`, so every route counts: Open, Open in
   New Window, a worktree window, a recent entry, the last repository on start, the
-  command line. Becoming the active window doesn't.
+  command line. Becoming the active window does too (RZG-50), so the times are when
+  each was last used.
 - A folder that no longer exists is kept (its drive may be back); the menu shows it as
   missing (§8).
 
@@ -2538,6 +2546,9 @@ The app can have several main windows open, each on its own repository or worktr
 - **Each window's worktree reader** (`WorktreeReader`, §4.4) is one of its own objects,
   like its watcher: made with it, told when the app is active, and shut down when it
   closes.
+- **Recently used** (RZG-50): a window touches `ctx.recent` (`RecentRepos`, §6.3) when its
+  repository changes and whenever it becomes active, so the Worktrees panel's Recently
+  Used (§5.4) and File → Recent Repositories put the one you were last in first.
 - Not yet: a Window menu, and a fuller rule for which main window owns child windows
   (RZG-51).
 
