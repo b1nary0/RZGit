@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-# RZGitClient
+# RZGit
 
 A Qt (PySide6) git client for Linux. It drives the `git` command-line tool,
 so your existing config, credential helpers, SSH keys and hooks just work.
@@ -33,7 +33,7 @@ With no path, it reopens the last repository you used.
 
 ### App launcher entry
 
-To list RZGitClient in your desktop's launcher and menus, with its icon:
+To list RZGit in your desktop's launcher and menus, with its icon:
 
 ```sh
 packaging/linux/install-desktop.sh
