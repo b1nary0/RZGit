@@ -113,6 +113,7 @@ src/rzgitclient/
       history_panel.py          HistoryPanel
       history_model.py          HistoryModel: the commit table's Qt model, paged
       graph_painter.py          GraphPainter: draws a row of History's branch graph
+      back_to_top_button.py     BackToTopButton: History's floating "↑ Back to top" control
       files_panel.py            FilesPanel: "Unstaged Files"
       staged_panel.py           StagedPanel: "Staged Files"
       file_list.py              FileList: one source's changed files, the body of both
@@ -1150,6 +1151,27 @@ theme when Qt asks, so a theme change is one `dataChanged`.
 - **Follows the selection:** when `selection.commit` is changed elsewhere (a parent link
   in Commit Details), History selects that commit's row, or Uncommitted changes for None,
   and scrolls to it if it's off screen. A commit that isn't loaded leaves History as it is.
+- **Back to top** (RZG-64): `BackToTopButton` (`back_to_top_button.py`), a child of the
+  view's viewport like `_PinnedRow`, floats over the commits: centred, 6 px below the
+  pinned row. The rows pass under it, and it never covers the pinned row, the column labels
+  or the scroll bar (it stays inside the viewport). Elsewhere, scrolling, hovering and
+  clicking rows work as before; over it, no row is hovered.
+  - **When:** it shows once the first commit is more than a screen above the view
+    (`value > pageStep`; the view scrolls per row), or while there are new commits and the view isn't at
+    the top. At the top it hides.
+  - **New commits:** a reset while the view is scrolled down keeps its top commit
+    (§ Updates). The panel counts the commits that arrived above the newest commit shown
+    before, and adds them up until the view is back at the top, where the count goes back
+    to 0. If that commit is gone (a checkout), the panel adds nothing. The label reads
+    "↑ N new commit(s)" while there are new commits, otherwise "↑ Back to top". The tooltip reads
+    "Back to top (Ctrl+Home)".
+  - **Click:** `scrollToTop()`. It's a jump, not a smooth scroll, and the selection
+    stays.
+  - **Look:** it paints itself from the `floating_button_*` tokens (§7.1): a pill with
+    slightly rounded corners (3 px), a 1 px border and a soft shadow under it. The hovered
+    pill uses `floating_button_hover`. It fades in and out over 150 ms, and appears at once
+    when the desktop turns effects off (`QApplication.isEffectEnabled(UI_General)`). It
+    takes no keyboard focus, since Ctrl+Home already goes to the top.
 - **Paging:** when the view is scrolled to within a screen of the end, the panel asks the
   session for the next page (§4.1). It watches its scroll bar rather than using Qt's
   `canFetchMore` / `fetchMore`, which Qt also calls while laying rows out, before they have
@@ -1676,6 +1698,8 @@ class ThemeColors:   menubar_bg: str; toolbar_bg: str; tab_bg: str; header_bg: s
                      column_header_separator, column_header_border: str   # ColumnHeader (§5.2)
                      row_alt_bg: str   # every second row of a striped list (History, RZG-63); ΔE ≥ 3.5 from content_bg and ≥ 5 from content_selection (RZG-66)
                      content_hover: str   # hover in content lists: ΔE ≥ 3 from content_bg, row_alt_bg and content_selection (RZG-66)
+                     floating_button_bg, floating_button_hover, floating_button_text,
+                     floating_button_border, floating_button_shadow: str   # a control floating over a list (History's Back to top, RZG-64)
                      text: str; text_muted: str; hover: str; selection: str; content_selection: str;
                      accent: str; button_*: str; scroll_*: str; diff_*: str (incl. diff_hunk_bg, diff_hunk_text, diff_line_button*, diff_*_selected_bg, diff_*_word); …
 @dataclass(frozen=True)
@@ -1730,6 +1754,11 @@ def colour_blind_theme(base: AppTheme) -> AppTheme   # LIGHT_THEME → LIGHT_CB_
   neighbouring lanes differ. Each is at least 3:1 on the content background (a line
   shows), and tests require a minimum ΔE between neighbours, under every simulated kind
   of colour vision in the colour-blind variants. The stylesheet doesn't use them.
+- **Floating button** (RZG-64): `floating_button_bg` is at least ΔE 3 from
+  `content_bg`, `row_alt_bg` and `content_hover`, so the pill reads as a control over
+  the rows, not as a row. Its text is at least 4.5:1 on both `floating_button_bg` and
+  `floating_button_hover`. The shadow is drawn translucent, so it can be a plain dark
+  colour.
 - **Colour-blind variants** (RZG-33): `LIGHT_CB_THEME` and `DARK_CB_THEME` derive from
   their base with `dataclasses.replace`, so they share every token except those that tell
   kinds apart: `status.*`, `graph.lanes`, `diff_added*` / `diff_removed*`, `diff_line_button*` and

@@ -333,3 +333,18 @@ class DarkThemeTests(unittest.TestCase):
                 status.conflict, status.untracked)
         self.assertEqual(len(set(main)), len(main))
 
+
+
+class FloatingButtonTests(unittest.TestCase):
+    """History's Back to top reads as a control over the rows, not as a row (RZG-64)."""
+
+    def test_it_stands_apart_from_the_rows_and_its_text_reads(self):
+        for theme in ALL_THEMES:
+            c = theme.colors
+            with self.subTest(theme.name):
+                for row in (c.content_bg, c.row_alt_bg, c.content_hover):
+                    self.assertGreaterEqual(delta_e(c.floating_button_bg, row), 3)
+                self.assertGreaterEqual(delta_e(c.floating_button_hover, c.floating_button_bg), 3)
+                for fill in (c.floating_button_bg, c.floating_button_hover):
+                    self.assertGreaterEqual(contrast(c.floating_button_text, fill), 4.5)
+                self.assertGreaterEqual(contrast(c.floating_button_border, c.floating_button_bg), 1.5)

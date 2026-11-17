@@ -606,3 +606,144 @@ class HistoryGraphPagingTests(unittest.TestCase):
         whole = CommitGraph(session.history)
         self.assertEqual([self.model.graph_row(r + 1) for r in range(5)],
                          [whole.row(r) for r in range(5)])
+
+
+class HistoryBackToTopTests(unittest.TestCase):
+    """The floating Back to top control (RZG-64, spec §5.4)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = qt_app()
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.repo = make_repo(Path(self._tmp.name) / "repo")
+        for i in range(1, 31):
+            commit_file(self.repo, "a.txt", str(i), f"c{i}")
+        self.ctx = make_panel_context()
+        self.addCleanup(self.ctx.session.shutdown)
+        self.panel = HistoryPanel(self.ctx)
+        self.addCleanup(self.panel.deleteLater)
+        self.view, self.model = self.panel._view, self.panel._model
+        self.button = self.view.back_to_top
+        self.panel.resize(500, 160)
+        self.panel.show()
+        self.ctx.session.open(self.repo)
+        self.settle()
+        self.bar = self.view.verticalScrollBar()
+        self.page = self.bar.pageStep()
+        self.assertGreater(self.bar.maximum(), 2 * self.page + 2)  # room to scroll well down
+
+    def settle(self):
+        for _ in range(3):
+            wait_idle(self.ctx.session)
+            self.app.processEvents()
+
+    def scroll(self, value):
+        self.bar.setValue(value)
+        self.app.processEvents()
+
+    def new_commit(self, n=1):
+        for i in range(n):
+            commit_file(self.repo, "b.txt", f"{i}-{self.model.rowCount()}", f"new{i}")
+        self.ctx.session.refresh()
+        self.settle()
+
+    def test_it_shows_only_more_than_a_screen_down(self):
+        self.assertFalse(self.button.isVisible())
+        self.scroll(self.page)  # the first commit just a screen above: not yet
+        self.assertFalse(self.button.isVisible())
+        self.scroll(self.page + 1)
+        self.assertTrue(self.button.isVisible())
+        self.assertEqual(self.button.text(), "↑ Back to top")
+        self.assertEqual(self.button.toolTip(), "Back to top (Ctrl+Home)")
+        self.scroll(0)
+        self.assertFalse(self.button.isVisible())
+
+    def test_it_floats_below_the_pinned_row_inside_the_viewport(self):
+        self.scroll(self.page + 3)
+        geometry, viewport = self.button.geometry(), self.view.viewport()
+        self.assertIs(self.button.parent(), viewport)  # never over the labels or scroll bar
+        self.assertTrue(viewport.rect().contains(geometry))
+        self.assertEqual(geometry.top(), self.view.pinned.height() + self.view.BACK_TO_TOP_GAP)
+        self.assertLessEqual(abs(geometry.center().x() - viewport.rect().center().x()), 1)
+        self.assertLess(geometry.width(), viewport.width() // 2)  # a pill, not a row
+        self.assertEqual(self.bar.maximum(), self.model.rowCount() - self.page)  # no row of its own
+
+    def test_it_paints_from_the_theme_tokens(self):
+        self.scroll(self.page + 3)
+        image = self.button.grab().toImage()
+        c = self.ctx.theme.current.colors
+        pill = self.button.pill_rect()
+        self.assertEqual(image.pixelColor(int(pill.left()) + 4, int(pill.center().y())).name(),
+                         c.floating_button_bg)
+        from rzgitclient.ui.theme.app_theme import DARK_THEME
+        self.panel.apply_theme(DARK_THEME)
+        image = self.button.grab().toImage()
+        self.assertEqual(image.pixelColor(int(pill.left()) + 4, int(pill.center().y())).name(),
+                         DARK_THEME.colors.floating_button_bg)
+
+    def test_clicking_it_goes_to_the_top_and_keeps_the_selection(self):
+        self.scroll(self.page + 3)
+        self.view.setCurrentIndex(self.model.index(self.page + 5, 0))
+        selected = self.ctx.selection.commit
+        QTest.mouseClick(self.button, Qt.MouseButton.LeftButton, pos=self.button.rect().center())
+        self.app.processEvents()
+        self.assertEqual(self.bar.value(), 0)
+        self.assertEqual(self.view.currentIndex().row(), self.page + 5)
+        self.assertEqual(self.ctx.selection.commit, selected)
+        self.assertFalse(self.button.isVisible())
+
+    def test_over_it_no_row_is_hovered(self):
+        self.scroll(self.page + 3)
+        center = QPointF(self.button.geometry().center())
+        self.view.viewportEvent(QHoverEvent(QEvent.Type.HoverMove, center, center, QPointF(-1, -1)))
+        self.assertEqual(self.view.hover_row, -1)
+        below = QPointF(center.x(), self.button.geometry().bottom() + self.view.rowHeight(1) * 1.5)
+        self.view.viewportEvent(QHoverEvent(QEvent.Type.HoverMove, below, below, QPointF(-1, -1)))
+        self.assertEqual(self.view.hover_row, self.view.rowAt(int(below.y())))
+        local = QPointF(5, 5)
+        QCoreApplication.sendEvent(self.button, QEnterEvent(local, local, self.button.mapToGlobal(local)))
+        self.assertEqual(self.view.hover_row, -1)
+
+    def test_it_counts_new_commits_until_back_at_the_top(self):
+        self.scroll(2)  # scrolled, but less than a screen
+        self.assertFalse(self.button.isVisible())
+        self.new_commit()
+        self.assertTrue(self.button.isVisible())  # new commits above: shown anyway
+        self.assertEqual(self.button.text(), "↑ 1 new commit")
+        self.new_commit(2)
+        self.assertEqual(self.button.text(), "↑ 3 new commits")  # added up
+        self.new_commit(0)  # a refresh with nothing new
+        self.assertEqual(self.button.text(), "↑ 3 new commits")
+        self.scroll(0)
+        self.assertEqual(self.button.new_commits, 0)
+        self.assertFalse(self.button.isVisible())
+        self.scroll(self.page + 2)
+        self.assertEqual(self.button.text(), "↑ Back to top")
+        self.new_commit()
+        self.assertEqual(self.button.text(), "↑ 1 new commit")  # counted afresh
+
+    def test_at_the_top_new_commits_arent_counted(self):
+        self.new_commit()
+        self.assertEqual(self.bar.value(), 0)
+        self.assertEqual(self.button.new_commits, 0)
+        self.assertFalse(self.button.isVisible())
+
+    def test_it_fades_unless_effects_are_off(self):
+        with mock.patch("rzgitclient.ui.panels.back_to_top_button.animations_enabled",
+                        return_value=True):
+            self.scroll(self.page + 3)
+            self.assertTrue(self.button.wanted)
+            self.assertTrue(self.button.isVisible())
+            self.assertLess(self.button.opacity, 1.0)  # fading in
+            QTest.qWait(250)
+            self.assertEqual(self.button.opacity, 1.0)
+            self.scroll(0)
+            self.assertFalse(self.button.wanted)
+            self.assertTrue(self.button.isVisible())  # fading out
+            QTest.qWait(250)
+            self.assertFalse(self.button.isVisible())
+        self.scroll(self.page + 3)  # effects off (offscreen): at once
+        self.assertEqual(self.button.opacity, 1.0)

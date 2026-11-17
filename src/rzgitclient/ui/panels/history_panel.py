@@ -1,12 +1,13 @@
 """Uncommitted changes and the commit table; the selected row is
 ``selection.commit``, None for Uncommitted changes (spec §5.4). No row is
 selected while a stash is (the Stash panel's). Commits are striped, and
-Uncommitted changes stays pinned at the top while the table scrolls. The first
-column is the branch graph (RZG-58), as wide as the widest row in view."""
+Uncommitted changes stays pinned at the top while the table scrolls, and well
+down, a "Back to top" control floats below it (RZG-64). The first column is the
+branch graph (RZG-58), as wide as the widest row in view."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QModelIndex, QPersistentModelIndex, QRect, Qt
+from PySide6.QtCore import QEvent, QModelIndex, QObject, QPersistentModelIndex, QRect, Qt
 from PySide6.QtGui import QBrush, QColor, QFontMetrics, QKeyEvent, QMouseEvent, QPainter, QPaintEvent, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from rzgitclient.core.repo_session import HISTORY_PAGE
 from rzgitclient.git.git_models import Commit, Stash
+from rzgitclient.ui.panels.back_to_top_button import BackToTopButton
 from rzgitclient.ui.panels.graph_painter import GraphPainter
 from rzgitclient.ui.panels.history_model import (GRAPH_COLUMN, MUTED_COLUMNS, SUBJECT_COLUMN,
                                                  HistoryModel)
@@ -43,6 +45,7 @@ class HistoryPanel(Panel):
 
     def _setup(self) -> None:
         self._quiet = False  # True while a reset re-selects; selection isn't written
+        self._new_commits = 0  # arrived above the view while scrolled down (Back to top)
         self._model = HistoryModel(self.ctx.theme.current)
         self._graph = GraphPainter(self.ctx.theme.current)
         self._graph_lanes = 0  # the lanes the graph column was last fitted to
@@ -61,6 +64,7 @@ class HistoryPanel(Panel):
         bar.rangeChanged.connect(self._load_more_near_the_end)
         bar.valueChanged.connect(self._fit_graph)
         bar.rangeChanged.connect(self._fit_graph)  # also when the view's height changes
+        bar.valueChanged.connect(self._forget_new_commits_at_the_top)
         self._model.rowsInserted.connect(self._fit_graph)
         self.set_header_actions([self.ctx.actions.topo_order])
         self.ctx.selection.commit_changed.connect(self._follow_selection)
@@ -97,20 +101,38 @@ class HistoryPanel(Panel):
 
     def _render(self, commits: tuple[Commit, ...]) -> None:
         keep, top = self._current_commit(), self._top_commit()
+        newest = self._model.commits[0] if self._model.commits else None
         was_empty = not self._model.commits  # Uncommitted changes may be shown already
         self._quiet = True
         try:
             appended = self._model.set_commits(commits)
             if not appended:  # reset: same selection, same commit at the top
                 self._restore(keep, top)
+                if newest is not None:  # at the top, the reset below forgets them
+                    self._count_new_commits(newest)
             self._select_uncommitted_if_none()
         finally:
             self._quiet = False
+        self._forget_new_commits_at_the_top()
         if was_empty or not appended:
             self._view.fit_row_height()
             self._fit_columns()
         self._fit_graph()
         self._sync_selection()
+
+    def _count_new_commits(self, newest: Commit) -> None:
+        """After a reset while scrolled down: add the commits above the one that was
+        newest. If it's gone (a checkout), they can't be told apart: add nothing."""
+        row = self._model.row_of(newest.sha)
+        if row >= 0:
+            self._new_commits += row - self._model.row_of(self._model.commits[0].sha)
+            self._view.back_to_top.set_new_commits(self._new_commits)
+
+    def _forget_new_commits_at_the_top(self, *_args: object) -> None:
+        if not self._quiet and self._view.verticalScrollBar().value() == 0:
+            self._new_commits = 0
+            self._view.back_to_top.set_new_commits(0)
+        self._view.place_back_to_top()
 
     def _load_more_near_the_end(self, *_args: object) -> None:
         """Ask for the next page when the view is within a screen of the end.
@@ -176,6 +198,7 @@ class HistoryPanel(Panel):
         self._graph_lanes = 0  # the lane width may have changed: fit again
         self._fit_graph()
         self._view.set_pinned_line(QColor(theme.colors.border_light))
+        self._view.back_to_top.set_colors(theme.colors)
         self._view.fit_row_height()
 
     def _sync_selection(self, *_args: object) -> None:
@@ -232,7 +255,8 @@ class _HistoryView(QTableView):
     whole-row selection and hover. Its column labels are the panel's ColumnHeader.
 
     While it's scrolled, row 0 (Uncommitted changes) is pinned: ``_PinnedRow``
-    draws it over the top of the rows, which pass under it (spec §5.4).
+    draws it over the top of the rows, which pass under it (spec §5.4). Scrolled
+    well down, ``back_to_top`` floats below it; its owner tells it the new commits.
     """
 
     def __init__(self, graph: GraphPainter) -> None:
@@ -240,6 +264,9 @@ class _HistoryView(QTableView):
         self.hover_row = -1
         self.graph = graph  # draws the graph column; the panel keeps it themed
         self.pinned = _PinnedRow(self)
+        self.back_to_top = BackToTopButton(self.viewport())
+        self.back_to_top.clicked.connect(self.scrollToTop)  # a jump; the selection stays
+        self.back_to_top.installEventFilter(self)
         self.setShowGrid(False)
         self.setWordWrap(False)
         self.setTabKeyNavigation(False)
@@ -290,6 +317,33 @@ class _HistoryView(QTableView):
             self.pinned.raise_()
             self.pinned.update()
         self.pinned.setVisible(active)
+        self.place_back_to_top()
+
+    # ---- back to top -----------------------------------------------------
+
+    BACK_TO_TOP_GAP = 6  # px between the pinned row and the button
+
+    def back_to_top_wanted(self) -> bool:
+        """The first commit is more than a screen above the view, or new commits
+        arrived above it; never at the top."""
+        bar = self.verticalScrollBar()
+        return bar.value() > bar.pageStep() or (bar.value() > 0 and self.back_to_top.new_commits > 0)
+
+    def place_back_to_top(self) -> None:
+        button = self.back_to_top
+        wanted = self.back_to_top_wanted()
+        if wanted:
+            size = button.sizeHint()
+            top = (self.pinned.height() if self.pinned_active() else 0) + self.BACK_TO_TOP_GAP
+            button.setGeometry((self.viewport().width() - size.width()) // 2, top,
+                               size.width(), size.height())
+            button.raise_()
+        button.set_wanted(wanted)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.back_to_top and event.type() == QEvent.Type.Enter:
+            self._set_hover_row(-1)  # over the button, no row is hovered
+        return super().eventFilter(watched, event)
 
     def updateGeometries(self) -> None:
         super().updateGeometries()
@@ -335,7 +389,11 @@ class _HistoryView(QTableView):
         if kind in (QEvent.Type.HoverEnter, QEvent.Type.HoverMove):
             y = int(event.position().y())
             under_pin = self.pinned.isVisible() and y < self.pinned.height()
-            self._set_hover_row(0 if under_pin else self.rowAt(y))
+            button = self.back_to_top
+            if button.isVisible() and button.geometry().contains(int(event.position().x()), y):
+                self._set_hover_row(-1)
+            else:
+                self._set_hover_row(0 if under_pin else self.rowAt(y))
         elif kind == QEvent.Type.HoverLeave:
             self._set_hover_row(-1)
         return super().viewportEvent(event)
