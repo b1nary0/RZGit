@@ -62,6 +62,13 @@ qdbus-qt6 "$KONSOLE_DBUS_SERVICE" /Sessions/$ID runCommand "claude \"\$(cat $P)\
 
 The tab title format is set to the literal lane name, so Claude's own terminal title doesn't replace it.
 
+**Check that Claude started.** `runCommand` sent before the new tab's shell is ready is lost. This happened to one of two tabs. Check for a `claude` child of the tab's shell, and send the command again if there is none:
+
+```bash
+pgrep -a -P "$(qdbus-qt6 "$KONSOLE_DBUS_SERVICE" /Sessions/$ID processId)" | grep -q claude \
+  || qdbus-qt6 "$KONSOLE_DBUS_SERVICE" /Sessions/$ID runCommand "claude \"\$(cat $P)\""
+```
+
 - If `KONSOLE_DBUS_SERVICE` is unset (not running in Konsole), or `runCommand` is refused, give the user the exact command to run in a new tab: `cd /home/JPOD/dev/RZGitClient-RZG-N && claude "$(cat <P>)"`.
 - Don't retry temporary Konsole profiles: a running Konsole ignores them.
 
