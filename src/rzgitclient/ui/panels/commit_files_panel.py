@@ -39,7 +39,7 @@ class CommitFilesPanel(Panel):
     def _on_commit(self, commit: Commit | None) -> None:
         self.ctx.session.request_commit_files(commit.sha if commit is not None else None)
         if commit is not None and self._list is None:
-            self._list = FileList(self.ctx, FileSource.COMMIT, ([], []))
+            self._list = FileList(self.ctx, FileSource.COMMIT, ([], []), self.panel_id)
             self.layout().addWidget(self._list)
             self._list.ensurePolished()  # styled before its first rows (see StagedPanel)
             self._list.render()

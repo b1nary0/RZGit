@@ -21,6 +21,7 @@ from rzgitclient.git.git_models import Commit, Stash
 from rzgitclient.ui.panels.history_model import MUTED_COLUMNS, HistoryModel
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
+from rzgitclient.ui.widgets.column_header import ColumnHeader
 
 
 # Column widths fit the first page of rows, as they did before paging.
@@ -32,16 +33,16 @@ class HistoryPanel(Panel):
     title = "History"
 
     _view: _HistoryView
+    _labels: ColumnHeader
     _model: HistoryModel
 
     def _setup(self) -> None:
         self._quiet = False  # True while a reset re-selects; selection isn't written
         self._model = HistoryModel(self.ctx.theme.current)
         self._view = _HistoryView()
+        self._labels = ColumnHeader(self.panel_id, self.ctx.columns, self.ctx.theme.current)
+        self._view.setHorizontalHeader(self._labels)
         self._view.setModel(self._model)
-        header = self._view.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setStretchLastSection(False)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._view)
@@ -116,14 +117,14 @@ class HistoryPanel(Panel):
         only that row is measured by the view.
         """
         rows = range(min(self._model.rowCount(), _MEASURED_ROWS))
-        header = self._view.horizontalHeader()
         for col in MUTED_COLUMNS:
             width = 0  # no rows: the header's text decides
             if rows:
                 metrics = QFontMetrics(self._model.font(col) or self._view.font())
                 widest = max(rows, key=lambda r: metrics.horizontalAdvance(self._model.text(r, col)))
                 width = self._view.width_hint(self._model.index(widest, col))
-            header.resizeSection(col, max(width, header.sectionSizeHint(col)))
+            # Unless the user sized it (spec §5.2); the subject fills the rest.
+            self._labels.set_fitted(col, max(width, self._labels.sectionSizeHint(col)))
 
     def _restore(self, keep: Commit | None, top: Commit | None) -> None:
         row = self._model.row_of(keep.sha) if keep is not None else -1
@@ -138,6 +139,7 @@ class HistoryPanel(Panel):
             self._view.scrollToTop()
 
     def apply_theme(self, theme: AppTheme) -> None:
+        self._labels.set_theme(theme)
         self._model.set_theme(theme)
         self._view.fit_row_height()
 
@@ -191,7 +193,7 @@ class _HistoryView(QTableView):
     A QTreeView keeps a layout entry per row and redoes all of them on every
     insert or reset (230 ms with 100k rows); a table with fixed row heights
     doesn't. These settings give it the tree's look: no grid or row numbers,
-    whole-row selection and hover, a left-aligned header that isn't clickable.
+    whole-row selection and hover. Its column labels are the panel's ColumnHeader.
     """
 
     def __init__(self) -> None:
@@ -208,10 +210,6 @@ class _HistoryView(QTableView):
         rows.hide()
         rows.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         rows.setMinimumSectionSize(1)
-        columns = self.horizontalHeader()
-        columns.setHighlightSections(False)
-        columns.setSectionsClickable(False)
-        columns.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.setItemDelegate(_RowHoverDelegate(self))
 
     def fit_row_height(self) -> None:

@@ -114,7 +114,8 @@ class SignalRecorder:
 
 def make_panel_context() -> PanelContext:
     """A PanelContext with a fresh session (no repo open), the light theme and
-    commit drafts kept in memory."""
+    commit drafts and column choices kept in memory."""
+    from rzgitclient.core.column_prefs import ColumnPrefs
     from rzgitclient.core.commit_drafts import CommitDrafts
     from rzgitclient.core.repo_session import RepoSession
     from rzgitclient.core.selection import Selection
@@ -131,4 +132,23 @@ def make_panel_context() -> PanelContext:
         theme=ThemeManager(qt_app(), LIGHT_THEME),
         actions=AppActions(session, selection),
         drafts=CommitDrafts(),
+        columns=ColumnPrefs(),
     )
+
+
+def drag_column_edge(header, logical: int, by: int) -> None:
+    """Drag the right edge of ``header``'s column ``logical`` by ``by`` pixels, as
+    the user would (press, move, release on its viewport)."""
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+
+    viewport = header.viewport()
+    x = header.sectionViewportPosition(logical) + header.sectionSize(logical) - 1
+    left, none = Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton
+    for kind, at, button, buttons in ((QEvent.Type.MouseButtonPress, x, left, left),
+                                      (QEvent.Type.MouseMove, x + by, none, left),
+                                      (QEvent.Type.MouseButtonRelease, x + by, left, none)):
+        pos = QPointF(at, viewport.height() / 2)
+        QApplication.sendEvent(viewport, QMouseEvent(kind, pos, viewport.mapToGlobal(pos), button,
+                                                     buttons, Qt.KeyboardModifier.NoModifier))

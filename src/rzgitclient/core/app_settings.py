@@ -27,6 +27,7 @@ _THEME_MODE = "theme/mode"
 _COLOUR_BLIND = "theme/colour_blind"
 _COMMIT_DRAFTS = "commit/drafts"
 _SAVED_LAYOUTS = "layouts/saved"
+_COLUMN_PREFS = "columns/prefs"
 
 
 class AppSettings:
@@ -164,6 +165,22 @@ class AppSettings:
     def saved_layouts(self, layouts: list[tuple[str, dict[str, Any]]]) -> None:
         self._set(_SAVED_LAYOUTS, json.dumps(
             [{"name": n, "layout": l} for n, l in layouts]) if layouts else None)
+
+    @property
+    def column_prefs(self) -> dict[str, dict[str, Any]]:
+        """Each panel's column choices by panel id, as ``ColumnPrefs`` wrote them
+        ({} if none, or not a JSON object; spec §6.3). ``ColumnPrefs`` checks the entries."""
+        raw = self._settings.value(_COLUMN_PREFS, "", str)
+        try:
+            data = json.loads(raw) if raw else {}
+        except ValueError as exc:
+            log.warning("Saved column choices aren't valid JSON (%s); ignoring them", exc)
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @column_prefs.setter
+    def column_prefs(self, prefs: dict[str, dict[str, Any]]) -> None:
+        self._set(_COLUMN_PREFS, json.dumps(prefs) if prefs else None)
 
     def sync(self) -> None:
         """Write pending changes to disk now (Qt also does this on exit)."""

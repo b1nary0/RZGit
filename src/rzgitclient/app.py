@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QApplication
 
 from rzgitclient import __version__
 from rzgitclient.core.app_settings import AppSettings
+from rzgitclient.core.column_prefs import ColumnPrefs
 from rzgitclient.core.commit_drafts import CommitDrafts
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.repo_watcher import RepoWatcher
@@ -41,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
         theme=theme,
         actions=AppActions(session, selection),
         drafts=CommitDrafts(settings),
+        columns=ColumnPrefs(settings),
     )
 
     window = MainWindow(ctx, settings)

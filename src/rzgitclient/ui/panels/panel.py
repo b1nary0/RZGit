@@ -8,6 +8,7 @@ from typing import ClassVar
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QWidget
 
+from rzgitclient.core.column_prefs import ColumnPrefs
 from rzgitclient.core.commit_drafts import CommitDrafts
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import Selection
@@ -27,6 +28,7 @@ class PanelContext:
     theme: ThemeManager
     actions: AppActions
     drafts: CommitDrafts  # the Commit panel's unfinished messages
+    columns: ColumnPrefs  # each panel's column choices (ColumnHeader, spec §5.2)
 
 
 class Panel(QWidget):

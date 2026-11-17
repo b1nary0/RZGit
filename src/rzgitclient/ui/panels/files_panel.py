@@ -25,7 +25,8 @@ class FilesPanel(Panel):
     def _setup(self) -> None:
         actions = self.ctx.actions
         self._list = FileList(self.ctx, FileSource.WORKTREE,
-                              ([actions.stage, actions.discard], [actions.stage_all]))
+                              ([actions.stage, actions.discard], [actions.stage_all]),
+                              self.panel_id)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._list)

@@ -14,7 +14,6 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QMenu,
     QToolButton,
@@ -28,6 +27,7 @@ from rzgitclient.ui.app_actions import StashOp
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.theme.style_roles import Role, Surface, set_role
+from rzgitclient.ui.widgets.column_header import ColumnHeader
 
 NO_STASHES = "No stashes"
 NOT_CLEAN = " (commit or stash your changes first)"
@@ -63,6 +63,7 @@ class StashPanel(Panel):
     surface = Surface.SIDEBAR
 
     _tree: QTreeWidget
+    _labels: ColumnHeader
     _placeholder: QLabel
     _stash_button: QToolButton
     _ages: QTimer
@@ -77,19 +78,15 @@ class StashPanel(Panel):
         bar.addStretch(1)
 
         self._tree = QTreeWidget()
+        self._labels = ColumnHeader(self.panel_id, self.ctx.columns, self.ctx.theme.current)
+        self._tree.setHeader(self._labels)
         self._tree.setColumnCount(len(COLUMNS))
         self._tree.setHeaderLabels(COLUMNS)
-        self._tree.setHeaderHidden(True)  # like the other sidebar lists; muted columns explain themselves
         self._tree.setRootIsDecorated(False)
         self._tree.setUniformRowHeights(True)
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._tree.setTextElideMode(Qt.TextElideMode.ElideRight)
-        header = self._tree.header()
-        header.setStretchLastSection(False)
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column in (1, 2):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._show_menu)
         self._tree.itemSelectionChanged.connect(self._on_selected)
@@ -135,11 +132,13 @@ class StashPanel(Panel):
         finally:
             self._tree.blockSignals(blocked)
         self._follow_selection(self.ctx.selection.commit)
+        self._fit_columns()
         self._tree.setVisible(bool(stashes))
         self._placeholder.setVisible(not stashes)
         self.set_header(f"{self.title} ({len(stashes):,})" if stashes else self.title)
 
     def apply_theme(self, theme: AppTheme) -> None:
+        self._labels.set_theme(theme)
         self._muted = QColor(theme.colors.text_muted)
         for row in range(self._tree.topLevelItemCount()):
             item = self._tree.topLevelItem(row)
@@ -151,6 +150,12 @@ class StashPanel(Panel):
             item = self._tree.topLevelItem(row)
             if item is not None:
                 item.setText(_AGE_COLUMN, age(stash.date))
+        self._labels.fit(_AGE_COLUMN)
+
+    def _fit_columns(self) -> None:
+        """Branch and age fit their text; the message fills the rest (spec §5.2)."""
+        for column in _MUTED:
+            self._labels.fit(column)
 
     # ---- selection (spec §4.2) -----------------------------------------------
 
