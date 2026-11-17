@@ -2720,6 +2720,32 @@ cheap to fix **later**, without paying for them now:
 - Stays on stdlib `unittest`: there are no extra dependencies, and VS Code's test panel is
   already set up for it.
 
+### 10.1 The user guide (RZG-91)
+
+`docs/USAGE.md` is the guide for people using RZGit; this document is for people working
+on it. The README links to it at the top.
+- **Taken from the code:** every menu entry, button and shortcut it names is spelled as
+  the app shows it. Features not on main are left out, not listed as coming.
+- **Kept current:** an issue that adds or changes a feature updates `docs/USAGE.md` and
+  its screenshots in the same commit (CLAUDE.md and the Core Workflow say so).
+- **The shortcut table** at its end lists every shortcut, what it does and where it
+  works. `tests/test_usage_guide.py` builds a main window offscreen on a temp repo (with
+  something staged and a commit selected, so the panels built on demand exist), collects
+  the keys of every `QAction` and `QShortcut` in it, and checks them against the table
+  both ways. Keys handled in key events (Esc, Ctrl+A and Ctrl+C in text, Ctrl+Home, Enter
+  in the commit summary or the find field) are listed in the test with where they live.
+  A standard key the offscreen platform leaves unbound (Quit: Ctrl+Q on a desktop) is
+  checked by its `StandardKey` instead, and the keyboard's own Open, Refresh, Find and
+  Copy keys, which Qt adds to some standard bindings, aren't listed.
+- **Screenshots:** `docs/screenshots/make_screenshots.py` makes the PNGs beside it. It
+  clones this repository (main) into a fresh temporary folder, sets up work there (changes,
+  one staged, a stash, two branches, a second worktree), and opens it offscreen in the
+  Light theme with the Breeze icons, at 1280×860, with settings in that folder. Each
+  shot outlines its subject in the theme's `accent`, dims the rest with `text` at low
+  alpha, and adds numbered badges (`accent`, `accent_text`) that the guide's text refers
+  to. Context menus are grabbed and drawn where they would open. It reads the panels'
+  private widgets, so a change to a panel may need a change to its shot.
+
 ## 11. Conventions
 
 - Type hints everywhere, with `from __future__ import annotations`.

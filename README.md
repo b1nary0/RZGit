@@ -7,6 +7,9 @@
 
 # RZGit
 
+**[How to use RZGit](docs/USAGE.md)**: every feature, with pictures and a table of the
+keyboard shortcuts.
+
 A Qt (PySide6) git client for Linux. It drives the `git` command-line tool,
 so your existing config, credential helpers, SSH keys and hooks just work.
 

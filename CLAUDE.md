@@ -10,4 +10,7 @@ A PySide6 git client for Linux. See `README.md` for setup, running and tests.
   description holds the per-issue workflow; architecture work is in *App Architecture*.
   Issues name the spec sections they implement. Review each step with the user before
   starting it.
+- **User guide:** `docs/USAGE.md` describes every feature for users. An issue that adds or
+  changes a feature updates it, and reruns `docs/screenshots/make_screenshots.py` when the
+  UI changes. `tests/test_usage_guide.py` checks its shortcut table against the app.
 - **Tests:** `.venv/bin/python -m unittest discover -v -s tests -t .`
