@@ -88,6 +88,7 @@ class Branch:
     ahead: int | None = None  # commits not in the upstream; None without one, or when it's gone
     behind: int | None = None  # the upstream's commits not in it
     date: datetime | None = None  # its tip's committer date (Branches' Last commit sort)
+    remote: str | None = None  # the upstream's remote, "." for a local branch (Pull fetches it)
 
 
 @dataclass(frozen=True)

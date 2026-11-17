@@ -39,9 +39,10 @@ log = logging.getLogger(__name__)
 
 
 class NetworkKind(StrEnum):
-    """What a network command does (Pull and Push come with RZG-71 and RZG-72)."""
+    """What a network command does (Push comes with RZG-72)."""
 
     FETCH = "fetch"
+    PULL = "pull"  # its fetch: the upstream's remote; the session then integrates
 
 
 _ARGS = {
@@ -54,9 +55,14 @@ class NetworkCommand:
     """One network command; compared by identity, like ``GitCommand``."""
 
     kind: NetworkKind
+    remote: str = ""  # PULL's: the remote to fetch
+    branch: str = ""  # PULL's: the branch to pull into, once fetched
+    stash: bool = False  # PULL's: stash the changes while integrating
 
     @property
     def args(self) -> tuple[str, ...]:
+        if self.kind is NetworkKind.PULL:
+            return ("fetch", "--prune", "--progress", "--", self.remote)
         return _ARGS[self.kind]
 
 

@@ -19,7 +19,9 @@ from PySide6.QtCore import QObject, QThreadPool, Signal
 
 from rzgitclient.core.diff_patch import Line
 from rzgitclient.core.diff_request import DiffRequest, load_diff
-from rzgitclient.core.git_commands import CommandKind, GitCommand, run_command
+from rzgitclient.core.git_commands import (
+    CommandKind, GitCommand, PullDiverged, PullMode, run_command,
+)
 from rzgitclient.core.network_worker import (
     NetworkCommand,
     NetworkKind,
@@ -103,6 +105,7 @@ class RepoSession(QObject):
     network_changed = Signal(object)  # NetworkCommand | None: the one running
     network_progress = Signal(str)  # its latest progress line
     network_finished = Signal(object, bool)  # NetworkCommand, whether it ran without error
+    pull_diverged = Signal(object, object)  # GitCommand (the PULL), PullDiverged
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -351,6 +354,33 @@ class RepoSession(QObject):
         self._network.start(self._repo, command)
         return command
 
+    def pull(self, stash: bool = False) -> NetworkCommand | GitCommand | None:
+        """Pull the upstream's commits into the current branch (spec §4.1): fetch
+        its remote in the background, then integrate (``--ff-only`` first; a
+        diverged branch comes back as ``pull_diverged``). With ``stash``, the
+        changes are stashed while integrating. An upstream on ``.`` needs no
+        fetch: the command is queued at once. None with no repository, no
+        current branch, no upstream, or while a network command runs."""
+        branch = next((b for b in self.branches if b.is_current), None)
+        if (self._repo is None or self._network.running is not None or branch is None
+                or branch.name != self.head or not branch.remote or branch.behind is None):
+            return None
+        if branch.remote == ".":
+            return self.pull_integrate(PullMode.FF_ONLY, stash)
+        command = NetworkCommand(NetworkKind.PULL, remote=branch.remote, branch=branch.name,
+                                 stash=stash)
+        self._network_generation = self._generation
+        self._network.start(self._repo, command)
+        return command
+
+    def pull_integrate(self, mode: PullMode, stash: bool = False) -> GitCommand | None:
+        """Integrate the current branch's upstream as ``mode`` says, with nothing
+        fetched (after ``pull_diverged``, or for an upstream on ``.``)."""
+        if self.head is None:
+            return None
+        return self._command(GitCommand(CommandKind.PULL, branch=self.head, mode=mode,
+                                        stash=stash), Refresh.ALL)
+
     def cancel_network(self) -> None:
         """Kill the running network command, if any; it reports no error."""
         self._network.cancel()
@@ -359,12 +389,18 @@ class RepoSession(QObject):
         self.network_changed.emit(None)
         if self._network_generation != self._generation or self._repo is None:
             return  # for a repository closed meanwhile
-        self.refresh(Refresh.BRANCHES)  # the upstream counts; ok or not, some may have changed
+        command = result.command
+        if result.ok and command.kind is NetworkKind.PULL:
+            # Integrate: it reloads everything, the upstream counts too.
+            self._command(GitCommand(CommandKind.PULL, branch=command.branch,
+                                     stash=command.stash), Refresh.ALL)
+        else:
+            self.refresh(Refresh.BRANCHES)  # the upstream counts; ok or not, some may have changed
         if result.cancelled:
             return
         if result.error is not None:
             self.error_occurred.emit(result.error)
-        self.network_finished.emit(result.command, result.ok)
+        self.network_finished.emit(command, result.ok)
 
     # ---- loading ------------------------------------------------------------
 
@@ -666,6 +702,8 @@ class RepoSession(QObject):
             self._store_forced_as_empty()  # parts a failed first load left behind
             for notice in result.notices:
                 self.notice_occurred.emit(notice)
+            for command, diverged in result.diverged:
+                self.pull_diverged.emit(command, diverged)
             for i, command in enumerate(result.commands):
                 self.command_finished.emit(command, i < result.commands_ok)
         self._job_commands = ()
@@ -774,6 +812,7 @@ class _JobResult:
     details_read: bool = False  # it tried; ``details`` is None if that failed
     details: CommitDetails | None = None
     notices: tuple[str, ...] = ()  # the commands'
+    diverged: tuple[tuple[GitCommand, PullDiverged], ...] = ()  # pulls that found it diverged
     history_order: HistoryOrder = HistoryOrder.DATE  # the job's (history_complete says if it loaded)
 
 
@@ -793,6 +832,7 @@ def _run_job(job: _Job) -> _JobResult:
                                "details_generation": job.details_generation,
                                "details_wanted": job.details_sha is not None}
     notices: list[str] = []
+    diverged: list[tuple[GitCommand, PullDiverged]] = []
     for ran, command in enumerate(job.commands):
         try:
             notice = run_command(job.repo, command)
@@ -802,13 +842,16 @@ def _run_job(job: _Job) -> _JobResult:
             # The command's error comes first: it happened first.
             return dataclasses.replace(loaded, error=_error(exc, command.kind),
                                        command_failed=True, commands=job.commands,
-                                       commands_ok=ran, notices=tuple(notices))
-        if notice:
+                                       commands_ok=ran, notices=tuple(notices),
+                                       diverged=tuple(diverged))
+        if isinstance(notice, PullDiverged):
+            diverged.append((command, notice))
+        elif notice:
             notices.append(notice)
     if job.commands:
         loaded = _run_job(dataclasses.replace(job, commands=()))
         return dataclasses.replace(loaded, commands=job.commands, commands_ok=len(job.commands),
-                                   notices=tuple(notices))
+                                   notices=tuple(notices), diverged=tuple(diverged))
     for part in _PARTS:
         wanted = part in job.parts or (part is Refresh.HISTORY and job.more)
         if not wanted:

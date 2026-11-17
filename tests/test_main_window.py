@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QToolBar, QToolButton
 from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.commit_drafts import CommitDrafts
 from rzgitclient.core.diff_patch import hunk_lines
+from rzgitclient.core.network_worker import NetworkCommand, NetworkKind
 from rzgitclient.core.selection import FileSelection, FileSource
 from rzgitclient.git.git_models import DiffSource, HistoryOrder
 from rzgitclient.git.repo import Repo
@@ -184,16 +185,18 @@ class MainWindowTests(unittest.TestCase):
         actions = window.ctx.actions
         # The action buttons; the branch button (a menu, no action) is last.
         self.assertEqual([b.defaultAction() for b in buttons],
-                         [actions.open_repo, actions.refresh, actions.fetch, None])
+                         [actions.open_repo, actions.refresh, actions.fetch, actions.pull, None])
 
     def test_the_status_bar_shows_a_network_commands_progress_while_it_runs(self):
         window = self.start()
         label = window._network_label
         self.assertFalse(label.isVisibleTo(window))
-        command = object()
+        command = NetworkCommand(NetworkKind.FETCH)
         window.session.network_changed.emit(command)
         self.assertTrue(label.isVisibleTo(window))
         self.assertEqual(label.text(), "Fetching…")
+        window.session.network_changed.emit(NetworkCommand(NetworkKind.PULL, remote="origin"))
+        self.assertEqual(label.text(), "Pulling…")
         window.session.network_progress.emit("Receiving objects:  50% (1/2)")
         self.assertEqual(label.text(), "Receiving objects:  50% (1/2)")
         window.session.network_changed.emit(None)
@@ -570,7 +573,8 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual([a for a in menu.actions() if not a.isSeparator()],
                          [actions.stage, actions.unstage, actions.discard,
                           actions.stage_all, actions.unstage_all, actions.commit, actions.amend,
-                          actions.stash_changes, actions.fetch, actions.worktrees,
+                          actions.stash_changes, actions.fetch, actions.pull,
+                          actions.worktrees,
                           actions.new_worktree])
 
     def test_discard_asks_first_and_acts_only_on_unstaged_rows(self):

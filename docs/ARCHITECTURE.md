@@ -74,7 +74,7 @@ src/rzgitclient/
     diff_request.py             DiffRequest, the size limit, load_diff (the worker side of diffs)
     diff_patch.py               build_patch: a patch of chosen lines of a FileDiff (plain Python)
     git_commands.py             GitCommand, run_command (the worker side of commands: stage, commit, …)
-    network_worker.py           NetworkWorker, NetworkCommand: remote commands (fetch) on a thread of their own
+    network_worker.py           NetworkWorker, NetworkCommand: remote commands (fetch, pull's fetch) on a thread of their own
     commit_drafts.py            CommitDrafts: the unfinished commit message of each repository (a file each)
     column_prefs.py             ColumnPrefs: each panel's column choices (hidden columns, widths)
     sort_options.py             SortOption, SortOptions, SortOrder: a panel's sort orders (plain Python)
@@ -92,6 +92,7 @@ src/rzgitclient/
     app_actions.py              AppActions: every QAction, defined once; BranchOp, StashOp, WorktreeOp
     branch_dialogs.py           BranchDialogs: the confirmations and name boxes of branch operations
     stash_dialogs.py            StashDialogs: Stash Changes… and the Drop confirmation
+    pull_dialogs.py             PullDialogs: Pull's boxes (changes, diverged)
     worktree_dialogs.py         WorktreeDialogs, NewWorktreeDialog: New Worktree…, Remove, Prune; folder, terminal
     app_icon.py                 app_icon(): the app's QIcon, built from assets/icon (app.py sets it)
     assets/                     image files shipped as package data (no modules)
@@ -192,6 +193,7 @@ class RepoSession(QObject):
     network_changed  = Signal(object)  # NetworkCommand | None  (the one running)
     network_progress = Signal(str)     # its latest progress line
     network_finished = Signal(object, bool)  # NetworkCommand, whether it ran without error
+    pull_diverged    = Signal(object, object)  # GitCommand (the PULL), PullDiverged (RZG-71)
 
     def open(self, path) -> bool          # path, or a Repo already read (§8.1)
     def close(self) -> None
@@ -230,6 +232,8 @@ class RepoSession(QObject):
 
     # Network commands: on a worker of their own (§4.1, "Network commands").
     def fetch(self) -> NetworkCommand | None   # git fetch --all --prune; None: no repo, or one running
+    def pull(self, stash=False) -> NetworkCommand | GitCommand | None   # fetch, then integrate (RZG-71)
+    def pull_integrate(self, mode, stash=False) -> GitCommand | None   # after pull_diverged
     def cancel_network(self) -> None           # kill the running one, if any
     network: NetworkCommand | None             # the one running
 
@@ -471,6 +475,31 @@ class RepoSession(QObject):
       both 0 when even). Read in the same `for-each-ref` as the names, at no measurable
       cost. An upstream that is gone ("gone": its remote branch was deleted) keeps its
       name, with `ahead` and `behind` None, as without one.
+    - `Branch.remote` (RZG-71): the upstream's remote (`%(upstream:remotename)`, `.` for
+      a local branch), what Pull fetches; None without an upstream.
+  - **Pull** (RZG-71) brings the upstream's commits into the current branch in two
+    parts: a fetch on the network worker (below), then a `PULL` command here, which
+    carries the branch (`branch`), how to integrate (`mode`, a `PullMode`) and `stash`.
+    - **Its checks change nothing:** a current branch that isn't `branch` any more (a
+      switch while it fetched) is an error; behind its upstream by 0 (`git rev-list
+      --left-right --count HEAD...@{u}`) is done, with no stash and no notice.
+    - **`PullMode.FF_ONLY`** (the first try): `git merge --ff-only @{u}`. If the branch
+      is also ahead (diverged), the command changes nothing and returns `PullDiverged`
+      (ahead, behind, and the rebase default) instead of a notice. The session sends it
+      as `pull_diverged(command, diverged)`, before `command_finished(command, True)`.
+    - **`MERGE`** (`git merge --no-edit @{u}`) and **`REBASE`** (`git rebase @{u}`) are
+      Merge and Rebase onto the upstream: never left mid-way (above). Git refuses to
+      rebase with changes; that is the error.
+    - **Rebase default:** `branch.<name>.rebase`, else `pull.rebase`: any value but
+      `false` (`true`, `merges`, `interactive`) means Rebase; unset or `false`, Merge.
+      `pull.ff` isn't read: a diverged branch always asks.
+    - **With `stash`**, the changes are stashed first, as Switch does ("RZGitClient:
+      before pulling <branch>"), only once the checks pass. If the integration fails, the
+      stash is popped back. If it worked, the stash is put back as Pop does (with
+      `--index`, then without, rolled back if both fail). If that fails, the pull stays,
+      the working tree is clean at the pulled commit, the stash is kept, and a notice
+      says so and names it.
+    - It reloads everything.
   - **Amend** (`git commit -q --amend --cleanup=whitespace -F -`, the message on stdin)
     replaces HEAD's commit with the staged changes, if any, and the message, and reloads
     what Commit does. Git keeps the author and author date, and a merge's parents.
@@ -539,8 +568,7 @@ class RepoSession(QObject):
   second worker, **`NetworkWorker`** (`core/network_worker.py`), owned by the session,
   so status, diffs and history keep loading and refreshing on the first one meanwhile.
   - **One at a time.** A `NetworkCommand` (frozen, compared by identity, like
-    `GitCommand`) has a `kind` (`NetworkKind.FETCH`; Pull and Push come with RZG-71 and
-    RZG-72). `fetch()` returns None while one runs. `network` is the running command;
+    `GitCommand`) has a `kind` (`NetworkKind.FETCH`, `PULL`; Push comes with RZG-72). `fetch()` returns None while one runs. `network` is the running command;
     `network_changed` sends it when it starts and None when it ends.
   - **No clash with the first worker:** a network command writes only remote-tracking
     refs, `FETCH_HEAD` and objects, never the working tree or the index, and git retries
@@ -549,6 +577,13 @@ class RepoSession(QObject):
     remote-tracking branches that are gone. When it ends, ok or not (some remotes may have
     been fetched), the session refreshes `BRANCHES`, for the upstream counts (the watcher
     sees the refs change too, §4.3).
+  - **Pull's fetch** (RZG-71): `git fetch --prune --progress -- <remote>`, the upstream's
+    remote (`Branch.remote`). The `NetworkCommand` carries the remote, the branch and
+    `stash`. When it ends ok, the session queues the `PULL` command (`FF_ONLY`, above);
+    if it failed or was cancelled, nothing is integrated or stashed. An upstream on `.`
+    (a local branch) skips the fetch: `pull()` queues the command at once and returns it.
+    `pull()` returns None with no repository, on a detached HEAD, without an upstream
+    (or one that is gone), or while a network command runs.
   - **Git runs through `Popen`**, not `run_git`, so it can be read while it runs and
     killed: `Repo.start_network_git(*args)`, with `network_env()`, stdin closed, stderr
     into stdout, and `start_new_session=True`.
@@ -1011,7 +1046,7 @@ The first three are extracted from the original `main_window.py` with the same b
 
 | Panel | id | Default area | Shows | Writes |
 |---|---|---|---|---|
-| ControlsPanel | `controls` | Controls | Open, Refresh, Fetch (`ctx.actions`), the branch button | switches and makes branches, through `actions.request_branch`; fetches, through `actions.fetch`; (later: pull/push) |
+| ControlsPanel | `controls` | Controls | Open, Refresh, Fetch, Pull (`ctx.actions`), the branch button | switches and makes branches, through `actions.request_branch`; fetches and pulls, through `actions.fetch` and `actions.pull`; (later: push) |
 | BranchesPanel | `branches` | Sidebar | branches, current in bold; by name or last commit | branch operations, through `actions.request_branch` |
 | StashPanel | `stash` | Sidebar | "Stashes": message, branch and age of each, newest first | `selection.commit` (a `Stash`); stash operations, through `actions.request_stash` |
 | HistoryPanel | `history` | Main pane | Uncommitted changes, then the commit table; no row while a stash is selected | `selection.commit` |
@@ -1029,7 +1064,9 @@ keeps the other operations. Like Branches, it never runs git or shows a dialog.
 - **Label:** the branch's name; "detached at *sha*" (8 characters of `session.head_sha`)
   when HEAD is detached; "*main* (no commits)" before the first commit. It follows
   `head_changed` and `head_sha_changed`. A name longer than 360 px is cut
-  short in the middle; the tooltip gives the full label. With no repository it is
+  short in the middle; the tooltip gives the full label. In a narrow window the button
+  gives up width first (RZG-71): its label is cut shorter to fit, down to 60 px, so the
+  Controls panel's buttons don't set the window's minimum width. With no repository it is
   disabled and says "No repository".
 - **The arrow** is the style's menu indicator, drawn from the theme palette (the
   `branch-button` style role sets only its padding).
@@ -2316,7 +2353,7 @@ Per-widget sheets are slow to apply and scatter the rules.
   plus while more history is unloaded ("500+ commits").
 - **No toolbar:** its buttons are the **Controls panel** (§5.4), placed by the layout across
   the top and styled like the toolbar was. Remote controls join it as those commands
-  come: Fetch now, Pull and Push with RZG-71 and RZG-72. The branch button switches
+  come: Fetch and Pull now, Push with RZG-72. The branch button switches
   branches, as the Branches panel does.
 - **Fetch** (RZG-62, `actions.fetch`, in the Repository menu after Stash Changes…, and
   on the Controls panel after Refresh) calls `session.fetch()`. It is enabled when the
@@ -2325,6 +2362,24 @@ Per-widget sheets are slow to apply and scatter the rules.
   triggering it calls `session.cancel_network()` instead. The status bar shows the
   latest `network_progress` line in a label of its own, beside Loading…, from when the
   command starts until it ends.
+- **Pull** (RZG-71, `actions.pull`, in the Repository menu and on the Controls panel after
+  Fetch) reads **Pull ↓n** when the current branch is n commits behind its upstream
+  (`Branch.behind`), else **Pull**. It is enabled when the current branch has an upstream
+  that isn't gone and no network command runs. While its fetch runs it reads **Pulling**
+  (the menu **Pulling…**), "Click to cancel", and triggering it cancels; Fetch is
+  disabled meanwhile, and Pull while a fetch runs. The integration step is local and
+  can't be cancelled. The status bar label reads "Pulling…" until progress comes.
+  Triggered otherwise, it sends `pull_requested`, which **`PullDialogs`**
+  (`ui/pull_dialogs.py`, made by MainWindow) handles:
+  - **Changes first:** with changes in the status (as for Switch), "Pull into *X* with
+    uncommitted changes?" offers **Stash and Pull** (the default), **Pull with Changes**
+    (git carries them over, or refuses) and **Cancel**, before anything is fetched. The
+    stash is put back after the pull.
+  - **Diverged** (`pull_diverged`): "*X* and *upstream* have diverged" (ahead and behind
+    counts) offers **Rebase**, **Merge** and **Cancel**; the default is the rebase
+    default (§4.1), and a conflict aborts either. Then `session.pull_integrate(mode,
+    stash)`, with the first answer's `stash`; nothing is fetched again.
+  - Already up to date: no box; the ↓n goes when the branches reload.
 
 ### 8.1 Windows
 

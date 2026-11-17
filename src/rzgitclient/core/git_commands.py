@@ -3,7 +3,8 @@
 RepoSession queues a GitCommand; ``run_command`` is the worker side. Where a
 command depends on the status it reads it itself, so a stale status in the
 window can't make it act on the wrong file. No Qt objects besides QFile.
-A command that worked, but not quite as asked, returns a notice.
+A command that worked, but not quite as asked, returns a notice; a pull that
+found its branch diverged returns ``PullDiverged``.
 """
 
 from __future__ import annotations
@@ -38,6 +39,9 @@ class CommandKind(StrEnum):
     DELETE_BRANCH = "delete_branch"  # ``force``: even if unmerged
     MERGE = "merge"  # ``branch`` into the current branch
     REBASE = "rebase"  # the current branch onto ``branch``
+    # ``branch`` (the current one when asked) from its upstream, as ``mode`` says;
+    # with ``stash``, the changes are stashed first and put back after (spec §4.1).
+    PULL = "pull"
     # Stashes (``sha`` is the stash acted on):
     STASH_PUSH = "stash_push"  # with ``message``; ``untracked`` files too
     STASH_APPLY = "stash_apply"  # rolled back if it fails; ``pop``: dropped if it worked
@@ -46,6 +50,23 @@ class CommandKind(StrEnum):
     WORKTREE_ADD = "worktree_add"  # on ``branch``: new from ``start``, or existing without
     WORKTREE_REMOVE = "worktree_remove"  # ``force``: even with changes
     WORKTREE_PRUNE = "worktree_prune"  # the records of missing worktrees
+
+
+class PullMode(StrEnum):
+    """How a pull integrates the upstream (spec §4.1)."""
+
+    FF_ONLY = "ff_only"  # the first try: diverged, it changes nothing
+    MERGE = "merge"
+    REBASE = "rebase"
+
+
+@dataclass(frozen=True)
+class PullDiverged:
+    """A pull's result when the branch and its upstream have diverged: nothing changed."""
+
+    ahead: int  # the branch's commits not in the upstream
+    behind: int  # the upstream's commits not in the branch
+    rebase: bool  # the rebase default: branch.<name>.rebase, else pull.rebase
 
 
 WORKTREE_COMMANDS = frozenset({CommandKind.WORKTREE_ADD, CommandKind.WORKTREE_REMOVE,
@@ -64,7 +85,8 @@ class GitCommand:
     lines: frozenset[Line] = frozenset()  # (hunk, line) indices into ``diff``
     branch: str = ""  # the branch commands'
     new_name: str = ""  # CREATE_BRANCH's and RENAME_BRANCH's
-    stash: bool = False  # SWITCH's
+    stash: bool = False  # SWITCH's and PULL's
+    mode: PullMode = PullMode.FF_ONLY  # PULL's
     switch: bool = False  # CREATE_BRANCH's
     force: bool = False  # DELETE_BRANCH's and WORKTREE_REMOVE's
     sha: str = ""  # the stash commands'
@@ -74,9 +96,9 @@ class GitCommand:
     start: str | None = None  # WORKTREE_ADD's: a new ``branch`` from here; None: existing
 
 
-def run_command(repo: Repo, command: GitCommand) -> str | None:
-    """Run ``command``; a notice if it worked, but not quite as asked. Raises
-    GitError if git (or the trash) fails."""
+def run_command(repo: Repo, command: GitCommand) -> str | PullDiverged | None:
+    """Run ``command``; a notice if it worked, but not quite as asked, or
+    ``PullDiverged``. Raises GitError if git (or the trash) fails."""
     paths = command.paths
     match command.kind:
         case CommandKind.STAGE:
@@ -107,6 +129,8 @@ def run_command(repo: Repo, command: GitCommand) -> str | None:
             repo.merge(command.branch)
         case CommandKind.REBASE:
             repo.rebase(command.branch)
+        case CommandKind.PULL:
+            return _pull(repo, command)
         case CommandKind.STASH_PUSH:
             if not repo.stash_push(command.message, untracked=command.untracked):
                 return NOTHING_TO_STASH
@@ -146,20 +170,26 @@ def _apply_stash(repo: Repo, sha: str, pop: bool) -> str | None:
     if repo.status():
         raise GitError(NOT_CLEAN)
     stash = _stash(repo, sha)
-    notice = None
+    try:
+        notice = _apply_in_full(repo, stash)
+    except GitError as exc:
+        raise GitError(f"{exc}\n\nNothing was changed, and the stash is kept.",
+                       exc.returncode) from exc
+    if pop:
+        repo.stash_drop(_stash(repo, sha).ref)
+    return notice
+
+
+def _apply_in_full(repo: Repo, stash: Stash) -> str | None:
+    """Apply ``stash`` to the clean working tree, staged changes staged again if
+    they fit, else unstaged (the notice says so); rolled back if neither works."""
     try:
         _apply_or_roll_back(repo, stash, index=True)
     except GitError:
         # Its staged changes may not fit HEAD as staged changes: try them unstaged.
-        try:
-            _apply_or_roll_back(repo, stash, index=False)
-        except GitError as exc:
-            raise GitError(f"{exc}\n\nNothing was changed, and the stash is kept.",
-                           exc.returncode) from exc
-        notice = UNSTAGED
-    if pop:
-        repo.stash_drop(_stash(repo, sha).ref)
-    return notice
+        _apply_or_roll_back(repo, stash, index=False)
+        return UNSTAGED
+    return None
 
 
 def _apply_or_roll_back(repo: Repo, stash: Stash, *, index: bool) -> None:
@@ -194,6 +224,60 @@ def _switch(repo: Repo, branch: str, stash: bool) -> None:
                            f"(\"{stash_message(branch)}\") but couldn't be put back: "
                            f"{pop_exc}", exc.returncode) from exc
         raise
+
+
+def pull_stash_message(branch: str) -> str:
+    """The message of the stash Pull makes before pulling into ``branch``."""
+    return f"RZGitClient: before pulling {branch}"
+
+
+NOT_ON_BRANCH = "{branch} is no longer the current branch, so nothing was pulled."
+CHANGES_KEPT = ("Pulled into {branch}, but your changes couldn't be put back on top:\n\n"
+                "{error}\n\nThey are kept in the stash “{stash}”, and the working tree "
+                "is clean.")
+
+
+def _pull(repo: Repo, command: GitCommand) -> str | PullDiverged | None:
+    """Bring the upstream's commits into ``command.branch`` (spec §4.1). The
+    checks change nothing; with ``stash``, the changes are stashed only after
+    them, popped back if the integration fails, and put back as Pop does if it
+    worked (kept, with a notice, if that fails)."""
+    branch = command.branch
+    if repo.current_branch() != branch:
+        raise GitError(NOT_ON_BRANCH.format(branch=branch))
+    ahead, behind = repo.upstream_counts()
+    if behind == 0:
+        return None  # already up to date
+    if command.mode is PullMode.FF_ONLY and ahead:
+        return PullDiverged(ahead, behind, repo.pull_rebases(branch))
+    message = pull_stash_message(branch)
+    stashed = command.stash and repo.stash_push(message)
+    stash = repo.stashes()[0] if stashed else None
+    try:
+        match command.mode:
+            case PullMode.FF_ONLY:
+                repo.merge_ff_only("@{u}")
+            case PullMode.MERGE:
+                repo.merge("@{u}")
+            case PullMode.REBASE:
+                repo.rebase("@{u}")
+    except GitError as exc:
+        if not stashed:
+            raise
+        try:
+            repo.stash_pop()
+        except GitError as pop_exc:
+            raise GitError(f"{exc}\n\nYour changes are in the stash (\"{message}\") but "
+                           f"couldn't be put back: {pop_exc}", exc.returncode) from exc
+        raise
+    if stash is None:
+        return None
+    try:
+        notice = _apply_in_full(repo, stash)
+    except GitError as exc:
+        return CHANGES_KEPT.format(branch=branch, error=exc, stash=message)
+    repo.stash_drop(_stash(repo, stash.sha).ref)
+    return notice
 
 
 def _with_rename_sources(paths: tuple[str, ...], status: list[FileStatus]) -> list[str]:

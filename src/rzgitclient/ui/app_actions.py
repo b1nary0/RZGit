@@ -12,6 +12,7 @@ from enum import StrEnum
 from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 
+from rzgitclient.core.network_worker import NetworkKind
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import FileSource, Selection
 from rzgitclient.git.git_models import FileDiff, HistoryOrder, LastCommit, Stash
@@ -20,6 +21,8 @@ from rzgitclient.ui.theme.theme_manager import ThemeMode
 
 FETCH_TEXT = "&Fetch"
 FETCHING_TEXT = "Fetching…"
+PULL_TEXT = "&Pull"
+PULLING_TEXT = "Pulling…"
 
 
 class BranchOp(StrEnum):
@@ -77,6 +80,8 @@ class AppActions(QObject):
     open_worktree_here_requested = Signal(str)
     # A worktree operation; WorktreeDialogs asks if need be, then runs it (spec §8).
     worktree_requested = Signal(object, str)  # WorktreeOp, path or branch ("" for none)
+    # Pull, when not cancelling one; PullDialogs asks about changes, then pulls (spec §8).
+    pull_requested = Signal()
 
     def __init__(self, session: RepoSession, selection: Selection,
                  parent: QObject | None = None):
@@ -153,6 +158,9 @@ class AppActions(QObject):
         # Fetch (spec §8): every remote; while a network command runs, it cancels it.
         self.fetch = self._action("download", FETCH_TEXT)
         self.fetch.triggered.connect(self._on_fetch)
+        # Pull (spec §8): the current branch's upstream; while its fetch runs, it cancels it.
+        self.pull = self._action("vcs-pull", PULL_TEXT)
+        self.pull.triggered.connect(self._on_pull)
 
         # triggered(bool) would land in refresh's `parts` argument.
         self.refresh.triggered.connect(lambda: session.refresh())
@@ -166,7 +174,8 @@ class AppActions(QObject):
         session.repo_changed.connect(lambda _repo: self.amend.setChecked(False))
         for signal in (session.repo_changed, session.status_changed, session.history_changed,
                        selection.files_changed, session.remotes_changed,
-                       session.network_changed):
+                       session.network_changed, session.branches_changed,
+                       session.head_changed):
             signal.connect(self._update_enabled)
         self._update_enabled()
 
@@ -195,10 +204,18 @@ class AppActions(QObject):
         self._update_enabled()
 
     def _on_fetch(self) -> None:
-        if self._session.network is not None:
+        network = self._session.network
+        if network is not None and network.kind is NetworkKind.FETCH:
             self._session.cancel_network()
-        else:
+        elif network is None:
             self._session.fetch()
+
+    def _on_pull(self) -> None:
+        network = self._session.network
+        if network is not None and network.kind is NetworkKind.PULL:
+            self._session.cancel_network()
+        elif network is None:
+            self.pull_requested.emit()
 
     def move(self, paths: tuple[str, ...], to: FileSource) -> None:
         """Stage ``paths`` (``to`` the index) or unstage them, and have their new
@@ -261,10 +278,14 @@ class AppActions(QObject):
         self.refresh.setEnabled(session.repo is not None)
         self.worktrees.setEnabled(session.repo is not None)
         self.new_worktree.setEnabled(session.repo is not None)
-        running = session.network is not None
-        self.fetch.setEnabled(running or (session.repo is not None and bool(session.remotes)))
-        self.fetch.setText(FETCHING_TEXT if running else FETCH_TEXT)
-        self.fetch.setToolTip("Fetching… Click to cancel" if running else "Fetch every remote")
+        network = session.network
+        fetching = network is not None and network.kind is NetworkKind.FETCH
+        self.fetch.setEnabled(fetching or (network is None and session.repo is not None
+                                           and bool(session.remotes)))
+        self.fetch.setText(FETCHING_TEXT if fetching else FETCH_TEXT)
+        self.fetch.setToolTip("Fetching… Click to cancel" if fetching else "Fetch every remote")
+        self._update_pull(network is not None and network.kind is NetworkKind.PULL,
+                          network is None)
         worktree = bool(self.selected(FileSource.WORKTREE))
         self.stage.setEnabled(worktree)
         self.discard.setEnabled(worktree)
@@ -281,3 +302,22 @@ class AppActions(QObject):
             return
         self.commit.setEnabled((staged or self.amend.isChecked()) and self._commit_ready
                                and session.repo is not None)
+
+    def _update_pull(self, pulling: bool, idle: bool) -> None:
+        """Pull's text and state (spec §8): ↓n when behind; Pulling… while it fetches."""
+        session = self._session
+        branch = next((b for b in session.branches if b.is_current), None)
+        if session.repo is None or branch is None or branch.name != session.head:
+            branch = None
+        can_pull = branch is not None and bool(branch.remote) and branch.behind is not None
+        self.pull.setEnabled(pulling or (idle and can_pull))
+        if pulling:
+            self.pull.setText(PULLING_TEXT)
+            self.pull.setToolTip("Pulling… Click to cancel")
+        elif can_pull:
+            behind = branch.behind  # type: ignore[union-attr]
+            self.pull.setText(f"{PULL_TEXT} ↓{behind}" if behind else PULL_TEXT)
+            self.pull.setToolTip(f"Pull {branch.upstream} into {branch.name}")  # type: ignore[union-attr]
+        else:
+            self.pull.setText(PULL_TEXT)
+            self.pull.setToolTip("Pull: the current branch has no upstream")

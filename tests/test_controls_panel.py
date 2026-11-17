@@ -6,10 +6,12 @@ from PySide6.QtWidgets import QLineEdit, QToolButton
 
 from rzgitclient.core.repo_session import Refresh
 from rzgitclient.ui.app_actions import BranchOp
-from rzgitclient.ui.panels.controls_panel import FILTER_AT, LABEL_WIDTH, ControlsPanel
+from rzgitclient.ui.panels.controls_panel import (
+    FILTER_AT, LABEL_WIDTH, MIN_LABEL_WIDTH, ControlsPanel,
+)
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
-NAV = 3  # Open, Refresh and Fetch, ahead of the branch button
+NAV = 4  # Open, Refresh, Fetch and Pull, ahead of the branch button
 
 
 class ControlsPanelTests(unittest.TestCase):
@@ -39,8 +41,9 @@ class ControlsPanelTests(unittest.TestCase):
         buttons = self.panel.findChildren(QToolButton)[:NAV]
         actions = self.ctx.actions
         self.assertEqual([b.defaultAction() for b in buttons],
-                         [actions.open_repo, actions.refresh, actions.fetch])
-        self.assertEqual([b.text() for b in buttons], ["Open Repository", "Refresh", "Fetch"])  # no & or …
+                         [actions.open_repo, actions.refresh, actions.fetch, actions.pull])
+        self.assertEqual([b.text() for b in buttons],
+                         ["Open Repository", "Refresh", "Fetch", "Pull"])  # no & or …
         self.assertFalse(buttons[1].isEnabled())  # Refresh, with no repo open
         self.open()
         self.assertTrue(buttons[1].isEnabled())
@@ -118,6 +121,29 @@ class ControlsPanelTests(unittest.TestCase):
         self.assertIn("…", button.text())
         self.assertTrue(button.text().endswith("end"))  # cut in the middle
         self.assertLessEqual(button.fontMetrics().horizontalAdvance(button.text()), LABEL_WIDTH)
+        self.assertEqual(button.toolTip(), name)
+
+    def test_in_a_narrow_bar_the_branch_button_gives_up_width_first(self):
+        name = "feature/a-rather-long-branch-name-end"
+        git(self.repo, "switch", "-q", "-c", name)
+        self.open()
+        button = self.panel._branch
+        self.assertEqual(button.text(), name)
+        self.assertLess(button.minimumSizeHint().width(), button.sizeHint().width())
+        self.assertLessEqual(self.panel.minimumSizeHint().width(),
+                             self.panel.sizeHint().width() - button.sizeHint().width()
+                             + button.minimumSizeHint().width())
+        self.panel.resize(self.panel.minimumSizeHint().width(), 40)
+        self.panel.show()
+        self.addCleanup(self.panel.hide)
+        qt_app().processEvents()
+        self.assertIn("…", button.text())
+        self.assertTrue(button.text().endswith("end"))
+        self.assertLessEqual(button.fontMetrics().horizontalAdvance(button.text()),
+                             MIN_LABEL_WIDTH)
+        self.panel.resize(self.panel.sizeHint().width() + 100, 40)  # room again: the full name
+        qt_app().processEvents()
+        self.assertEqual(button.text(), name)
         self.assertEqual(button.toolTip(), name)
 
     def test_ampersand_in_a_name_is_not_a_shortcut_mark(self):

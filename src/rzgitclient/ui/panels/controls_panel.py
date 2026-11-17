@@ -1,4 +1,4 @@
-"""The bar of controls across the top: Open, Refresh, Fetch, the branch button (spec §5.4).
+"""The bar of controls across the top: Open, Refresh, Fetch, Pull, the branch button (spec §5.4).
 
 It replaces the toolbar: the buttons show the same ``AppActions`` objects as the
 menus, so text, shortcut and enabled state come from one place.
@@ -7,8 +7,10 @@ menus, so text, shortcut and enabled state come from one place.
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QMenu, QToolButton, QWidgetAction
+from PySide6.QtGui import QAction, QResizeEvent
+from PySide6.QtWidgets import (
+    QHBoxLayout, QLineEdit, QMenu, QSizePolicy, QToolButton, QWidgetAction,
+)
 
 from rzgitclient.ui.app_actions import BranchOp
 from rzgitclient.ui.panels.panel import Panel
@@ -16,6 +18,7 @@ from rzgitclient.ui.theme.style_roles import Role, set_role
 
 FILTER_AT = 15  # more branches than this: a filter box on top of the menu
 LABEL_WIDTH = 360  # px; a longer label is cut short in the middle
+MIN_LABEL_WIDTH = 60  # px: in a narrow window, the label gives up width down to this
 SHA_LENGTH = 8
 NO_REPO = "No repository"
 
@@ -28,7 +31,7 @@ class ControlsPanel(Panel):
     always_shown = True
     movable = False
 
-    _branch: QToolButton
+    _branch: _BranchButton
     _menu: QMenu
     _label: str  # the branch button's full label, before it is cut short
     _filter: QLineEdit | None
@@ -40,11 +43,11 @@ class ControlsPanel(Panel):
         layout.setContentsMargins(6, 6, 6, 5)
         layout.setSpacing(2)
         actions = self.ctx.actions
-        for action in (actions.open_repo, actions.refresh, actions.fetch):
+        for action in (actions.open_repo, actions.refresh, actions.fetch, actions.pull):
             layout.addWidget(_button(action))
         layout.addStretch(1)
 
-        self._branch = QToolButton()
+        self._branch = _BranchButton()
         set_role(self._branch, Role.BRANCH_BUTTON)
         self._branch.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._branch.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
@@ -68,9 +71,7 @@ class ControlsPanel(Panel):
     def _render_branch(self, *_args: object) -> None:
         session = self.ctx.session
         self._label = branch_label(session.repo is not None, session.head, session.head_sha)
-        shown = self._branch.fontMetrics().elidedText(
-            self._label, Qt.TextElideMode.ElideMiddle, LABEL_WIDTH)
-        self._branch.setText(_menu_text(shown))
+        self._branch.set_label(self._label)
         self._branch.setToolTip(self._label)
         self._branch.setEnabled(session.repo is not None)
 
@@ -127,6 +128,53 @@ class ControlsPanel(Panel):
 
     def _switch(self, name: str) -> None:
         self.ctx.actions.request_branch(BranchOp.SWITCH, name)
+
+
+class _BranchButton(QToolButton):
+    """The branch button. It asks for its label's width, up to LABEL_WIDTH, but
+    gives it up first when the bar is narrow: the label is then cut short in the
+    middle to fit, down to MIN_LABEL_WIDTH (spec §5.4)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        # Shrinkable (a tool button is Fixed): the layout may give it less than its hint.
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self._label = ""
+        self._hint: QSize | None = None  # for the label cut at LABEL_WIDTH
+        self._chrome = 0  # px around the text: padding and the menu arrow
+
+    def set_label(self, label: str) -> None:
+        self._label = label
+        self._hint = None
+        self.setText(self._elided(LABEL_WIDTH))
+        self._hint = super().sizeHint()
+        self._chrome = self._hint.width() - self._text_width()
+        self.updateGeometry()
+        if self.isVisible():
+            self._fit()
+
+    def sizeHint(self) -> QSize:
+        return self._hint if self._hint is not None else super().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:
+        hint = self.sizeHint()
+        return QSize(min(hint.width(), self._chrome + MIN_LABEL_WIDTH), hint.height())
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._fit()
+
+    def _fit(self) -> None:
+        text = self._elided(min(LABEL_WIDTH, self.width() - self._chrome))
+        if text != self.text():
+            self.setText(text)
+
+    def _elided(self, width: int) -> str:
+        return _menu_text(self.fontMetrics().elidedText(
+            self._label, Qt.TextElideMode.ElideMiddle, max(width, 0)))
+
+    def _text_width(self) -> int:
+        return self.fontMetrics().size(Qt.TextFlag.TextShowMnemonic, self.text()).width()
 
 
 def branch_label(has_repo: bool, head: str | None, head_sha: str | None) -> str:

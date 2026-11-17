@@ -172,7 +172,7 @@ class Repo:
         out = self.git(
             "for-each-ref",
             "--format=%(HEAD)%00%(refname:short)%00%(upstream:short)%00%(upstream:track,nobracket)"
-            "%00%(committerdate:iso-strict)",
+            "%00%(committerdate:iso-strict)%00%(upstream:remotename)",
             "refs/heads",
         )
         rows = [line.split("\0") for line in out.splitlines()]
@@ -185,8 +185,9 @@ class Repo:
                 pass
         return [Branch(name, head == "*", name in merged, upstream or None,
                        *_ahead_behind(upstream, track),
-                       date=datetime.fromisoformat(date) if date else None)
-                for head, name, upstream, track, date in rows]
+                       date=datetime.fromisoformat(date) if date else None,
+                       remote=(remote or None) if upstream else None)
+                for head, name, upstream, track, date, remote in rows]
 
     def remotes(self) -> list[str]:
         """The remotes' names, in git's order (spec §4.1)."""
@@ -496,6 +497,28 @@ class Repo:
                 raise
             self.git("merge", "--abort")
             raise _aborted(exc, "merge") from exc
+
+    def merge_ff_only(self, name: str) -> None:
+        """Fast-forward the current branch to ``name``; git refuses anything else."""
+        self.git("merge", "-q", "--ff-only", name)
+
+    def upstream_counts(self) -> tuple[int, int]:
+        """How many commits the current branch is ahead of and behind its upstream."""
+        ahead, behind = self.git("rev-list", "--left-right", "--count", "HEAD...@{u}").split()
+        return int(ahead), int(behind)
+
+    def config_value(self, key: str) -> str | None:
+        """``key``'s value in git's config, or None if it isn't set."""
+        out = run_git(self.root, "config", "--get", key, ok_codes=(0, 1))
+        return out.rstrip("\n") if out else None
+
+    def pull_rebases(self, branch: str) -> bool:
+        """Whether a diverged pull of ``branch`` rebases by default (spec §4.1):
+        ``branch.<name>.rebase``, else ``pull.rebase``; any value but false."""
+        value = self.config_value(f"branch.{branch}.rebase")
+        if value is None:
+            value = self.config_value("pull.rebase")
+        return value is not None and value.strip().lower() not in ("false", "no", "off", "0", "")
 
     def rebase(self, onto: str) -> None:
         """Rebase the current branch onto ``onto``. If it stops part-way (a

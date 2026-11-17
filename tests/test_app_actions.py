@@ -5,6 +5,7 @@ from unittest import mock
 
 from PySide6.QtGui import QKeySequence
 
+from rzgitclient.core.network_worker import NetworkCommand, NetworkKind
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import FileSelection, FileSource, Selection
 from rzgitclient.git.git_models import HistoryOrder
@@ -57,7 +58,7 @@ class AppActionsTests(unittest.TestCase):
         wait_idle(self.session)
         self.assertTrue(fetch.isEnabled())
         self.assertEqual((fetch.text(), fetch.toolTip()), ("&Fetch", "Fetch every remote"))
-        command = object()
+        command = NetworkCommand(NetworkKind.FETCH)
         with mock.patch.object(self.session, "fetch") as start, \
                 mock.patch.object(self.session, "cancel_network") as cancel:
             fetch.trigger()
