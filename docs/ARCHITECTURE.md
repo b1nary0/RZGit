@@ -1671,6 +1671,10 @@ never disappears. Each area holds a free tree of splits and tab groups, the
   `CENTER` a tab after it (current). A target in a tab group with an edge zone puts the
   panel beside the whole group. Dropping a panel on itself, or on the centre of the tab
   group it's already in, returns `root` itself (`is`), which callers treat as "not a target".
+- **Tab order** (RZG-79) is the order of `TabsNode.children`, and the user changes it in
+  the host (§6.2). `current` follows the panel, not the index: moving a tab never changes
+  which panel is current. A panel hidden from a reordered group records its neighbour in
+  the new order (`anchor_of`), so it comes back to its place in it.
 
 - `from_dict` raises `LayoutError(ValueError)` on structural errors: wrong version, unknown
   node type, missing or mistyped fields. `sizes` that don't fit (wrong length, negative)
@@ -1777,12 +1781,24 @@ before areas.
   or a drop elsewhere cancels (Qt's `QDrag`). The drop is applied after `QDrag.exec`
   returns, never inside it, because `apply` deletes the header or tab bar the drag
   started from.
+- **Reordering tabs** (RZG-79): tab bars are movable (`setMovable`), so dragging a tab
+  along its bar moves it, live. Only when the pointer leaves the bar (its rect grown by
+  `startDragDistance`) does the panel drag above start: the tab first goes back to where
+  the press found it (a synthetic release ends Qt's move), so one gesture either
+  reorders or moves the panel, never both, and Escape leaves everything as it was. Every
+  tab move (drag, menu or shortcut) emits `layout_changed`, and `state()` reads the order
+  from the tab widget. The tab's right-click menu ends with **Move Left** and **Move
+  Right** (after a separator when the panel has header actions), disabled when no shown
+  tab is on that side; collapsed (hidden) tabs are skipped. **Ctrl+Shift+PgUp** and
+  **Ctrl+Shift+PgDn** move the current tab of the tab group that has focus
+  (`WidgetWithChildrenShortcut`). These actions belong to each tab group, not to
+  `AppActions` (§8): they act on one tab of one group, like the header menu.
 - **The header menu** (§5.1): in a split, `PanelFrame` puts a **⋯** `QToolButton`
   (`Role.HEADER_MENU`: on the header's background, with the theme's hover) at the right
   of the section header, inside it, so a press on it never starts a drag. It pops up a
   menu of the panel's `header_actions`, follows `header_actions_changed`, and is made
   the first time the panel has actions (most have none), hidden while it has none again. In a tab group, right-clicking a panel's tab shows a menu of
-  the same actions (`menu_for(index)`), and nothing when it has none.
+  the same actions (`menu_for(index)`), then Move Left and Move Right (above).
 - A layout with every area empty (everything dropped by `normalize`) shows the empty
   areas. Falling back to `DEFAULT_LAYOUT` is the loader's job (§6.3).
 
@@ -1847,7 +1863,9 @@ geometry (with several windows, each saves as it closes, so the last one closed 
 Wayland). With the layout it saves `layout_preset`: the title of the preset the layout
 is, if it is one (`matching_preset(state)`: the preset whose arrangement is the layout's,
 and whose areas, without sizes or current tabs and with the saved hidden panels taken
-out, have the layout's shapes), else None.
+out, have the layout's shapes), else None. Tab order is part of the shape (RZG-79): a
+preset with reordered tabs is a custom layout, so `restore_layout` keeps its order instead
+of reapplying the preset. Reset Layout and View → Layout bring back a preset's order.
 
 **Built-in layouts follow the code; custom ones stay.** On start,
 `restore_layout(saved, preset)` in `layout_presets.py` (plain Python, no Qt) returns the

@@ -6,8 +6,10 @@ import dataclasses
 from collections.abc import Mapping
 from types import MappingProxyType
 
-from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QRect, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QDrag, QDropEvent
+from PySide6.QtCore import (
+    QEvent, QMimeData, QObject, QPoint, QPointF, QRect, Qt, QTimer, Signal, Slot,
+)
+from PySide6.QtGui import QAction, QDrag, QDropEvent, QKeySequence, QMouseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QMenu,
@@ -105,9 +107,10 @@ class LayoutHost(QWidget):
         self._root: QWidget | None = None
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
-        # Drag and drop (§6.2): the press a drag may start from, whether QDrag.exec
-        # is running, and the tree to apply once it returns.
-        self._press: tuple[QPoint, str] | None = None
+        # Drag and drop (§6.2): the press a drag may start from (where, the panel, and
+        # its tab's index, -1 for a header), whether QDrag.exec is running, and the
+        # tree to apply once it returns.
+        self._press: tuple[QPoint, str, int] | None = None
         self._dragging = False
         self._pending: LayoutState | None = None
         self._indicator = DropIndicator(ctx.theme, self)
@@ -231,18 +234,41 @@ class LayoutHost(QWidget):
         if kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
             point = event.position().toPoint()
             panel_id = _drag_source(watched, point)
-            self._press = (point, panel_id) if panel_id is not None else None
+            index = watched.tabAt(point) if isinstance(watched, QTabBar) else -1
+            self._press = (point, panel_id, index) if panel_id is not None else None
         elif kind == QEvent.Type.MouseMove and self._press is not None \
                 and event.buttons() & Qt.MouseButton.LeftButton:
-            start, panel_id = self._press
-            if (event.position().toPoint() - start).manhattanLength() \
-                    >= QApplication.startDragDistance():
+            start, panel_id, index = self._press
+            pos, distance = event.position().toPoint(), QApplication.startDragDistance()
+            if isinstance(watched, QTabBar):
+                if watched.rect().adjusted(-distance, -distance, distance, distance) \
+                        .contains(pos):
+                    return False  # along the bar: Qt moves the tab (§6.2)
+                self._press = None
+                self._end_tab_move(watched, pos, panel_id, index)
+                self.drag_panel(panel_id)
+                return True
+            if (pos - start).manhattanLength() >= distance:
                 self._press = None
                 self.drag_panel(panel_id)
                 return True
         elif kind == QEvent.Type.MouseButtonRelease:
             self._press = None
         return super().eventFilter(watched, event)
+
+    def _end_tab_move(self, bar: QTabBar, pos: QPoint, panel_id: str, index: int) -> None:
+        """End Qt's move of ``panel_id``'s tab (a release it reads as the end of the
+        gesture) and put the tab back at ``index``, where the press found it."""
+        QApplication.sendEvent(bar, QMouseEvent(
+            QEvent.Type.MouseButtonRelease, QPointF(pos), QPointF(bar.mapToGlobal(pos)),
+            Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier))
+        now = bar.parentWidget().indexOf(self._panels[panel_id])
+        if index >= 0 and now >= 0 and now != index:
+            bar.moveTab(now, index)
+
+    @Slot(int, int)
+    def _on_tab_moved(self, _from: int, _to: int) -> None:
+        self.layout_changed.emit()
 
     def _on_drag_event(self, receiver: QWidget, event: QEvent) -> None:
         if event.type() == QEvent.Type.DragLeave:
@@ -321,7 +347,14 @@ class LayoutHost(QWidget):
                         node, children=children, sizes=self._sizes(splitter)
                     )
                 case TabsNode():
-                    return dataclasses.replace(node, current=next(containers).currentIndex())
+                    tabs = next(containers)
+                    order = [tabs.widget(i).panel_id for i in range(tabs.count())]
+                    by_id = {c.panel_id: c for c in node.children}
+                    # In the order the user left the tabs (§6.2).
+                    children = tuple(by_id[i] for i in order) \
+                        if sorted(order) == sorted(by_id) else node.children
+                    return dataclasses.replace(node, children=children,
+                                               current=tabs.currentIndex())
             return node
 
         return read(tree)
@@ -520,6 +553,7 @@ class LayoutHost(QWidget):
             case TabsNode():
                 tabs = _PanelTabs()
                 tabs.tabBar().installEventFilter(self)
+                tabs.tabBar().tabMoved.connect(self._on_tab_moved)
                 self._containers[area].append(tabs)
                 for child in node.children:
                     panel = self._panel(child.panel_id, area)
@@ -596,23 +630,64 @@ def _fix_heights(splitter: QSplitter) -> None:
 
 
 class _PanelTabs(QTabWidget):
-    """Tabs whose labels follow each panel's header text. Right-clicking a
-    tab shows its panel's header actions (spec §6.2)."""
+    """Tabs whose labels follow each panel's header text. The tabs can be
+    reordered: dragged along the bar, from their right-click menu (after the
+    panel's header actions) or with Ctrl+Shift+PgUp/PgDn (spec §6.2)."""
 
     def __init__(self):
         super().__init__()
         self.setDocumentMode(True)
+        self.tabBar().setMovable(True)
         self.tabBar().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tabBar().customContextMenuRequested.connect(self._show_menu)
+        for key, slot in (("Ctrl+Shift+PgUp", self._move_current_left),
+                          ("Ctrl+Shift+PgDown", self._move_current_right)):
+            action = QAction(self)
+            action.setShortcut(QKeySequence(key))
+            action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            action.triggered.connect(slot)
+            self.addAction(action)
 
     def menu_for(self, index: int) -> QMenu | None:
-        """The menu of the tab at ``index``: its panel's header actions, or None."""
+        """The menu of the tab at ``index``: its panel's header actions, then Move
+        Left and Move Right; None if there is no tab there."""
         panel = self.widget(index)
-        if not isinstance(panel, Panel) or not panel.header_actions:
+        if not isinstance(panel, Panel):
             return None
         menu = QMenu(self)
-        menu.addActions(list(panel.header_actions))
+        if panel.header_actions:
+            menu.addActions(list(panel.header_actions))
+            menu.addSeparator()
+        for text, step in (("Move &Left", -1), ("Move &Right", 1)):
+            action = menu.addAction(text)
+            action.setEnabled(self.neighbour(index, step) is not None)
+            action.triggered.connect(lambda _=False, s=step: self.move_tab(self.indexOf(panel), s))
         return menu
+
+    def neighbour(self, index: int, step: int) -> int | None:
+        """The nearest shown tab from ``index`` in the direction of ``step`` (-1
+        left, 1 right), or None. Collapsed panels' tabs are skipped."""
+        i = index + step
+        while 0 <= i < self.count():
+            if self.isTabVisible(i):
+                return i
+            i += step
+        return None
+
+    def move_tab(self, index: int, step: int) -> None:
+        """Move the tab at ``index`` past its shown neighbour on one side; the
+        current tab stays on the same panel."""
+        target = self.neighbour(index, step) if 0 <= index < self.count() else None
+        if target is not None:
+            self.tabBar().moveTab(index, target)
+
+    @Slot()
+    def _move_current_left(self) -> None:
+        self.move_tab(self.currentIndex(), -1)
+
+    @Slot()
+    def _move_current_right(self) -> None:
+        self.move_tab(self.currentIndex(), 1)
 
     def _show_menu(self, pos: QPoint) -> None:
         menu = self.menu_for(self.tabBar().tabAt(pos))

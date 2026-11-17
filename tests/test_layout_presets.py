@@ -329,6 +329,13 @@ class BuiltInLayoutTests(unittest.TestCase):
         other_side = dataclasses.replace(DEFAULT_LAYOUT, arrangement=Arrangement.SIDEBAR_RIGHT)
         self.assertIsNone(matching_preset(other_side))
 
+    def test_a_preset_with_reordered_tabs_is_custom_and_keeps_its_order(self):
+        # RZG-79: tab order is part of the shape, so restoring doesn't reapply the preset.
+        reordered = DEFAULT_LAYOUT.with_tree(
+            Area.MAIN, SplitNode(V, (TabsNode((DIFF, HISTORY), current=1), DETAILS), MAIN.sizes))
+        self.assertIsNone(matching_preset(reordered))
+        self.assertEqual(restore_layout(to_dict(reordered), matching_preset(reordered)), reordered)
+
     def test_an_unchanged_preset_keeps_the_user_s_sizes(self):
         mine = resized(DEFAULT_LAYOUT)
         self.assertEqual(restore_layout(to_dict(mine), "Standard"), mine)
