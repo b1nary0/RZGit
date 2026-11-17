@@ -20,9 +20,13 @@ from PySide6.QtWidgets import (
 )
 
 from rzgitclient.core.diff_patch import Line, can_patch, hunk_lines
+from rzgitclient.core.diff_request import DIFF_MAX_LINES
+from rzgitclient.core.preferences import Setting, declare
 from rzgitclient.core.selection import FileSelection, FileSource
 from rzgitclient.git.git_models import FileDiff, LineKind
 from rzgitclient.ui.panels.diff_rows import (
+    FOLD_KEEP,
+    FOLD_MIN_LINES,
     DiffRow,
     FoldKey,
     Stretch,
@@ -36,7 +40,7 @@ from rzgitclient.ui.panels.diff_rows import (
     whole_rows,
     whole_split_rows,
 )
-from rzgitclient.ui.panels.diff_view import DiffView, Numbers, Place
+from rzgitclient.ui.panels.diff_view import TAB_WIDTH, DiffView, Numbers, Place
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.theme.style_roles import Role, set_role
@@ -49,6 +53,27 @@ BINARY = "Binary file: there's no text diff to show."
 UNREADABLE = "Couldn't read this diff."
 LOADING = "Loading…"
 _SOURCES = {FileSource.WORKTREE: "Unstaged", FileSource.INDEX: "Staged"}
+
+# The Diff page of the Settings window (spec §8.2).
+FOLD_MIN = declare(Setting(
+    "diff/fold_min_lines", FOLD_MIN_LINES, "Fold unchanged stretches with more lines than",
+    page="Diff", minimum=4, maximum=10_000,
+    help="In the whole file, a longer run of unchanged lines can be folded."))
+FOLD_KEPT = declare(Setting(
+    "diff/fold_keep_lines", FOLD_KEEP, "Lines kept next to a change", page="Diff",
+    minimum=0, maximum=100,
+    help="The unchanged lines still shown on each side of a change when a stretch is folded."))
+FOLD_ON_OPEN = declare(Setting(
+    "diff/fold_on_open", False, "Fold unchanged stretches when a whole file opens",
+    page="Diff"))
+TAB_SPACES = declare(Setting(
+    "diff/tab_width", TAB_WIDTH, "Tab width", page="Diff", minimum=1, maximum=16,
+    help="How many spaces wide a tab is."))
+LARGE_DIFF = declare(Setting(
+    "diff/max_lines", DIFF_MAX_LINES, "Ask before showing a diff with more lines than",
+    page="Diff", minimum=10, maximum=10_000_000,
+    help='A longer diff shows "Large diff" with Show Anyway.'))
+_FOLD_KEYS = (FOLD_MIN.key, FOLD_KEPT.key, FOLD_ON_OPEN.key)
 
 
 class DiffPanel(Panel):
@@ -78,6 +103,7 @@ class DiffPanel(Panel):
         self._whole = False  # the shown diff is of the whole file
         self._folded: set[FoldKey] = set()  # the whole file's folded stretches
         self._stretches: list[Stretch] = []  # the shown rows' foldable stretches
+        self._fold_new = True  # the next render sets the folds as a diff opens
         self._place: list[Place] | None = None  # to go back to once the toggled diff is in
         self._unified = self._split = self._left = self._right = None
 
@@ -102,6 +128,7 @@ class DiffPanel(Panel):
         ctx.actions.whole_file_diff.toggled.connect(self._on_whole_toggled)
         for action in ctx.actions.hunk_headers.values():
             action.toggled.connect(lambda on: on and self._rerender())
+        ctx.prefs.changed.connect(self._on_pref_changed)
 
         self._file = file = ctx.selection.file
         if file is None:
@@ -192,6 +219,7 @@ class DiffPanel(Panel):
         return view
 
     def _connect(self, view: DiffView) -> None:
+        view.set_tab_width(self.ctx.prefs.value(TAB_SPACES))
         view.hunk_clicked.connect(self._on_hunk_link)
         view.lines_clicked.connect(self._apply)
         view.fold_clicked.connect(self._toggle_fold)
@@ -237,7 +265,19 @@ class DiffPanel(Panel):
 
     def _request(self, file: FileSelection, full: bool = False) -> None:
         whole = self.ctx.actions.whole_file_diff.isChecked()
-        self.ctx.session.request_diff(file, full=full, whole=whole)
+        self.ctx.session.request_diff(file, full=full, whole=whole,
+                                      max_lines=self.ctx.prefs.value(LARGE_DIFF))
+
+    def _on_pref_changed(self, key: str, value: object) -> None:
+        if key == TAB_SPACES.key:
+            for view in (self._unified, self._left, self._right):
+                if view is not None:
+                    view.set_tab_width(value)
+        elif key in _FOLD_KEYS:
+            self._fold_new = True  # the stretches may be others: start their folds again
+            self._rerender()
+        elif key == LARGE_DIFF.key and self._file is not None:
+            self._request(self._file)  # the diff on screen stays until the new one is in
 
     def _load_full(self) -> None:
         if self._file is not None:
@@ -263,6 +303,7 @@ class DiffPanel(Panel):
         whole = self.ctx.session.diff_whole
         if (file, diff, whole) != (self._shown, self._diff, self._whole):
             self._folded.clear()  # a new diff: its stretches are new
+            self._fold_new = True
         self._shown, self._diff, self._whole = file, diff, whole
         self._path.setText(_describe(file, diff))
         if diff is None:
@@ -316,7 +357,13 @@ class DiffPanel(Panel):
             sides = whole_split_rows(diff, headers) if self._whole else split_rows(diff)
         else:
             sides = (whole_rows(diff, headers) if self._whole else unified_rows(diff),)
-        self._stretches = stretches(sides[0]) if self._whole else []
+        prefs = self.ctx.prefs
+        self._stretches = (stretches(sides[0], prefs.value(FOLD_MIN), prefs.value(FOLD_KEPT))
+                           if self._whole else [])
+        if self._fold_new:
+            self._fold_new = False
+            on = prefs.value(FOLD_ON_OPEN)
+            self._folded = {s.key for s in self._stretches} if on else set()
         folded = [fold(rows, self._stretches, self._folded) for rows in sides]
         marks = folded[0][1]
         if len(folded) == 2:

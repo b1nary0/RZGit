@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from rzgitclient.core.git_commands import WORKTREE_COMMANDS, CommandKind, GitCommand
+from rzgitclient.core.preferences import Preferences, Setting, declare
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.worktree_reader import WorktreeReader
 from rzgitclient.git.git_models import Branch, Worktree
@@ -50,18 +51,27 @@ NOT_EMPTY = "That folder isn't empty."
 NOT_ABSOLUTE = "Give the folder's full path."
 _LISTED = 10  # worktrees named in the prune confirmation
 
+# The Tools page of the Settings window (spec §8.2).
+TERMINAL_COMMAND = declare(Setting(
+    "tools/terminal", "", "Terminal command", page="Tools", special="Automatic",
+    help="What Open in Terminal starts, e.g. \"kitty --single-instance\". Empty: $TERMINAL, "
+         "else the first of " + ", ".join(TERMINALS) + "."))
+
 
 def find_terminal(env: Mapping[str, str] | None = None,
-                  which: Callable[[str], str | None] = shutil.which) -> list[str] | None:
-    """The command line of a terminal to start: ``$TERMINAL`` (split as a shell
-    would) if its program is found, else the first of TERMINALS on the PATH."""
+                  which: Callable[[str], str | None] = shutil.which,
+                  command: str = "") -> list[str] | None:
+    """The command line of a terminal to start: ``command`` (the setting), else
+    ``$TERMINAL``, each split as a shell would and used if its program is found;
+    else the first of TERMINALS on the PATH."""
     env = os.environ if env is None else env
-    try:
-        argv = shlex.split(env.get("TERMINAL", ""))
-    except ValueError:  # an unbalanced quote
-        argv = []
-    if argv and which(argv[0]):
-        return argv
+    for line in (command, env.get("TERMINAL", "")):
+        try:
+            argv = shlex.split(line)
+        except ValueError:  # an unbalanced quote
+            argv = []
+        if argv and which(argv[0]):
+            return argv
     for name in TERMINALS:
         if found := which(name):
             return [found]
@@ -239,10 +249,13 @@ class WorktreeDialogs(QObject):
     def __init__(self, window: QWidget, session: RepoSession, actions: AppActions,
                  reader: WorktreeReader | None, *,
                  open_in_window: Callable[[str], object],
-                 window_for: Callable[[str], QWidget | None]):
+                 window_for: Callable[[str], QWidget | None],
+                 prefs: Preferences | None = None):
         """``open_in_window``: show a worktree in a window of its own (§8.1).
-        ``window_for``: the window showing a worktree, if any."""
+        ``window_for``: the window showing a worktree, if any. ``prefs``: the
+        terminal command setting's (§8.2)."""
         super().__init__(window)
+        self._prefs = prefs
         self._window, self._session, self._reader = window, session, reader
         self._open_in_window, self._window_for = open_in_window, window_for
         self._open_after: dict[GitCommand, str] = {}  # add commands, and what to open
@@ -338,8 +351,8 @@ class WorktreeDialogs(QObject):
         argv = self.terminal()
         if argv is None:
             self.warn("Open Terminal", "No terminal found.",
-                      "Set $TERMINAL to the terminal to use, or install one of "
-                      + ", ".join(TERMINALS) + ".")
+                      "Set the terminal command in Settings (Tools), or $TERMINAL, "
+                      "or install one of " + ", ".join(TERMINALS) + ".")
             return
         if not self.start_detached(argv, path):
             self.warn("Open Terminal", f"Couldn't start {argv[0]} in {path}.", "")
@@ -387,7 +400,8 @@ class WorktreeDialogs(QObject):
         return QDesktopServices.openUrl(url)
 
     def terminal(self) -> list[str] | None:
-        return find_terminal()
+        command = self._prefs.value(TERMINAL_COMMAND) if self._prefs is not None else ""
+        return find_terminal(command=command)
 
     def start_detached(self, argv: list[str], folder: str) -> bool:
         started = QProcess.startDetached(argv[0], argv[1:], folder)

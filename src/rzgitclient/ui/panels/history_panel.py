@@ -26,8 +26,8 @@ from rzgitclient.core.repo_session import HISTORY_PAGE
 from rzgitclient.git.git_models import Commit, Stash
 from rzgitclient.ui.panels.back_to_top_button import BackToTopButton
 from rzgitclient.ui.panels.graph_painter import GraphPainter
-from rzgitclient.ui.panels.history_model import (GRAPH_COLUMN, MUTED_COLUMNS, REFS_COLUMN,
-                                                 SUBJECT_COLUMN, HistoryModel)
+from rzgitclient.ui.panels.history_model import (DATE_FORMAT, GRAPH_COLUMN, MUTED_COLUMNS,
+                                                 REFS_COLUMN, SUBJECT_COLUMN, HistoryModel)
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.panels.ref_label_painter import RefLabelPainter
 from rzgitclient.ui.theme.app_theme import AppTheme
@@ -50,6 +50,8 @@ class HistoryPanel(Panel):
         self._quiet = False  # True while a reset re-selects; selection isn't written
         self._new_commits = 0  # arrived above the view while scrolled down (Back to top)
         self._model = HistoryModel(self.ctx.theme.current)
+        self._model.set_date_format(self.ctx.prefs.value(DATE_FORMAT))
+        self.ctx.prefs.changed.connect(self._on_pref_changed)
         self._graph = GraphPainter(self.ctx.theme.current)
         self._graph_lanes = 0  # the lanes the graph column was last fitted to
         self._refs = RefLabelPainter(self.ctx.theme.current)
@@ -223,6 +225,10 @@ class HistoryPanel(Panel):
             )
         else:  # was at the top: stay there, so new commits show
             self._view.scrollToTop()
+
+    def _on_pref_changed(self, key: str, value: object) -> None:
+        if key == DATE_FORMAT.key:
+            self._model.set_date_format(value)
 
     def apply_theme(self, theme: AppTheme) -> None:
         self._labels.set_theme(theme)

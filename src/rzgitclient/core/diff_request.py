@@ -24,6 +24,7 @@ class DiffRequest:
     file: FileSelection
     full: bool = False  # read it however large
     whole: bool = False  # the whole file, not only the changes with some context
+    max_lines: int | None = None  # longer comes back too_large unless full; None: DIFF_MAX_LINES
 
     @property
     def follows_status(self) -> bool:
@@ -57,7 +58,8 @@ def load_diff(repo: Repo, request: DiffRequest, status: tuple[FileStatus, ...],
                 commit = f"{file.commit}^3"  # a stash's untracked part (spec §4.1)
         case _:
             raise ValueError(f"not a file source: {file.source!r}")
-    limit = {} if request.full else {"max_bytes": DIFF_MAX_BYTES, "max_lines": DIFF_MAX_LINES}
+    limit = {} if request.full else {"max_bytes": DIFF_MAX_BYTES,
+                                       "max_lines": request.max_lines or DIFF_MAX_LINES}
     if not request.whole:
         return repo.diff(file.path, source, commit=commit, old_path=old_path, **limit)
     diff = repo.diff(file.path, source, commit=commit, old_path=old_path,

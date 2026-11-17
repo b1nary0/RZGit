@@ -8,6 +8,7 @@ from rzgitclient import __version__
 from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.column_prefs import ColumnPrefs
 from rzgitclient.core.commit_drafts import CommitDrafts, drafts_folder
+from rzgitclient.core.preferences import Preferences
 from rzgitclient.core.sort_prefs import SortPrefs
 from rzgitclient.ui.app_icon import app_icon
 from rzgitclient.ui.app_windows import AppWindows
@@ -23,13 +24,14 @@ def main(argv: list[str] | None = None) -> int:
     app.setDesktopFileName("rzgitclient")
     app.setWindowIcon(app_icon())  # every window and dialog
     settings = AppSettings()
+    prefs = Preferences(settings)  # the Settings window's settings (spec §8.2)
     # The saved theme, before any widget exists: the window never shows another first.
     theme = ThemeManager(app, mode=ThemeMode(settings.theme_mode),
-                         colour_blind=settings.colour_blind)
+                         colour_blind=settings.colour_blind, prefs=prefs)
     # Shared by every window (spec §8.1); drafts saved by older versions move to files.
     drafts = CommitDrafts(drafts_folder(), legacy=settings)
     windows = AppWindows(app, settings, theme, drafts, ColumnPrefs(settings),
-                         SortPrefs(settings))
+                         SortPrefs(settings), prefs=prefs)
 
     window = windows.new_window()
     window.show()

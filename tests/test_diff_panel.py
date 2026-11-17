@@ -184,13 +184,13 @@ class DiffPanelTests(unittest.TestCase):
         self.assertEqual(self.panel._message.text(), diff_panel.NO_CHANGES)
 
     def test_large_diff_can_be_shown_anyway(self):
-        with mock.patch("rzgitclient.core.diff_request.DIFF_MAX_LINES", 50):
-            self.select(A)
-            self.assertEqual(self.page(), "message")
-            self.assertIn("Large diff", self.panel._message.text())
-            self.assertFalse(self.panel._show_anyway.isHidden())
-            self.panel._show_anyway.click()
-            wait_idle(self.session)
+        self.ctx.prefs.set(diff_panel.LARGE_DIFF, 50)  # the setting (spec §8.2)
+        self.select(A)
+        self.assertEqual(self.page(), "message")
+        self.assertIn("Large diff", self.panel._message.text())
+        self.assertFalse(self.panel._show_anyway.isHidden())
+        self.panel._show_anyway.click()
+        wait_idle(self.session)
         self.assertEqual(self.page(), "unified")
 
     def test_loading_shows_after_a_delay(self):
@@ -667,14 +667,59 @@ class DiffPanelWholeFileTests(unittest.TestCase):
         self.assertEqual(self.fold_rows(), [])
         self.assertEqual(view.rows[0].new_no, 1)
 
+    def test_the_fold_settings_apply_at_once(self):
+        """Settings (spec §8.2): the folds start again when they change."""
+        self.whole()
+        view = self.view()
+        self.panel.fold_all()
+        self.ctx.prefs.set(diff_panel.FOLD_MIN, 40)  # no stretch is longer
+        self.assertEqual((self.fold_rows(), view.fold_marks), ([], {}))
+        self.ctx.prefs.set(diff_panel.FOLD_MIN, 20)
+        self.ctx.prefs.set(diff_panel.FOLD_KEPT, 5)
+        self.assertEqual(sorted(view.fold_marks.values()), [(1, 1), (36, 36), (76, 76)])
+        self.ctx.prefs.set(diff_panel.FOLD_ON_OPEN, True)
+        self.assertEqual(len(self.fold_rows()), 3)
+
+    def test_a_whole_file_opens_folded_with_the_setting(self):
+        self.ctx.prefs.set(diff_panel.FOLD_ON_OPEN, True)
+        self.whole()
+        self.assertEqual(len(self.fold_rows()), 3)
+        self.panel.unfold_all()
+        self.actions.side_by_side_diff.setChecked(True)  # not a new diff: stays unfolded
+        self.assertEqual(self.fold_rows(self.panel._left), [])
+        self.actions.side_by_side_diff.setChecked(False)
+        self.whole(False)
+        self.whole()  # a new diff
+        self.assertEqual(len(self.fold_rows()), 3)
+
+    def test_the_tab_width_setting(self):
+        view = self.view()
+        space = view.fontMetrics().horizontalAdvance(" ")
+        self.assertEqual(view.tabStopDistance(), space * 4)
+        self.ctx.prefs.set(diff_panel.TAB_SPACES, 8)
+        self.assertEqual(view.tabStopDistance(), space * 8)
+        self.actions.side_by_side_diff.setChecked(True)  # a view made later has it too
+        self.assertEqual(self.panel._left.tabStopDistance(), space * 8)
+
+    def test_a_new_large_diff_limit_reads_the_diff_again(self):
+        self.whole()  # 100 lines
+        self.assertIs(self.panel._stack.currentWidget(), self.view())
+        self.ctx.prefs.set(diff_panel.LARGE_DIFF, 50)
+        self.settle()
+        self.assertIs(self.panel._stack.currentWidget(), self.panel._message_page)
+        self.assertIn("Large diff", self.panel._message.text())
+        self.ctx.prefs.set(diff_panel.LARGE_DIFF, 1000)
+        self.settle()
+        self.assertIs(self.panel._stack.currentWidget(), self.view())
+
     def test_a_whole_file_too_large_offers_the_changes_only(self):
-        with mock.patch("rzgitclient.core.diff_request.DIFF_MAX_LINES", 50):
-            self.whole()
-            self.assertEqual(self.panel._stack.currentWidget(), self.panel._message_page)
-            self.assertFalse(self.panel._changes_only.isHidden())
-            self.assertFalse(self.panel._show_anyway.isHidden())
-            self.panel._changes_only.click()
-            self.settle()
+        self.ctx.prefs.set(diff_panel.LARGE_DIFF, 50)  # the setting (spec §8.2)
+        self.whole()
+        self.assertEqual(self.panel._stack.currentWidget(), self.panel._message_page)
+        self.assertFalse(self.panel._changes_only.isHidden())
+        self.assertFalse(self.panel._show_anyway.isHidden())
+        self.panel._changes_only.click()
+        self.settle()
         self.assertFalse(self.actions.whole_file_diff.isChecked())
         self.assertIs(self.panel._stack.currentWidget(), self.view())
 

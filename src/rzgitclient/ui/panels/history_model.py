@@ -16,10 +16,14 @@ a reset, and the delegate draws its rows (``graph_row``).
 
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPersistentModelIndex, Qt
+from datetime import datetime
+
+from PySide6.QtCore import (QAbstractTableModel, QDate, QDateTime, QLocale, QModelIndex,
+                            QPersistentModelIndex, Qt, QTime)
 from PySide6.QtGui import QBrush, QColor, QFont
 
 from rzgitclient.core.commit_graph import CommitGraph, GraphRow
+from rzgitclient.core.preferences import Setting, declare
 from rzgitclient.core.ref_labels import RefLabel, row_tooltip
 from rzgitclient.git.git_models import Commit
 from rzgitclient.ui.theme.app_theme import AppTheme
@@ -29,6 +33,24 @@ REFS_COLUMN, GRAPH_COLUMN, SUBJECT_COLUMN, AUTHOR_COLUMN, DATE_COLUMN, HASH_COLU
 MUTED_COLUMNS = (AUTHOR_COLUMN, DATE_COLUMN, HASH_COLUMN)
 
 _Index = QModelIndex | QPersistentModelIndex
+
+# The Date column's format, a setting (spec §8.2): the commit's own time, as before.
+ISO, ISO_SECONDS, LOCALE = "iso", "iso_seconds", "locale"
+DATE_FORMAT = declare(Setting(
+    "history/date_format", ISO, "Date format", page="History",
+    choices=((ISO, "2026-11-17 14:05"), (ISO_SECONDS, "2026-11-17 14:05:09"),
+             (LOCALE, "The locale's short format")),
+    help="How the History panel's Date column shows a commit's date."))
+_STRFTIME = {ISO: "%Y-%m-%d %H:%M", ISO_SECONDS: "%Y-%m-%d %H:%M:%S"}
+
+
+def format_date(date: datetime, date_format: str) -> str:
+    """``date`` in ``date_format`` (one of ``DATE_FORMAT``'s choices)."""
+    if date_format == LOCALE:
+        when = QDateTime(QDate(date.year, date.month, date.day),
+                         QTime(date.hour, date.minute, date.second))
+        return QLocale().toString(when, QLocale.FormatType.ShortFormat)
+    return date.strftime(_STRFTIME.get(date_format, _STRFTIME[ISO]))
 _STYLE_ROLES = [Qt.ItemDataRole.ForegroundRole, Qt.ItemDataRole.FontRole,
                 Qt.ItemDataRole.BackgroundRole]
 
@@ -46,6 +68,7 @@ class HistoryModel(QAbstractTableModel):
         self._muted = QColor()
         self._stripe = QBrush()
         self._mono = QFont()
+        self._date_format = ISO
         self.set_theme(theme)
 
     # ---- contents -------------------------------------------------------
@@ -139,7 +162,7 @@ class HistoryModel(QAbstractTableModel):
         if col == AUTHOR_COLUMN:
             return commit.author
         if col == DATE_COLUMN:
-            return commit.date.strftime("%Y-%m-%d %H:%M")
+            return format_date(commit.date, self._date_format)
         if col == HASH_COLUMN:
             return commit.short_sha
         return ""  # the labels and the graph are drawn, not written
@@ -158,6 +181,15 @@ class HistoryModel(QAbstractTableModel):
             if commit.sha == sha:
                 return row
         return -1
+
+    def set_date_format(self, date_format: str) -> None:
+        """Show dates in ``date_format`` (one of ``DATE_FORMAT``'s choices)."""
+        if date_format == self._date_format:
+            return
+        self._date_format = date_format
+        if self.rowCount():
+            column = self.index(0, DATE_COLUMN), self.index(self.rowCount() - 1, DATE_COLUMN)
+            self.dataChanged.emit(*column, [Qt.ItemDataRole.DisplayRole])
 
     def set_theme(self, theme: AppTheme) -> None:
         self._muted = QColor(theme.colors.text_muted)

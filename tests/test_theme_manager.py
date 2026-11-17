@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QHeaderView, QLabel, QLineEdit, QListWidget, QMen
 
 from rzgitclient.ui.theme.app_theme import (DARK_CB_THEME, DARK_THEME, LIGHT_CB_THEME,
                                             LIGHT_THEME, FontKind)
-from rzgitclient.ui.theme.theme_manager import ThemeManager, ThemeMode
+from rzgitclient.ui.theme.theme_manager import MONO_FAMILY, MONO_SIZE, ThemeManager, ThemeMode
 from tests.support import qt_app
 
 
@@ -151,6 +151,40 @@ class ThemeModeTests(unittest.TestCase):
                      QPalette.ColorRole.Mid, QPalette.ColorRole.Dark):
             self.assertLess(palette.color(role).lightness(), 110, role)
         self.assertGreater(palette.color(QPalette.ColorRole.Text).lightness(), 200)
+
+
+
+class MonoFontSettingTests(unittest.TestCase):
+    """The monospace font settings (spec §8.2): over the theme's, in every mode."""
+
+    def setUp(self):
+        from rzgitclient.core.preferences import Preferences
+        self.app = qt_app()
+        self.prefs = Preferences()
+        self.prefs.set(MONO_SIZE, 13.0)
+        self.manager = ThemeManager(self.app, mode=ThemeMode.LIGHT, prefs=self.prefs)
+        self.addCleanup(lambda: shiboken6.delete(ThemeManager(self.app, LIGHT_THEME)))
+        self.addCleanup(lambda: shiboken6.delete(self.manager))
+        self.emitted = []
+        self.manager.theme_changed.connect(self.emitted.append)
+
+    def test_applied_from_the_start_and_when_changed(self):
+        self.assertEqual(self.manager.current.mono_font().pointSizeF(), 13.0)
+        self.assertEqual(self.manager.current.colors, LIGHT_THEME.colors)
+        self.prefs.set(MONO_FAMILY, "Some Mono")
+        self.assertEqual(self.manager.current.fonts.mono_family, "Some Mono")
+        self.assertEqual(len(self.emitted), 1)  # panels apply it again
+        self.manager.set_colour_blind(True)
+        self.manager.set_mode(ThemeMode.DARK)
+        self.assertEqual(self.manager.current.colors, DARK_CB_THEME.colors)
+        self.assertEqual(self.manager.current.fonts.mono_family, "Some Mono")
+        self.prefs.reset([MONO_FAMILY, MONO_SIZE])
+        self.assertEqual(self.manager.current, DARK_CB_THEME)  # the theme's own again
+
+    def test_other_settings_change_nothing(self):
+        from rzgitclient.core.preferences import Setting
+        self.prefs.set(Setting("test/x", 1, "X"), 2)
+        self.assertEqual(self.emitted, [])
 
 
 if __name__ == "__main__":

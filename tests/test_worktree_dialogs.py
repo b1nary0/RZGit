@@ -52,6 +52,16 @@ class TerminalTests(unittest.TestCase):
         self.assertIsNone(find_terminal({}, self.which()))
 
 
+    def test_the_setting_comes_first(self):
+        """The terminal command setting (spec §8.2), else as before."""
+        env = {"TERMINAL": "kitty"}
+        which = self.which("kitty", "foot", "konsole")
+        self.assertEqual(find_terminal(env, which, command="foot -e 'a b'"), ["foot", "-e", "a b"])
+        self.assertEqual(find_terminal(env, which, command="nope"), ["kitty"])
+        self.assertEqual(find_terminal(env, which, command=""), ["kitty"])
+        self.assertEqual(find_terminal({}, which, command="'foot"), ["/usr/bin/konsole"])
+
+
 class FolderTests(unittest.TestCase):
     def test_default_folder_is_beside_the_main_repository(self):
         self.assertEqual(default_folder("/dev/RZGitClient", "rzg-40"), "/dev/RZGitClient-rzg-40")

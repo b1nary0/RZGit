@@ -172,6 +172,19 @@ class WholeRowsTests(unittest.TestCase):
         self.assertEqual(rows[found[0].end].new_no, 27)
         self.assertLessEqual(80 - 61 + 1, FOLD_MIN_LINES)  # so the last one can't fold
 
+    def test_the_numbers_are_parameters(self):
+        """They are settings (spec §8.2)."""
+        rows = whole_rows(self.DIFF, "slim")
+        self.assertEqual(len(stretches(rows, min_lines=15)), 3)  # 61-80 too
+        found = stretches(rows, keep_lines=5)
+        self.assertEqual([s.lines for s in found], [29 - 5, 29 - 10])
+        self.assertEqual(stretches(rows, min_lines=30), [])
+
+    def test_a_stretch_with_nothing_left_to_fold_isnt_one(self):
+        rows = whole_rows(self.DIFF, "slim")
+        # 31-59 is 29 lines: keeping 15 on each side leaves none.
+        self.assertEqual([s.key for s in stretches(rows, keep_lines=15)], [(1, 1)])
+
     def test_a_header_inside_a_stretch_doesnt_break_it(self):
         full = stretches(whole_rows(self.DIFF, "full"))
         self.assertEqual([(s.key, s.lines) for s in full],

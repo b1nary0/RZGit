@@ -52,7 +52,7 @@ from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.theme.style_roles import Role, set_role
 
 _LINK_PADDING = 8  # px around a hunk header's link
-_TAB_WIDTH = 4  # in spaces
+TAB_WIDTH = 4  # in spaces, unless set (a setting, spec §8.2)
 _WORD = re.compile(r"\w+")
 
 
@@ -71,6 +71,7 @@ class DiffView(QPlainTextEdit):
 
     def __init__(self, numbers: Numbers, parent: QWidget | None = None):
         super().__init__(parent)
+        self._tab_width = TAB_WIDTH
         self._link = ""  # the hunk headers' link text; "" for none
         self._hunk_tooltip = ""  # shown on hunk headers instead, saying why there's none
         self._link_color = QColor()
@@ -442,6 +443,15 @@ class DiffView(QPlainTextEdit):
 
     # ---- theme and painting --------------------------------------------------
 
+    def set_tab_width(self, spaces: int) -> None:
+        """How many spaces wide a tab is."""
+        if spaces != self._tab_width:
+            self._tab_width = spaces
+            self._set_tab_stop()
+
+    def _set_tab_stop(self) -> None:
+        self.setTabStopDistance(self.fontMetrics().horizontalAdvance(" ") * self._tab_width)
+
     def apply_theme(self, theme: AppTheme) -> None:
         c = theme.colors
         self._link_color = QColor(c.accent)
@@ -465,7 +475,7 @@ class DiffView(QPlainTextEdit):
                          RowKind.REMOVED: QColor(theme.status.deleted)}
         self.setFont(theme.mono_font())
         self.gutter.apply_theme(theme)
-        self.setTabStopDistance(self.fontMetrics().horizontalAdvance(" ") * _TAB_WIDTH)
+        self._set_tab_stop()
         self._color_text()
         self._update_margins()
         self.viewport().update()

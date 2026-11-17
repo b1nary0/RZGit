@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QStyle
 from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.column_prefs import ColumnPrefs
 from rzgitclient.core.commit_drafts import CommitDrafts
+from rzgitclient.core.preferences import Preferences
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.repo_watcher import RepoWatcher
 from rzgitclient.core.selection import Selection
@@ -26,6 +27,7 @@ from rzgitclient.git.repo import GitError, Repo, canonical_path
 from rzgitclient.ui.app_actions import AppActions
 from rzgitclient.ui.main_window import MainWindow
 from rzgitclient.ui.panels.panel import PanelContext
+from rzgitclient.ui.settings_window import SettingsWindow, show_window
 from rzgitclient.ui.theme.theme_manager import ThemeManager
 
 
@@ -53,8 +55,11 @@ class _Window:
 class AppWindows(QObject):
     def __init__(self, app: QApplication, settings: AppSettings, theme: ThemeManager,
                  drafts: CommitDrafts, columns: ColumnPrefs, sorts: SortPrefs,
-                 parent: QObject | None = None):
+                 parent: QObject | None = None, *, prefs: Preferences | None = None):
+        """``prefs``: the app's settings (§8.2); in memory if not given (tests)."""
         super().__init__(parent)
+        self._prefs = prefs if prefs is not None else Preferences(parent=self)
+        self._settings_window: SettingsWindow | None = None
         self._app = app
         self._settings = settings
         self._theme = theme
@@ -109,7 +114,7 @@ class AppWindows(QObject):
         actions = AppActions(session, selection)
         ctx = PanelContext(session=session, selection=selection, theme=self._theme,
                            actions=actions, drafts=self._drafts, columns=self._columns,
-                           sorts=self._sorts, worktrees=worktrees)
+                           sorts=self._sorts, worktrees=worktrees, prefs=self._prefs)
         window = MainWindow(ctx, self._settings, self, restore_geometry=anchor is None)
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         # Its own objects are deleted with it (after its panels, which are connected
@@ -125,6 +130,17 @@ class AppWindows(QObject):
         watcher.set_active(active)
         worktrees.set_active(active)
         return window
+
+    def show_settings(self) -> None:
+        """Show the app's one Settings window, raised (spec §8.2)."""
+        if self._settings_window is None:
+            self._settings_window = SettingsWindow(self._prefs, self._theme)
+        show_window(self._settings_window)
+
+    @property
+    def settings_window(self) -> SettingsWindow | None:
+        """The Settings window, once it has been shown."""
+        return self._settings_window
 
     def shutdown(self) -> None:
         """Stop every window's work (app.py, after the event loop)."""
@@ -151,6 +167,8 @@ class AppWindows(QObject):
             return
         self._open.remove(record)
         record.shutdown()  # then deleted with the window (WA_DeleteOnClose)
+        if not self._open and self._settings_window is not None:
+            self._settings_window.close()  # it doesn't outlive the main windows (§8.2)
 
 
 def place_beside(window: MainWindow, anchor: MainWindow) -> None:

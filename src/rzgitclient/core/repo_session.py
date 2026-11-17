@@ -438,16 +438,17 @@ class RepoSession(QObject):
         self.refresh(Refresh.HISTORY)
 
     def request_diff(self, file: FileSelection | None, full: bool = False,
-                     whole: bool = False) -> None:
+                     whole: bool = False, max_lines: int | None = None) -> None:
         """Make ``file`` the diff target and read its diff in the background.
 
         The result comes as ``diff_changed``; results of older requests are
         dropped. ``None`` clears the target. ``full`` reads a diff over the
         size limit anyway; ``whole`` reads the whole file, not only the changes.
+        ``max_lines``: the size limit's lines (a setting, spec §8.2; None: the default).
         Jobs that load the status read the target again.
         """
         self._diff_generation += 1
-        self._diff_request = DiffRequest(file, full, whole) if file is not None else None
+        self._diff_request = DiffRequest(file, full, whole, max_lines) if file is not None else None
         self._diff_pending = file is not None and self._repo is not None
         if file is None:
             self._store_diff(None, None)

@@ -36,6 +36,7 @@ _COMMIT_DRAFTS = "commit/drafts"  # older versions only; moved to files
 _SAVED_LAYOUTS = "layouts/saved"
 _COLUMN_PREFS = "columns/prefs"
 _SORT_PREFS = "sort/prefs"
+_PREFS = "prefs/"  # the Settings window's settings, by key (spec §8.2)
 
 
 class AppSettings:
@@ -236,6 +237,15 @@ class AppSettings:
     @sort_prefs.setter
     def sort_prefs(self, prefs: dict[str, dict[str, Any]]) -> None:
         self._set(_SORT_PREFS, json.dumps(prefs) if prefs else None)
+
+    def pref(self, key: str) -> object | None:
+        """The stored value of the setting ``key`` (spec §8.2), as QSettings gives it
+        back (often a string), or None. ``Preferences`` checks it."""
+        return self._settings.value(_PREFS + key)
+
+    def set_pref(self, key: str, value: object) -> None:
+        """Store a setting's value; None removes it (the default)."""
+        self._set(_PREFS + key, value)
 
     def sync(self) -> None:
         """Write pending changes to disk now (Qt also does this on exit)."""

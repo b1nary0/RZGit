@@ -79,6 +79,7 @@ src/rzgitclient/
     column_prefs.py             ColumnPrefs: each panel's column choices (hidden columns, widths)
     sort_options.py             SortOption, SortOptions, SortOrder: a panel's sort orders (plain Python)
     sort_prefs.py               SortPrefs: each panel's chosen sort order
+    preferences.py              Setting, Preferences: the settings the Settings window shows (§8.2)
     commit_graph.py             CommitGraph, GraphRow: History's branch graph lanes (plain Python)
     ref_labels.py               RefLabel, labels_by_commit: History's ref labels (plain Python)
     selection.py                Selection: what the user has selected (commit, file)
@@ -89,6 +90,7 @@ src/rzgitclient/
   ui/
     main_window.py              MainWindow: thin shell (menus, status bar, LayoutHost)
     app_windows.py              AppWindows: the open main windows; open a window on a path, or raise it
+    settings_window.py          SettingsWindow: the app's one Settings window (§8.2)
     app_actions.py              AppActions: every QAction, defined once; BranchOp, StashOp, WorktreeOp
     branch_dialogs.py           BranchDialogs: the confirmations and name boxes of branch operations
     stash_dialogs.py            StashDialogs: Stash Changes… and the Drop confirmation
@@ -830,6 +832,7 @@ class PanelContext:
     columns: ColumnPrefs                           # each panel's column choices (ColumnHeader)
     sorts: SortPrefs                               # each panel's sort order (SortMenu)
     worktrees: WorktreeReader | None = None        # the window's worktree reader (§4.4)
+    prefs: Preferences = Preferences()             # the app's settings (§8.2); in memory by default
 
 class Panel(QWidget):
     panel_id: ClassVar[str]                        # stable, saved in layouts: "history"
@@ -1557,6 +1560,7 @@ than rebuilding them.
     hunks view always has full headers.
   - **Folding:** every unchanged stretch (a run of context rows) longer than
     `FOLD_MIN_LINES` (20) can be folded: all but `FOLD_KEEP` (3) lines next to each change
+    (both are settings, §8.2; a stretch with nothing left to fold isn't one)
     collapse into one `FOLD` row, "⋯ N unchanged lines", in the hunk colours with no line
     numbers. The stretch's first foldable row shows a fold mark (`▾`) in the gutter's
     mark column, and a fold row shows `▸`: a click on the mark folds, and a click on a
@@ -1564,7 +1568,9 @@ than rebuilding them.
     (`diff_rows.py`) do it; a stretch is known by the old and new numbers of its first
     line, so side by side folds both sides at the same rows. Folds are for viewing only:
     they aren't saved, they survive switching views and header modes, and a new diff
-    resets them. Fold rows are never line-selected; a text selection over one copies its hidden lines.
+    resets them (to all folded, with the setting *Fold unchanged stretches when a whole
+    file opens*). Fold rows are never line-selected; a text selection over one copies its
+    hidden lines.
   - **Keeping the place:** toggling it keeps the selected lines selected (matched by
     their kind and old and new numbers) and in view; with nothing selected, the line at
     the top of the view stays at the top.
@@ -2155,7 +2161,8 @@ sets it, §6.1) and `Role` (SECTION_HEADER,
 SEGMENT_HEADER for the header strip of a segment inside a panel (§5.2),
 PLACEHOLDER for a muted "nothing to show" message, DIFF_VIEW for the borderless diff text,
 HINT and HINT_WARNING for a small muted note and the same past a limit, HEADER_MENU for
-the ⋯ button of a section header's menu, §6.2).
+the ⋯ button of a section header's menu, §6.2, SETTINGS_PAGE for the Settings window's
+outlined page, §8.2).
 Widgets get them as Qt dynamic properties through `set_surface()` / `set_role()`, and the
 stylesheet targets those (`QWidget[surface="sidebar"]`). The theme decides what "sidebar"
 looks like; panels only say what they are.
@@ -2386,8 +2393,9 @@ Per-widget sheets are slow to apply and scatter the rules.
 The app can have several main windows open, each on its own repository or worktree
 (RZG-47). **`AppWindows`** (`ui/app_windows.py`), made once by app.py, holds them.
 
-- **Shared by every window:** `AppSettings`, `ThemeManager`, `CommitDrafts` (§5.4) and
-  `ColumnPrefs` (§6.3): one of each, made by app.py and passed to `AppWindows`.
+- **Shared by every window:** `AppSettings`, `ThemeManager`, `CommitDrafts` (§5.4),
+  `ColumnPrefs` (§6.3) and `Preferences` (§8.2): one of each, made by app.py and passed to
+  `AppWindows`, which also holds the one `SettingsWindow`.
   **Each window's own:** `RepoSession`, `RepoWatcher`, `WorktreeReader`, `Selection`,
   `AppActions`, its `PanelContext` and its `MainWindow`. Staging, committing and switching in one window
   never touch another, and each follows its own repository on disk (§4.3).
@@ -2438,6 +2446,76 @@ The app can have several main windows open, each on its own repository or worktr
   closes.
 - Not yet: a Window menu, and a fuller rule for which main window owns child windows
   (RZG-51).
+
+### 8.2 Settings
+
+The **Settings window** (RZG-68) shows the settings a user may want to change that have no
+menu entry of their own. The View menu's toggles (Side by Side Diff, Show Whole File, Hunk
+Headers, Show Files as Tree, Topological Order) stay there and aren't in it: they are per
+window while it's open (§8.1). Layouts and columns aren't in it either.
+
+- **Declaring a setting:** the module that uses one declares it, at import:
+
+  ```python
+  FOLD_MIN = declare(Setting("diff/fold_min_lines", 20,
+                             "Fold unchanged stretches with more lines than",
+                             page="Diff", minimum=4, maximum=10_000))
+  ```
+
+  `Setting` (`core/preferences.py`, frozen) holds the key, the default (its type is the
+  setting's: `bool`, `int`, `float` or `str`), the label, the page, and for the editor
+  `minimum`/`maximum`, `step`, `special` (a text field's placeholder, e.g. "Automatic"),
+  `choices` (`(value, label)` pairs, for a `str`), `editor` (`"font"`: a monospaced font
+  family; `"font_size"`: its size; their defaults, `""` and 0, mean the theme's) and `help`
+  (the tooltip). A number box shows only the number, with no unit: the label says what
+  it counts.
+  `declare(setting)` adds it to the registry; a key declared twice is an error.
+  `declared()` lists them in declaration order. A panel adds a setting without touching
+  the window.
+- **`Preferences(QObject)`** (`core/preferences.py`) holds their values, one for the app,
+  shared like `ColumnPrefs` and given to panels as `PanelContext.prefs`.
+  - `value(setting)` is the stored value, checked: of the setting's type, clamped to its
+    range, one of its choices; anything else reads as the default (logged once).
+  - `set(setting, value)` checks it the same way, saves it at once (`AppSettings.set_pref`,
+    under `prefs/<key>`, apart from layouts; the default is stored as no value) and emits
+    `changed(key, value)` if the value changed. `reset(settings)` sets each to its default.
+  - Every window's panels follow `changed`, so a change shows in every window at once.
+    Panels still never touch `AppSettings`.
+- **The settings now** (page: setting, default, where it's declared):
+  - **Appearance:** *Theme* and *Colour-blind friendly colours* (the same values as the
+    View → Theme menu: `ThemeManager.set_mode` and `set_colour_blind`, not `Setting`s);
+    *Monospace font* and *Monospace font size*: at their defaults (`""`, 0) they follow the
+    theme, and the window shows the theme's actual font and size (what "monospace" is on
+    this desktop, e.g. 10), never a "Theme's" placeholder. They are used by
+    the diff, SHAs and every `mono_font()`: `ThemeManager(prefs=…)` puts them into the
+    theme it applies (`ThemeFonts.mono_family`, `mono_point_size`) and applies it again
+    when they change (`theme_changed`). `theme_manager.py`.
+  - **Diff:** *Fold unchanged stretches with more lines than* (20) and *Lines kept next to
+    a change* (3), passed to `stretches(rows, min_lines, keep)`; *Fold unchanged stretches
+    when a whole file opens* (off); *Tab width* (4, `DiffView.set_tab_width`); *Ask before
+    showing a diff with more lines than* (20 000, passed as `request_diff(…, max_lines=)`).
+    A change shows on the diff on screen at once: the folds start again, and a new limit
+    reads the diff again. `diff_panel.py`.
+  - **History:** *Date format*: ISO (`2026-11-17 14:05`, the default), ISO with seconds, or
+    the locale's short format. `history_model.py`.
+  - **Tools:** *Terminal command* (`""`): what Open in Terminal starts, split as a shell
+    would; when it's empty or its program isn't found, `$TERMINAL` and then the list, as
+    before (§5.4). `worktree_dialogs.py`. RZG-75's editor command will go here.
+- **The window:** `SettingsWindow` (`ui/settings_window.py`) is a top-level window, not
+  modal, one for the app: **File → Settings…** (`AppActions.settings`, Ctrl+,) shows it
+  and raises it if open (`AppWindows.show_settings`; a `MainWindow` without `AppWindows`
+  has its own). It doesn't keep the app running (`WA_QuitOnClose` off), and it closes with
+  the last main window.
+  - A page list on the left: Appearance, Diff, History, Tools, then any other page in
+    declaration order. The page shown is in a subtle outline (`Role.SETTINGS_PAGE`, the
+    theme's `border` colour). Each page is a form of its settings: a check box for a
+    `bool`, a spin box for an `int` or `float`, a drop-down for `choices` or a font, a text
+    field for a `str`.
+  - A change applies at once, as it's made (a text field as it's typed). Nothing needs a
+    restart. The buttons, on one line, are **Restore Defaults** and **Close**.
+  - **Restore Defaults** asks: **Restore All Settings**, **Restore <page> Settings** (the
+    page shown) or **Cancel**. The theme rows count as Appearance's. The editors follow
+    `changed` and `theme_changed`, so they show a change made elsewhere.
 
 ## 9. Performance stance
 

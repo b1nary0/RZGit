@@ -6,12 +6,14 @@ setFont, setStyleSheet or QStyleHints.setColorScheme.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from enum import StrEnum
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
+from rzgitclient.core.preferences import Preferences, Setting, declare
 from rzgitclient.ui.theme.app_theme import (DARK_THEME, LIGHT_THEME, AppTheme, FontKind,
                                             colour_blind_theme)
 
@@ -32,6 +34,17 @@ QT_FONT_CLASSES: dict[FontKind, tuple[str, ...]] = {
 }
 
 
+# The monospaced font every mono_font() gives (the diff, SHAs), over the theme's (spec §8.2).
+MONO_FAMILY = declare(Setting(
+    "appearance/mono_family", "", "Monospace font", page="Appearance", editor="font",
+    help="The font of the diff and of commit hashes."))
+MONO_SIZE = declare(Setting(
+    "appearance/mono_size", 0.0, "Monospace font size", page="Appearance", minimum=0.0,
+    maximum=48.0, step=0.5, editor="font_size",
+    help="The size, in points, of the diff's font and of commit hashes."))
+_MONO_KEYS = (MONO_FAMILY.key, MONO_SIZE.key)
+
+
 class ThemeMode(StrEnum):
     """Which theme the user chose; the value is what settings store."""
 
@@ -45,11 +58,15 @@ class ThemeManager(QObject):
 
     def __init__(self, app: QApplication, theme: AppTheme = LIGHT_THEME,
                  parent: QObject | None = None, *, mode: ThemeMode | None = None,
-                 colour_blind: bool = False):
+                 colour_blind: bool = False, prefs: Preferences | None = None):
         """Apply ``theme``, or the theme for ``mode`` when one is given, as its
-        colour-blind variant if ``colour_blind``."""
+        colour-blind variant if ``colour_blind``, with the monospace font ``prefs``
+        sets (followed as it changes)."""
         super().__init__(parent)
         self._app = app
+        self._prefs = prefs
+        if prefs is not None:
+            prefs.changed.connect(self._on_pref_changed)
         self._hints = app.styleHints()
         # Fusion is a neutral base that honours stylesheets fully; the desktop
         # style (e.g. Breeze) would fight the custom look.
@@ -106,7 +123,19 @@ class ThemeManager(QObject):
         return self._variant(DARK_THEME if scheme == Qt.ColorScheme.Dark else LIGHT_THEME)
 
     def _variant(self, base: AppTheme) -> AppTheme:
-        return colour_blind_theme(base) if self._colour_blind else base
+        theme = colour_blind_theme(base) if self._colour_blind else base
+        if self._prefs is None:
+            return theme
+        family, size = self._prefs.value(MONO_FAMILY), self._prefs.value(MONO_SIZE)
+        if not family and not size:
+            return theme
+        fonts = replace(theme.fonts, mono_family=family or theme.fonts.mono_family,
+                        mono_point_size=size or theme.fonts.mono_point_size)
+        return replace(theme, fonts=fonts)
+
+    def _on_pref_changed(self, key: str, _value: object) -> None:
+        if key in _MONO_KEYS:
+            self.set_theme(self._theme_for_mode())
 
     def _on_color_scheme_changed(self, scheme: Qt.ColorScheme) -> None:
         if self._mode is ThemeMode.SYSTEM:

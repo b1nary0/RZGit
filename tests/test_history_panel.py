@@ -246,6 +246,49 @@ class HistoryPanelTests(unittest.TestCase):
         self.assertEqual(len(changed), 1)  # one signal repaints every row
 
 
+class DateFormatTests(unittest.TestCase):
+    """The Date column's format, a setting (spec §8.2)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = qt_app()
+
+    def test_the_formats(self):
+        from datetime import datetime, timedelta, timezone
+
+        from PySide6.QtCore import QLocale
+
+        from rzgitclient.ui.panels.history_model import ISO, ISO_SECONDS, LOCALE, format_date
+        when = datetime(2026, 11, 17, 14, 5, 9, tzinfo=timezone(timedelta(hours=-5)))
+        self.assertEqual(format_date(when, ISO), "2026-11-17 14:05")
+        self.assertEqual(format_date(when, ISO_SECONDS), "2026-11-17 14:05:09")
+        saved = QLocale()
+        self.addCleanup(QLocale.setDefault, saved)
+        QLocale.setDefault(QLocale(QLocale.Language.English, QLocale.Country.UnitedStates))
+        self.assertTrue(format_date(when, LOCALE).startswith("11/17/26 2:05"))
+
+    def test_the_column_follows_the_setting(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = make_repo(Path(tmp.name) / "repo")
+        commit_file(repo, "a.txt", "1", "first")
+        ctx = make_panel_context()
+        self.addCleanup(ctx.session.shutdown)
+        from rzgitclient.ui.panels.history_model import DATE_COLUMN, DATE_FORMAT, ISO_SECONDS
+        ctx.prefs.set(DATE_FORMAT, ISO_SECONDS)
+        panel = HistoryPanel(ctx)
+        self.addCleanup(panel.deleteLater)
+        ctx.session.open(repo)
+        wait_idle(ctx.session)
+        model = panel._model
+        text = lambda: model.data(model.index(1, DATE_COLUMN))  # noqa: E731
+        self.assertRegex(text(), r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$")
+        changed = SignalRecorder(model, "dataChanged")
+        ctx.prefs.set(DATE_FORMAT, "iso")
+        self.assertRegex(text(), r"^\d{4}-\d\d-\d\d \d\d:\d\d$")
+        self.assertEqual(len(changed.events), 1)
+
+
 class HistoryPanelPagingTests(unittest.TestCase):
     """History in pages of three commits, shown in a view a few rows tall."""
 

@@ -23,6 +23,7 @@ from rzgitclient.ui.panels.history_panel import HistoryPanel
 from rzgitclient.ui.panels.panel import PanelContext
 from rzgitclient.ui.panels.worktrees_panel import WorktreesPanel
 from rzgitclient.ui.pull_dialogs import PullDialogs
+from rzgitclient.ui.settings_window import SettingsWindow, show_window
 from rzgitclient.ui.stash_dialogs import StashDialogs
 from rzgitclient.ui.worktree_dialogs import WorktreeDialogs
 
@@ -34,6 +35,8 @@ class WindowDirectory(Protocol):
 
     def open(self, path: str | Path, *,
              from_window: MainWindow | None = None) -> MainWindow | None: ...
+
+    def show_settings(self) -> None: ...
 
 
 class MainWindow(QMainWindow):
@@ -48,6 +51,7 @@ class MainWindow(QMainWindow):
         self.session = session = ctx.session
         self.settings = settings
         self.windows = windows
+        self._settings_window: SettingsWindow | None = None  # without ``windows`` only
 
         self.setWindowTitle("RZGitClient")
         self.resize(1100, 700)
@@ -84,6 +88,9 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addActions([actions.open_repo, actions.open_repo_new_window, actions.refresh])
         file_menu.addSeparator()
+        file_menu.addAction(actions.settings)  # spec §8.2
+        actions.settings.triggered.connect(self.show_settings)
+        file_menu.addSeparator()
         file_menu.addAction(actions.quit)
 
         actions.discard.triggered.connect(self.discard_selected)
@@ -109,7 +116,8 @@ class MainWindow(QMainWindow):
         self.worktree_dialogs = WorktreeDialogs(
             self, self.session, actions, self.ctx.worktrees,
             open_in_window=self.open_in_window,
-            window_for=lambda root: self.windows.window_for(root) if self.windows else None)
+            window_for=lambda root: self.windows.window_for(root) if self.windows else None,
+            prefs=self.ctx.prefs)
         actions.set_amend_confirmer(self.confirm_amend)
 
         actions.reset_layout.triggered.connect(self.reset_layout)
@@ -292,6 +300,17 @@ class MainWindow(QMainWindow):
             other.bring_to_front()
             return True
         return self.session.open(repo)
+
+    def show_settings(self) -> None:
+        """Show the app's Settings window, raised (§8.2). Without other windows,
+        this window has its own."""
+        if self.windows is not None:
+            self.windows.show_settings()
+            return
+        if self._settings_window is None:
+            self._settings_window = SettingsWindow(self.ctx.prefs, self.ctx.theme)
+            self.closed.connect(self._settings_window.close)
+        show_window(self._settings_window)
 
     def open_in_window(self, path: str | Path) -> MainWindow | None:
         """The window showing ``path``, raised, or a new one opened on it (§8.1).

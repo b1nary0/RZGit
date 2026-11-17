@@ -174,19 +174,20 @@ class Stretch:
     lines: int
 
 
-def stretches(rows: Sequence[DiffRow]) -> list[Stretch]:
+def stretches(rows: Sequence[DiffRow], min_lines: int = FOLD_MIN_LINES,
+              keep_lines: int = FOLD_KEEP) -> list[Stretch]:
     """The stretches of ``rows`` that can be folded: unchanged runs (hunk headers
-    don't break one) of more than ``FOLD_MIN_LINES`` lines, less ``FOLD_KEEP``
-    lines next to a change on either side. Side by side, either side's rows
-    give the same stretches."""
+    don't break one) of more than ``min_lines`` lines, less ``keep_lines`` lines
+    next to a change on either side; a run with nothing left isn't one. Side by
+    side, either side's rows give the same stretches."""
     found: list[Stretch] = []
     context: list[int] = []
     seen_change = False
 
     def end_run(at_end: bool) -> None:
-        if len(context) > FOLD_MIN_LINES:
-            keep = context[FOLD_KEEP if seen_change else 0:
-                           len(context) - (0 if at_end else FOLD_KEEP)]
+        keep = context[keep_lines if seen_change else 0:
+                       len(context) - (0 if at_end else keep_lines)]
+        if len(context) > min_lines and keep:
             first = rows[keep[0]]
             found.append(Stretch((first.old_no, first.new_no), keep[0], keep[-1] + 1, len(keep)))
         context.clear()

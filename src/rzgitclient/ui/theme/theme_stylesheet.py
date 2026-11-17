@@ -197,6 +197,10 @@ QToolButton[role="branch-button"]::menu-indicator {
 QWidget[role="segment-header"] {
     background: $header_bg;
 }
+QFrame[role="settings-page"] {
+    border: 1px solid $border;
+    border-radius: 4px;
+}
 QWidget[role="segment-header"] QLabel {
     color: $text;
     font-weight: bold;
