@@ -168,6 +168,12 @@ class RepoWatcherTests(unittest.TestCase):
         self.assertTrue(all(part in REF_PARTS | Refresh.STATUS for part in self.calls))
         self.assertLessEqual(len(self.calls), 2)
 
+    def test_a_remote_or_upstream_set_outside_the_app(self):
+        git(self.path, "remote", "add", "origin", "https://example.invalid/x.git")
+        self.settle()
+        self.assertEqual(self.calls, [Refresh.BRANCHES | Refresh.REMOTES])
+        self.assertEqual(self.session.remotes, ("origin",))
+
     def test_stashes_made_and_dropped_outside_the_app(self):
         """RZG-36: refs/stash changes, dropping an older stash too."""
         (self.path / "a.txt").write_text("older")

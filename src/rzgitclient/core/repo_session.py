@@ -20,6 +20,12 @@ from PySide6.QtCore import QObject, QThreadPool, Signal
 from rzgitclient.core.diff_patch import Line
 from rzgitclient.core.diff_request import DiffRequest, load_diff
 from rzgitclient.core.git_commands import CommandKind, GitCommand, run_command
+from rzgitclient.core.network_worker import (
+    NetworkCommand,
+    NetworkKind,
+    NetworkResult,
+    NetworkWorker,
+)
 from rzgitclient.core.selection import FileSelection
 from rzgitclient.git.git_models import (
     Branch,
@@ -47,7 +53,8 @@ class Refresh(Flag):
     STATUS = auto()
     COUNT = auto()  # commits reachable from HEAD; never in the same job as HISTORY
     STASHES = auto()
-    ALL = HEAD | BRANCHES | HISTORY | STATUS | STASHES | COUNT
+    REMOTES = auto()  # the remotes' names (spec §4.1)
+    ALL = HEAD | BRANCHES | HISTORY | STATUS | STASHES | COUNT | REMOTES
     LAST_COMMIT = auto()  # HEAD's message, for amending: only when asked for, not in ALL
 
 
@@ -57,7 +64,7 @@ _RESET = Refresh.ALL | Refresh.LAST_COMMIT
 
 # The order parts load and emit in (spec §4.1), and their value with no repo.
 _PARTS = (Refresh.HEAD, Refresh.BRANCHES, Refresh.HISTORY, Refresh.STATUS, Refresh.STASHES,
-          Refresh.COUNT, Refresh.LAST_COMMIT)
+          Refresh.COUNT, Refresh.REMOTES, Refresh.LAST_COMMIT)
 _EMPTY: dict[Refresh, object] = {
     Refresh.HEAD: (None, None),  # (branch, sha): two values, two signals (spec §4.1)
     Refresh.BRANCHES: (),
@@ -65,6 +72,7 @@ _EMPTY: dict[Refresh, object] = {
     Refresh.STATUS: (),
     Refresh.STASHES: (),
     Refresh.COUNT: None,
+    Refresh.REMOTES: (),
     Refresh.LAST_COMMIT: None,
 }
 
@@ -86,6 +94,11 @@ class RepoSession(QObject):
     error_occurred = Signal(str)
     notice_occurred = Signal(str)  # a command worked, but not quite as asked
     busy_changed = Signal(bool)  # True while git work is queued or running
+    remotes_changed = Signal(object)  # tuple[str, ...]: the remotes' names
+    # Network commands, on a worker of their own (spec §4.1).
+    network_changed = Signal(object)  # NetworkCommand | None: the one running
+    network_progress = Signal(str)  # its latest progress line
+    network_finished = Signal(object, bool)  # NetworkCommand, whether it ran without error
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -138,8 +151,15 @@ class RepoSession(QObject):
             Refresh.STATUS: self.status_changed,
             Refresh.STASHES: self.stashes_changed,
             Refresh.COUNT: self.commit_count_changed,
+            Refresh.REMOTES: self.remotes_changed,
             Refresh.LAST_COMMIT: self.last_commit_changed,
         }
+        # Network commands (spec §4.1): their own worker, so loads go on meanwhile.
+        self._network = NetworkWorker(self)
+        self._network_generation = 0  # the repo generation the running one is for
+        self._network.started.connect(self.network_changed)
+        self._network.progress.connect(lambda _command, line: self.network_progress.emit(line))
+        self._network.finished.connect(self._on_network_done)
 
     # ---- latest values --------------------------------------------------
 
@@ -185,6 +205,16 @@ class RepoSession(QObject):
     def commit_count(self) -> int | None:
         """Commits reachable from HEAD, however much history is loaded; None until counted."""
         return self._values[Refresh.COUNT]  # type: ignore[return-value]
+
+    @property
+    def remotes(self) -> tuple[str, ...]:
+        """The remotes' names, in git's order."""
+        return self._values[Refresh.REMOTES]  # type: ignore[return-value]
+
+    @property
+    def network(self) -> NetworkCommand | None:
+        """The network command running, until ``network_changed(None)``."""
+        return self._network.running
 
     @property
     def last_commit(self) -> LastCommit | None:
@@ -255,6 +285,7 @@ class RepoSession(QObject):
             return False
         self._repo = repo
         self._generation += 1
+        self._network.cancel()  # it was for the repository that was open
         self._pending = Refresh(0)
         self._more_pending = False
         self._history_complete = True
@@ -272,6 +303,7 @@ class RepoSession(QObject):
             return
         self._repo = None
         self._generation += 1
+        self._network.cancel()
         self._pending = Refresh(0)
         self._more_pending = False
         self._forced = _RESET
@@ -291,7 +323,38 @@ class RepoSession(QObject):
         self._files_pending = False
         self._details_pending = False
         self._commands = []
+        self._network.shutdown()  # cancelled: quitting doesn't wait minutes for a fetch
         self._pool.waitForDone()
+
+    # ---- network commands (spec §4.1) --------------------------------------
+
+    def fetch(self) -> NetworkCommand | None:
+        """Fetch every remote in the background (``git fetch --all --prune``).
+
+        None with no repository, or while a network command runs. The end comes
+        as ``network_changed(None)``, then any error, then ``network_finished``.
+        """
+        if self._repo is None or self._network.running is not None:
+            return None
+        command = NetworkCommand(NetworkKind.FETCH)
+        self._network_generation = self._generation
+        self._network.start(self._repo, command)
+        return command
+
+    def cancel_network(self) -> None:
+        """Kill the running network command, if any; it reports no error."""
+        self._network.cancel()
+
+    def _on_network_done(self, result: NetworkResult) -> None:
+        self.network_changed.emit(None)
+        if self._network_generation != self._generation or self._repo is None:
+            return  # for a repository closed meanwhile
+        self.refresh(Refresh.BRANCHES)  # the upstream counts; ok or not, some may have changed
+        if result.cancelled:
+            return
+        if result.error is not None:
+            self.error_occurred.emit(result.error)
+        self.network_finished.emit(result.command, result.ok)
 
     # ---- loading ------------------------------------------------------------
 
@@ -794,6 +857,8 @@ def _load(repo: Repo, part: Refresh) -> object:
         return tuple(repo.stashes())
     if part is Refresh.COUNT:
         return repo.commit_count()
+    if part is Refresh.REMOTES:
+        return tuple(repo.remotes())
     if part is Refresh.LAST_COMMIT:
         return repo.last_commit()
     raise ValueError(f"not a single part: {part!r}")

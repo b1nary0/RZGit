@@ -74,6 +74,7 @@ src/rzgitclient/
     diff_request.py             DiffRequest, the size limit, load_diff (the worker side of diffs)
     diff_patch.py               build_patch: a patch of chosen lines of a FileDiff (plain Python)
     git_commands.py             GitCommand, run_command (the worker side of commands: stage, commit, …)
+    network_worker.py           NetworkWorker, NetworkCommand: remote commands (fetch) on a thread of their own
     commit_drafts.py            CommitDrafts: the unfinished commit message of each repository (a file each)
     column_prefs.py             ColumnPrefs: each panel's column choices (hidden columns, widths)
     commit_graph.py             CommitGraph, GraphRow: History's branch graph lanes (plain Python)
@@ -181,10 +182,14 @@ class RepoSession(QObject):
     error_occurred   = Signal(str)
     notice_occurred  = Signal(str)   # a command worked, but not quite as asked
     busy_changed     = Signal(bool)  # True while git work is queued or running
+    remotes_changed  = Signal(object)  # tuple[str, ...]  (the remotes' names, RZG-62)
+    network_changed  = Signal(object)  # NetworkCommand | None  (the one running)
+    network_progress = Signal(str)     # its latest progress line
+    network_finished = Signal(object, bool)  # NetworkCommand, whether it ran without error
 
     def open(self, path) -> bool          # path, or a Repo already read (§8.1)
     def close(self) -> None
-    def refresh(self, parts: Refresh = Refresh.ALL) -> None   # Flag: HEAD|BRANCHES|HISTORY|STATUS|STASHES|COUNT
+    def refresh(self, parts: Refresh = Refresh.ALL) -> None   # Flag: HEAD|BRANCHES|HISTORY|STATUS|STASHES|COUNT|REMOTES
     def load_more_history(self) -> None   # the next page of history, in the background
     def set_history_order(self, order: HistoryOrder) -> None   # DATE or TOPO; reloads history
     def request_diff(self, file: FileSelection | None, full: bool = False,
@@ -217,9 +222,14 @@ class RepoSession(QObject):
     def prune_worktrees(self) -> GitCommand | None    # the records of missing worktrees
     commands_in_flight: tuple[GitCommand, ...]   # queued or running, until command_finished
 
+    # Network commands: on a worker of their own (§4.1, "Network commands").
+    def fetch(self) -> NetworkCommand | None   # git fetch --all --prune; None: no repo, or one running
+    def cancel_network(self) -> None           # kill the running one, if any
+    network: NetworkCommand | None             # the one running
+
     # Latest values, so a panel created later renders at once (read-only properties):
-    repo, head, head_sha, branches, history, history_order, status, stashes, commit_count, history_complete,
-    diff_file, diff, diff_whole,
+    repo, head, head_sha, branches, history, history_order, status, stashes, commit_count, remotes,
+    history_complete, diff_file, diff, diff_whole,
     commit_files_sha, commit_files, commit_details_sha, commit_details, last_commit
 ```
 
@@ -235,7 +245,8 @@ class RepoSession(QObject):
 - **Opening and closing.** A failed `open()` leaves the current repo open and returns False.
   A successful one forgets the stored values first, so every signal fires for the new repo
   even when its data equals the old repo's. Signals go out in a fixed order: `repo_changed`
-  (panels reset), then `head`, `head_sha`, `branches`, `history`, `status`, `stashes`, `commit_count`. `close()` sends
+  (panels reset), then `head`, `head_sha`, `branches`, `history`, `status`, `stashes`, `commit_count`,
+  `remotes`. `close()` sends
   `repo_changed(None)` and then empty data.
 - **HEAD is two values** (RZG-56): `Refresh.HEAD` reads the branch (`symbolic-ref`) and
   the commit (`rev-parse`) in the same job. `head_changed` and `head_sha_changed` each
@@ -447,6 +458,12 @@ class RepoSession(QObject):
     - `Branch.merged`: whether the branch's tip is in HEAD (`git for-each-ref --merged
       HEAD`, a second read in `BRANCHES`; all False if HEAD has no commit). The Delete
       confirmation uses it (§8).
+    - `Branch.upstream`, `ahead`, `behind` (RZG-62): the branch's upstream
+      (`%(upstream:short)`, e.g. `origin/main`, None without one) and how many commits
+      it is ahead of and behind it (`%(upstream:track,nobracket)`: "ahead 2, behind 1",
+      both 0 when even). Read in the same `for-each-ref` as the names, at no measurable
+      cost. An upstream that is gone ("gone": its remote branch was deleted) keeps its
+      name, with `ahead` and `behind` None, as without one.
   - **Amend** (`git commit -q --amend --cleanup=whitespace -F -`, the message on stdin)
     replaces HEAD's commit with the staged changes, if any, and the message, and reloads
     what Commit does. Git keeps the author and author date, and a merge's parents.
@@ -499,6 +516,46 @@ class RepoSession(QObject):
   refresh `.git/index` behind the app's back. **Why:** the watcher (§4.3) would see that
   write and refresh again, for ever.
 - **Worktrees** aren't a session part: each window's `WorktreeReader` reads them (§4.4).
+- **Remotes** (RZG-62) are a part, `Refresh.REMOTES`, in `Refresh.ALL`, after the count:
+  `Repo.remotes()` (`git remote`) gives their names, in git's order, as
+  `remotes_changed(tuple[str, ...])`. Fetch is enabled by them (§8).
+- **Network commands** (RZG-62) talk to a remote, so they can take minutes. They run on a
+  second worker, **`NetworkWorker`** (`core/network_worker.py`), owned by the session,
+  so status, diffs and history keep loading and refreshing on the first one meanwhile.
+  - **One at a time.** A `NetworkCommand` (frozen, compared by identity, like
+    `GitCommand`) has a `kind` (`NetworkKind.FETCH`; Pull and Push come with RZG-71 and
+    RZG-72). `fetch()` returns None while one runs. `network` is the running command;
+    `network_changed` sends it when it starts and None when it ends.
+  - **No clash with the first worker:** a network command writes only remote-tracking
+    refs, `FETCH_HEAD` and objects, never the working tree or the index, and git retries
+    a locked `packed-refs` itself (`core.packedRefsTimeout`).
+  - **Fetch:** `git fetch --all --prune --progress`: every remote, dropping
+    remote-tracking branches that are gone. When it ends, ok or not (some remotes may have
+    been fetched), the session refreshes `BRANCHES`, for the upstream counts (the watcher
+    sees the refs change too, §4.3).
+  - **Git runs through `Popen`**, not `run_git`, so it can be read while it runs and
+    killed: `Repo.start_network_git(*args)`, with `network_env()`, stdin closed, stderr
+    into stdout, and `start_new_session=True`.
+  - **Progress:** the worker reads the output as it comes. A segment ending in `\r` is
+    git's progress line, overwritten in place; `network_progress` sends the latest
+    one (or any line), at most every 100 ms, stripped of `remote: ` and spaces.
+  - **Cancel:** `cancel_network()` sends SIGTERM to the command's process group (git and
+    the ssh or https helper it started): git's own cleanup removes its lock files, and a
+    fetch cut short leaves the refs it hadn't updated as they were. A cancelled command
+    reports no error. `open()`, `close()` and `shutdown()` cancel it too (quitting doesn't
+    wait minutes); `shutdown()` then waits for it to end.
+  - **Errors:** a failed command's error is its output without the progress lines,
+    through `error_occurred`. **Results:** `network_finished(command, ok)`, after the
+    error; nothing for a cancelled command, or one of a repository closed meanwhile.
+  - **Authentication** works as in a terminal for an SSH agent and HTTPS credential
+    helpers. **No prompt can hang:** the new session has no terminal, so ssh can't open
+    `/dev/tty`, and `GIT_TERMINAL_PROMPT=0` stops git's own prompt. A desktop askpass
+    program answers them if one is set (`SSH_ASKPASS`, e.g. ksshaskpass; then
+    `SSH_ASKPASS_REQUIRE=prefer`, unless set, so ssh uses it without `DISPLAY`). Without
+    one, the prompt fails, and an error that shows one ("terminal prompts disabled",
+    "could not read Username", `ssh_askpass`, "Host key verification failed",
+    "Permission denied (publickey") starts with "RZGitClient can't ask for credentials:
+    use an SSH agent, a credential helper or an askpass program."
 
 ### 4.3 RepoWatcher
 
@@ -534,6 +591,7 @@ class RepoWatcher(QObject):
   |---|---|
   | `index` (git dir) | `STATUS` |
   | `HEAD`, `packed-refs`, anything under `refs/` | `HEAD \| BRANCHES \| HISTORY \| STASHES \| COUNT` |
+  | `config` (remotes and upstreams, RZG-62) | `BRANCHES \| REMOTES` |
   | a working tree file or folder git doesn't ignore | `STATUS` |
   | `*.lock`, `objects/`, logs, anything else in `.git` | nothing |
 
@@ -904,7 +962,7 @@ The first three are extracted from the original `main_window.py` with the same b
 
 | Panel | id | Surface | Shows | Writes |
 |---|---|---|---|---|
-| ControlsPanel | `controls` | chrome | Open, Refresh (`ctx.actions`), the branch button | switches and makes branches, through `actions.request_branch`; (later: fetch/pull/push) |
+| ControlsPanel | `controls` | chrome | Open, Refresh, Fetch (`ctx.actions`), the branch button | switches and makes branches, through `actions.request_branch`; fetches, through `actions.fetch`; (later: pull/push) |
 | BranchesPanel | `branches` | sidebar | branches, current in bold | branch operations, through `actions.request_branch` |
 | StashPanel | `stash` | sidebar | "Stashes": message, branch and age of each, newest first | `selection.commit` (a `Stash`); stash operations, through `actions.request_stash` |
 | HistoryPanel | `history` | content | Uncommitted changes, then the commit table; no row while a stash is selected | `selection.commit` |
@@ -1986,8 +2044,16 @@ Per-widget sheets are slow to apply and scatter the rules.
   ("2,421 commits", "1 commit"). Until it arrives, or if it failed, the loaded count, with a
   plus while more history is unloaded ("500+ commits").
 - **No toolbar:** its buttons are the **Controls panel** (§5.4), placed by the layout across
-  the top and styled like the toolbar was. Remote controls (fetch/pull/push) join it when
-  those commands exist. The branch button switches branches, as the Branches panel does.
+  the top and styled like the toolbar was. Remote controls join it as those commands
+  come: Fetch now, Pull and Push with RZG-71 and RZG-72. The branch button switches
+  branches, as the Branches panel does.
+- **Fetch** (RZG-62, `actions.fetch`, in the Repository menu after Stash Changes…, and
+  on the Controls panel after Refresh) calls `session.fetch()`. It is enabled when the
+  repository has a remote (`session.remotes`). While a network command runs
+  (`network_changed`) it reads **Fetching…**, its tooltip says "Click to cancel", and
+  triggering it calls `session.cancel_network()` instead. The status bar shows the
+  latest `network_progress` line in a label of its own, beside Loading…, from when the
+  command starts until it ends.
 
 ### 8.1 Windows
 
@@ -2055,6 +2121,7 @@ cheap to fix **later**, without paying for them now:
 | Hot spot | When it matters | Planned fix | Kept open by |
 |---|---|---|---|
 | git on the UI thread | large repos, network ops | **done:** one worker thread inside RepoSession (§4.1) | push-based signals (§4.1); panels never run git (§5.2) |
+| Network commands blocking loads | a fetch over a slow link | **done:** a second worker for them, cancellable (§4.1, RZG-62) | network commands never touch the working tree or the index |
 | History rebuilds as item widgets | 10k+ commits | **done:** `QAbstractTableModel` + paging (§4.1, §5.4) | HistoryPanel is the only place that changes |
 | The branch graph's layout | 100k+ commits loaded | **done:** rows worked out as they're drawn, and kept; a page carries on from the last row (§5.4) | `CommitGraph` is plain Python, apart from the model |
 | Full rebuild on every refresh | frequent refreshes | granular signals, emitted only on change | §4.1 (done now: cheap, and the right semantics anyway) |

@@ -67,6 +67,8 @@ class MainWindow(QMainWindow):
         session.error_occurred.connect(self._show_error)
         session.notice_occurred.connect(self._show_notice)
         session.busy_changed.connect(self._busy_label.setVisible)
+        session.network_changed.connect(self._on_network_changed)
+        session.network_progress.connect(self._network_label.setText)
 
     # ---- construction -------------------------------------------------
 
@@ -92,6 +94,8 @@ class MainWindow(QMainWindow):
         repo_menu.addActions([actions.commit, actions.amend])
         repo_menu.addSeparator()
         repo_menu.addAction(actions.stash_changes)
+        repo_menu.addSeparator()
+        repo_menu.addAction(actions.fetch)
         repo_menu.addSeparator()
         repo_menu.addActions([actions.worktrees, actions.new_worktree])
         actions.worktrees.triggered.connect(self.show_worktrees)
@@ -135,8 +139,16 @@ class MainWindow(QMainWindow):
         self._busy_label = QLabel("Loading…")
         self._busy_label.setVisible(self.session.busy)
         self.statusBar().addPermanentWidget(self._busy_label)
+        # A network command's progress (spec §8), while it runs.
+        self._network_label = QLabel()
+        self._network_label.setVisible(False)
+        self.statusBar().addPermanentWidget(self._network_label)
 
     # ---- behaviour ----------------------------------------------------
+
+    def _on_network_changed(self, command: object) -> None:
+        self._network_label.setText("Fetching…")
+        self._network_label.setVisible(command is not None)
 
     def reset_layout(self) -> None:
         self.layout_host.apply(DEFAULT_LAYOUT)

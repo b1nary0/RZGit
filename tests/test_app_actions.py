@@ -45,6 +45,34 @@ class AppActionsTests(unittest.TestCase):
         action.setChecked(False)
         self.assertIs(self.session.history_order, HistoryOrder.DATE)
 
+    def test_fetch_needs_a_remote_and_cancels_while_running(self):
+        fetch = self.actions.fetch
+        self.assertFalse(fetch.isEnabled())  # no repository
+        commit_file(self.repo, "a.txt", "1", "first")
+        self.session.open(self.repo)
+        wait_idle(self.session)
+        self.assertFalse(fetch.isEnabled())  # no remote
+        git(self.repo, "remote", "add", "origin", str(self.repo))
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertTrue(fetch.isEnabled())
+        self.assertEqual((fetch.text(), fetch.toolTip()), ("&Fetch", "Fetch every remote"))
+        command = object()
+        with mock.patch.object(self.session, "fetch") as start, \
+                mock.patch.object(self.session, "cancel_network") as cancel:
+            fetch.trigger()
+            start.assert_called_once_with()
+            with mock.patch.object(type(self.session), "network", command):
+                self.session.network_changed.emit(command)
+                self.assertEqual((fetch.text(), fetch.toolTip()),
+                                 ("Fetching…", "Fetching… Click to cancel"))
+                self.assertTrue(fetch.isEnabled())
+                fetch.trigger()
+                cancel.assert_called_once_with()
+                start.assert_called_once_with()  # not again
+            self.session.network_changed.emit(None)
+        self.assertEqual(fetch.text(), "&Fetch")
+
     def test_theme_modes_are_one_of_three(self):
         modes = self.actions.theme_modes
         self.assertEqual([a.text() for a in modes.values()], ["&Light", "&Dark", "&System"])

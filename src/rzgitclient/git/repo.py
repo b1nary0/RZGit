@@ -60,6 +60,24 @@ def _git_env() -> dict[str, str]:
     return env
 
 
+def network_env() -> dict[str, str]:
+    """The environment of a git command that talks to a remote (spec §4.1): a
+    desktop askpass, if one is set, answers ssh's prompts even without DISPLAY."""
+    env = _git_env()
+    if env.get("SSH_ASKPASS") and "SSH_ASKPASS_REQUIRE" not in env:
+        env["SSH_ASKPASS_REQUIRE"] = "prefer"
+    return env
+
+
+def _ahead_behind(upstream: str, track: str) -> tuple[int | None, int | None]:
+    """``%(upstream:track,nobracket)`` as (ahead, behind): both 0 when even, None
+    without an upstream or when it's gone."""
+    if not upstream or track == "gone":
+        return None, None
+    counts = dict(part.split() for part in track.split(", ") if part)
+    return int(counts.get("ahead", 0)), int(counts.get("behind", 0))
+
+
 def run_git(
     cwd: str | Path, *args: str, ok_codes: Collection[int] = (0,), input: str | None = None
 ) -> str:
@@ -151,9 +169,11 @@ class Repo:
 
     def branches(self) -> list[Branch]:
         out = self.git(
-            "for-each-ref", "--format=%(HEAD)%00%(refname:short)", "refs/heads"
+            "for-each-ref",
+            "--format=%(HEAD)%00%(refname:short)%00%(upstream:short)%00%(upstream:track,nobracket)",
+            "refs/heads",
         )
-        rows = [line.partition("\0") for line in out.splitlines()]
+        rows = [line.split("\0") for line in out.splitlines()]
         merged: set[str] = set()
         if rows:
             try:
@@ -161,8 +181,29 @@ class Repo:
                                       "--format=%(refname:short)", "refs/heads").splitlines())
             except GitError:  # HEAD has no commit yet: nothing is merged into it
                 pass
-        return [Branch(name=name, is_current=head == "*", merged=name in merged)
-                for head, _, name in rows]
+        return [Branch(name, head == "*", name in merged, upstream or None,
+                       *_ahead_behind(upstream, track))
+                for head, name, upstream, track in rows]
+
+    def remotes(self) -> list[str]:
+        """The remotes' names, in git's order (spec §4.1)."""
+        return self.git("remote").split()
+
+    def start_network_git(self, *args: str) -> subprocess.Popen[bytes]:
+        """Start a git command that talks to a remote (spec §4.1, "Network commands").
+
+        It runs in a session of its own, so it has no terminal to prompt on and
+        can be killed with whatever it started (``os.killpg``). Its stdin is
+        closed and its stderr goes into its stdout, read as bytes.
+        """
+        try:
+            return subprocess.Popen(
+                ["git", *args], cwd=self.root, env=network_env(),
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            raise GitError(f"Can't run git in {self.root}: {exc.strerror or exc}") from exc
 
     def last_commit(self) -> LastCommit | None:
         """HEAD's commit: its full message and whether it's on a remote-tracking

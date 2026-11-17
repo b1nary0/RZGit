@@ -84,6 +84,9 @@ class Branch:
     name: str
     is_current: bool
     merged: bool = False  # its tip is in HEAD, so `git branch -d` can delete it
+    upstream: str | None = None  # e.g. "origin/main"; None without one (spec §4.1)
+    ahead: int | None = None  # commits not in the upstream; None without one, or when it's gone
+    behind: int | None = None  # the upstream's commits not in it
 
 
 @dataclass(frozen=True)

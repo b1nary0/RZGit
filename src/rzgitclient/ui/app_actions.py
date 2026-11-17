@@ -18,6 +18,10 @@ from rzgitclient.git.git_models import FileDiff, HistoryOrder, LastCommit, Stash
 from rzgitclient.ui.theme.theme_manager import ThemeMode
 
 
+FETCH_TEXT = "&Fetch"
+FETCHING_TEXT = "Fetching…"
+
+
 class BranchOp(StrEnum):
     """A branch operation the Branches panel asks for (spec §8)."""
 
@@ -146,6 +150,9 @@ class AppActions(QObject):
         # New Worktree… (spec §8): WorktreeDialogs asks for the branch and folder.
         self.new_worktree = self._action("folder-new", "New Wor&ktree…")
         self.new_worktree.triggered.connect(lambda: self.request_worktree(WorktreeOp.NEW))
+        # Fetch (spec §8): every remote; while a network command runs, it cancels it.
+        self.fetch = self._action("download", FETCH_TEXT)
+        self.fetch.triggered.connect(self._on_fetch)
 
         # triggered(bool) would land in refresh's `parts` argument.
         self.refresh.triggered.connect(lambda: session.refresh())
@@ -158,7 +165,8 @@ class AppActions(QObject):
         # Another repository: its history isn't loaded yet, so don't wait for it.
         session.repo_changed.connect(lambda _repo: self.amend.setChecked(False))
         for signal in (session.repo_changed, session.status_changed, session.history_changed,
-                       selection.files_changed):
+                       selection.files_changed, session.remotes_changed,
+                       session.network_changed):
             signal.connect(self._update_enabled)
         self._update_enabled()
 
@@ -185,6 +193,12 @@ class AppActions(QObject):
         history = self._session.history
         self._amend_sha = history[0].sha if checked and history else None
         self._update_enabled()
+
+    def _on_fetch(self) -> None:
+        if self._session.network is not None:
+            self._session.cancel_network()
+        else:
+            self._session.fetch()
 
     def move(self, paths: tuple[str, ...], to: FileSource) -> None:
         """Stage ``paths`` (``to`` the index) or unstage them, and have their new
@@ -247,6 +261,10 @@ class AppActions(QObject):
         self.refresh.setEnabled(session.repo is not None)
         self.worktrees.setEnabled(session.repo is not None)
         self.new_worktree.setEnabled(session.repo is not None)
+        running = session.network is not None
+        self.fetch.setEnabled(running or (session.repo is not None and bool(session.remotes)))
+        self.fetch.setText(FETCHING_TEXT if running else FETCH_TEXT)
+        self.fetch.setToolTip("Fetching… Click to cancel" if running else "Fetch every remote")
         worktree = bool(self.selected(FileSource.WORKTREE))
         self.stage.setEnabled(worktree)
         self.discard.setEnabled(worktree)

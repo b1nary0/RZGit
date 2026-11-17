@@ -1,4 +1,4 @@
-"""The bar of controls across the top: Open, Refresh, the branch button (spec §5.4).
+"""The bar of controls across the top: Open, Refresh, Fetch, the branch button (spec §5.4).
 
 It replaces the toolbar: the buttons show the same ``AppActions`` objects as the
 menus, so text, shortcut and enabled state come from one place.
@@ -41,7 +41,7 @@ class ControlsPanel(Panel):
         layout.setContentsMargins(6, 6, 6, 5)
         layout.setSpacing(2)
         actions = self.ctx.actions
-        for action in (actions.open_repo, actions.refresh):
+        for action in (actions.open_repo, actions.refresh, actions.fetch):
             layout.addWidget(_button(action))
         layout.addStretch(1)
 

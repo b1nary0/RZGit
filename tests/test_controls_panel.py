@@ -10,7 +10,7 @@ from rzgitclient.ui.panels.controls_panel import FILTER_AT, LABEL_WIDTH, Control
 from rzgitclient.ui.theme.style_roles import SURFACE_PROPERTY
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
-NAV = 2  # Open and Refresh, ahead of the branch button
+NAV = 3  # Open, Refresh and Fetch, ahead of the branch button
 
 
 class ControlsPanelTests(unittest.TestCase):
@@ -40,8 +40,9 @@ class ControlsPanelTests(unittest.TestCase):
     def test_buttons_are_the_app_actions(self):
         buttons = self.panel.findChildren(QToolButton)[:NAV]
         actions = self.ctx.actions
-        self.assertEqual([b.defaultAction() for b in buttons], [actions.open_repo, actions.refresh])
-        self.assertEqual([b.text() for b in buttons], ["Open Repository", "Refresh"])  # no & or …
+        self.assertEqual([b.defaultAction() for b in buttons],
+                         [actions.open_repo, actions.refresh, actions.fetch])
+        self.assertEqual([b.text() for b in buttons], ["Open Repository", "Refresh", "Fetch"])  # no & or …
         self.assertFalse(buttons[1].isEnabled())  # Refresh, with no repo open
         self.open()
         self.assertTrue(buttons[1].isEnabled())

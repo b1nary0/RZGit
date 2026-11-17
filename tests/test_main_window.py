@@ -172,7 +172,20 @@ class MainWindowTests(unittest.TestCase):
         actions = window.ctx.actions
         # The action buttons; the branch button (a menu, no action) is last.
         self.assertEqual([b.defaultAction() for b in buttons],
-                         [actions.open_repo, actions.refresh, None])
+                         [actions.open_repo, actions.refresh, actions.fetch, None])
+
+    def test_the_status_bar_shows_a_network_commands_progress_while_it_runs(self):
+        window = self.start()
+        label = window._network_label
+        self.assertFalse(label.isVisibleTo(window))
+        command = object()
+        window.session.network_changed.emit(command)
+        self.assertTrue(label.isVisibleTo(window))
+        self.assertEqual(label.text(), "Fetching…")
+        window.session.network_progress.emit("Receiving objects:  50% (1/2)")
+        self.assertEqual(label.text(), "Receiving objects:  50% (1/2)")
+        window.session.network_changed.emit(None)
+        self.assertFalse(label.isVisibleTo(window))
 
     def test_view_menu_has_layout_panels_and_reset(self):
         window = self.start()
@@ -498,7 +511,8 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual([a for a in menu.actions() if not a.isSeparator()],
                          [actions.stage, actions.unstage, actions.discard,
                           actions.stage_all, actions.unstage_all, actions.commit, actions.amend,
-                          actions.stash_changes, actions.worktrees, actions.new_worktree])
+                          actions.stash_changes, actions.fetch, actions.worktrees,
+                          actions.new_worktree])
 
     def test_discard_asks_first_and_acts_only_on_unstaged_rows(self):
         window = self.start()

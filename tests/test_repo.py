@@ -726,6 +726,32 @@ class RepoBranchTests(unittest.TestCase):
         self.assertEqual(self.names(), {"ahead": (False, False), "main": (True, True),
                                         "old": (False, True)})
 
+    def test_branches_know_their_upstream_and_how_far_from_it_they_are(self):
+        remote = Path(self._tmp.name) / "remote.git"
+        git(self.path, "clone", "-q", "--bare", str(self.path), str(remote))
+        git(self.path, "remote", "add", "origin", str(remote))
+        git(self.path, "fetch", "-q", "origin")
+        git(self.path, "branch", "-q", "--set-upstream-to", "origin/main", "main")
+        git(self.path, "branch", "-q", "--track", "even", "origin/main")
+        git(self.path, "branch", "-q", "--track", "gone", "origin/main")
+        git(self.path, "config", "branch.gone.merge", "refs/heads/deleted")
+        git(self.path, "branch", "-q", "local")
+        commit_file(self.path, "b.txt", "b", "second")  # main: 1 ahead
+        git(self.path, "update-ref", "refs/remotes/origin/main", "HEAD")  # ... then even,
+        git(self.path, "reset", "-q", "--hard", "HEAD~")  # ... then 1 behind
+        commit_file(self.path, "c.txt", "c", "third")  # ... and 1 ahead: diverged
+        tracking = {b.name: (b.upstream, b.ahead, b.behind) for b in self.repo.branches()}
+        self.assertEqual(tracking, {
+            "main": ("origin/main", 1, 1),
+            "even": ("origin/main", 0, 1),
+            "gone": ("origin/deleted", None, None),
+            "local": (None, None, None),
+        })
+        self.assertEqual(self.repo.remotes(), ["origin"])
+
+    def test_no_remotes(self):
+        self.assertEqual(self.repo.remotes(), [])
+
     def test_no_branch_is_merged_into_an_unborn_head(self):
         git(self.path, "switch", "-q", "--orphan", "fresh")
         self.assertEqual(self.names(), {"main": (False, False)})

@@ -254,6 +254,8 @@ class RepoWatcher(QObject):
             parts = Refresh.STATUS
         elif name in _REF_FILES:
             parts = REF_PARTS
+        elif name == "config":  # remotes and upstreams (spec §4.3)
+            parts = Refresh.BRANCHES | Refresh.REMOTES
         else:
             return False  # locks, logs, FETCH_HEAD, objects/…
         if name.endswith(".lock") or own:
