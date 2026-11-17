@@ -7,7 +7,7 @@ tree into rows.
 from __future__ import annotations
 
 import posixpath
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Generic, TypeVar
 
@@ -65,6 +65,18 @@ def _tidy(node: FolderNode[T]) -> None:
         _tidy(child)
     node.folders.sort(key=lambda f: (f.name.casefold(), f.name))
     node.files.sort(key=lambda f: (f.name.casefold(), f.name))
+
+
+def sort_tree(node: FolderNode[T],
+              files: Callable[[list[FileNode[T]]], list[FileNode[T]]],
+              folders_reversed: bool = False) -> None:
+    """Sort inside each folder (RZG-43): ``files`` orders a folder's files (they
+    come by name); its folders stay first, by name, reversed when asked."""
+    node.files = files(node.files)
+    if folders_reversed:
+        node.folders.reverse()
+    for folder in node.folders:
+        sort_tree(folder, files, folders_reversed)
 
 
 def file_label(path: str, orig_path: str | None = None) -> str:

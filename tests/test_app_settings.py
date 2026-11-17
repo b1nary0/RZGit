@@ -145,6 +145,21 @@ class AppSettingsTests(unittest.TestCase):
         self.settings._settings.setValue("columns/prefs", "[1, 2]")
         self.assertEqual(self.settings.column_prefs, {})
 
+    def test_sort_prefs_survive_a_reopen(self):
+        """RZG-43: each panel's sort order, as SortPrefs writes it."""
+        self.assertEqual(self.settings.sort_prefs, {})
+        self.settings.sort_prefs = {"stash": {"by": "branch", "reversed": True}}
+        self.assertEqual(self.reopen().sort_prefs, {"stash": {"by": "branch", "reversed": True}})
+        self.settings.sort_prefs = {}
+        self.assertEqual(self.reopen().sort_prefs, {})
+
+    def test_sort_prefs_that_are_not_valid_are_ignored(self):
+        self.settings._settings.setValue("sort/prefs", "{not json")
+        with self.assertLogs("rzgitclient.core.app_settings", "WARNING"):
+            self.assertEqual(self.settings.sort_prefs, {})
+        self.settings._settings.setValue("sort/prefs", "[1, 2]")
+        self.assertEqual(self.settings.sort_prefs, {})
+
     def test_layout_preset_survives_a_reopen(self):
         self.assertIsNone(self.settings.layout_preset)
         self.settings.layout_preset = "Standard"

@@ -170,7 +170,8 @@ class Repo:
     def branches(self) -> list[Branch]:
         out = self.git(
             "for-each-ref",
-            "--format=%(HEAD)%00%(refname:short)%00%(upstream:short)%00%(upstream:track,nobracket)",
+            "--format=%(HEAD)%00%(refname:short)%00%(upstream:short)%00%(upstream:track,nobracket)"
+            "%00%(committerdate:iso-strict)",
             "refs/heads",
         )
         rows = [line.split("\0") for line in out.splitlines()]
@@ -182,8 +183,9 @@ class Repo:
             except GitError:  # HEAD has no commit yet: nothing is merged into it
                 pass
         return [Branch(name, head == "*", name in merged, upstream or None,
-                       *_ahead_behind(upstream, track))
-                for head, name, upstream, track in rows]
+                       *_ahead_behind(upstream, track),
+                       date=datetime.fromisoformat(date) if date else None)
+                for head, name, upstream, track, date in rows]
 
     def remotes(self) -> list[str]:
         """The remotes' names, in git's order (spec §4.1)."""

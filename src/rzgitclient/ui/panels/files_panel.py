@@ -9,9 +9,10 @@ from __future__ import annotations
 from PySide6.QtWidgets import QVBoxLayout
 
 from rzgitclient.core.selection import FileSource
-from rzgitclient.ui.panels.file_list import FileList
+from rzgitclient.ui.panels.file_list import SORTS, FileList
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
+from rzgitclient.ui.widgets.sort_menu import SortMenu
 
 
 class FilesPanel(Panel):
@@ -19,12 +20,15 @@ class FilesPanel(Panel):
     title = "Unstaged Files"
 
     _list: FileList
+    sort: SortMenu
 
     def _setup(self) -> None:
         actions = self.ctx.actions
+        self.sort = SortMenu(self.panel_id, SORTS, self.ctx.sorts, self)
+        self.set_header_actions([self.sort.menuAction()])
         self._list = FileList(self.ctx, FileSource.WORKTREE,
                               ([actions.stage, actions.discard], [actions.stage_all]),
-                              self.panel_id)
+                              self.panel_id, self.sort)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._list)

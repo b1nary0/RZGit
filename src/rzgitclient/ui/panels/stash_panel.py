@@ -2,7 +2,8 @@
 
 Selecting a stash sets ``selection.commit`` to it, so Commit Details, Commit
 Files and Diff show it as they show a commit. The panel never runs git or shows
-a dialog: it asks ``actions.request_stash``.
+a dialog: it asks ``actions.request_stash``. Sort By (RZG-43): age (git's
+order), message or branch.
 """
 
 from __future__ import annotations
@@ -22,12 +23,14 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from rzgitclient.core.sort_options import SortOption, SortOptions
 from rzgitclient.git.git_models import Commit, Stash
 from rzgitclient.ui.app_actions import StashOp
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.theme.style_roles import Role, set_role
 from rzgitclient.ui.widgets.column_header import ColumnHeader
+from rzgitclient.ui.widgets.sort_menu import SortMenu
 
 NO_STASHES = "No stashes"
 NOT_CLEAN = " (commit or stash your changes first)"
@@ -36,6 +39,13 @@ _MUTED = (1, 2)  # branch and age: muted, as History's author, date and hash
 _AGE_COLUMN = 2
 _SHA = Qt.ItemDataRole.UserRole
 _MINUTE_MS = 60_000
+
+# Sort By (spec §5.4): git's order is newest first; the others then by age.
+SORTS: SortOptions[Stash] = SortOptions((
+    SortOption("age", "Age", column="Age"),
+    SortOption("message", "Message", lambda s: s.message.casefold(), column="Message"),
+    SortOption("branch", "Branch", lambda s: s.branch.casefold(), column="Branch"),
+))
 
 
 def age(date: datetime, now: datetime | None = None) -> str:
@@ -66,8 +76,12 @@ class StashPanel(Panel):
     _placeholder: QLabel
     _stash_button: QToolButton
     _ages: QTimer
+    sort: SortMenu
 
     def _setup(self) -> None:
+        self.sort = SortMenu(self.panel_id, SORTS, self.ctx.sorts, self)
+        self.sort.order_changed.connect(self._on_sorted)
+        self.set_header_actions([self.sort.menuAction()])
         self._stash_button = QToolButton()
         self._stash_button.setDefaultAction(self.ctx.actions.stash_changes)
         self._stash_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
@@ -81,6 +95,7 @@ class StashPanel(Panel):
         self._tree.setHeader(self._labels)
         self._tree.setColumnCount(len(COLUMNS))
         self._tree.setHeaderLabels(COLUMNS)
+        self.sort.attach(self._labels)
         self._tree.setRootIsDecorated(False)
         self._tree.setUniformRowHeights(True)
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -114,7 +129,7 @@ class StashPanel(Panel):
     # ---- rendering --------------------------------------------------------
 
     def _render(self, _value: object = None) -> None:
-        stashes = self.ctx.session.stashes
+        stashes = self.sort.apply(self.ctx.session.stashes)
         blocked = self._tree.blockSignals(True)
         try:
             self._tree.clear()
@@ -144,10 +159,15 @@ class StashPanel(Panel):
             for column in _MUTED:
                 item.setForeground(column, self._muted)
 
+    def _on_sorted(self) -> None:
+        self._render()
+        if (current := self._tree.currentItem()) is not None and current.isSelected():
+            self._tree.scrollToItem(current)
+
     def _update_ages(self) -> None:
-        for row, stash in enumerate(self.ctx.session.stashes):
+        for row in range(self._tree.topLevelItemCount()):
             item = self._tree.topLevelItem(row)
-            if item is not None:
+            if (stash := self.stash_at(item)) is not None:
                 item.setText(_AGE_COLUMN, age(stash.date))
         self._labels.fit(_AGE_COLUMN)
 

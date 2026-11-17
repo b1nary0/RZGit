@@ -1,6 +1,6 @@
 import unittest
 
-from rzgitclient.ui.panels.file_tree import FolderNode, build_tree, file_label
+from rzgitclient.ui.panels.file_tree import FolderNode, build_tree, file_label, sort_tree
 
 
 def shape(node: FolderNode) -> list:
@@ -16,6 +16,17 @@ class FileTreeTests(unittest.TestCase):
         root = self.tree("README.md", "docs/a.md", "docs/b.md", "src/x.py")
         self.assertEqual(shape(root), [("docs", ["a.md", "b.md"]), ("src", ["x.py"]),
                                        "README.md"])
+
+    def test_sort_tree_orders_the_files_inside_each_folder(self):
+        """RZG-43: the folders stay first, by name; each folder's files get the order."""
+        root = self.tree("b.txt", "a.py", "src/z.txt", "src/y.py", "docs/c.md")
+        by_extension = lambda files: sorted(files, key=lambda f: f.name.rsplit(".", 1)[1])
+        sort_tree(root, by_extension)
+        self.assertEqual(shape(root), [("docs", ["c.md"]), ("src", ["y.py", "z.txt"]),
+                                       "a.py", "b.txt"])
+        sort_tree(root, lambda files: files[::-1], folders_reversed=True)
+        self.assertEqual(shape(root), [("src", ["z.txt", "y.py"]), ("docs", ["c.md"]),
+                                       "b.txt", "a.py"])
 
     def test_folders_first_then_files_each_by_name(self):
         root = self.tree("b.txt", "Z/1", "a/1", "A.txt")

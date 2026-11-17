@@ -87,6 +87,7 @@ class Branch:
     upstream: str | None = None  # e.g. "origin/main"; None without one (spec §4.1)
     ahead: int | None = None  # commits not in the upstream; None without one, or when it's gone
     behind: int | None = None  # the upstream's commits not in it
+    date: datetime | None = None  # its tip's committer date (Branches' Last commit sort)
 
 
 @dataclass(frozen=True)

@@ -13,6 +13,7 @@ from rzgitclient.git.repo import canonical_path
 from rzgitclient.ui.app_actions import WorktreeOp
 from rzgitclient.ui.panels.worktrees_panel import (
     COLUMNS,
+    NAME,
     NO_WORKTREES,
     OPEN_FOLDER,
     OPEN_HERE,
@@ -22,6 +23,8 @@ from rzgitclient.ui.panels.worktrees_panel import (
     REMOVE,
     WorktreesPanel,
     PATH,
+    STATE,
+    SYNC,
     branch_text,
     short_path,
     state_text,
@@ -30,7 +33,7 @@ from rzgitclient.ui.panels.worktrees_panel import (
 )
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
 from rzgitclient.ui.widgets.column_header import ColumnHeader
-from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
+from tests.support import click_column_label, commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 WT = Worktree("/x/feature", "0123456789abcdef", "feature")
 
@@ -313,16 +316,52 @@ class WorktreesPanelTests(unittest.TestCase):
         self.panel.open_action.trigger()
         self.assertEqual(self.opened, [str(self.main), str(self.tmp / "loose")])
 
+    def test_sort_by_keeps_the_main_worktree_first_and_the_selection(self):
+        """RZG-43: Git Order, Name, Branch and Path; State and ↑↓ don't sort."""
+        self.assertEqual([a.text() for a in self.panel.sort.actions()[:4]],
+                         ["Git Order", "Name", "Branch", "Path"])
+        names = lambda: [r[0] for r in self.rows()]
+        self.assertEqual(names(), ["main", "feature", "gone", "loose"])  # git's order
+        self.item("loose").setSelected(True)
+        labels = self.panel._labels
+        click_column_label(labels, NAME)
+        self.assertEqual(names(), ["main", "feature", "gone", "loose"])
+        self.assertEqual(labels.sort_indicator, ("Name", False))
+        click_column_label(labels, NAME)
+        self.assertEqual(names(), ["main", "loose", "gone", "feature"])
+        self.assertEqual(self.panel.selected_path(), str(self.tmp / "loose"))
+        self.panel.sort.choose("branch")  # "detached at …", feature, gone
+        self.assertEqual(names(), ["main", "loose", "feature", "gone"])
+        self.assertFalse(labels.is_sortable(STATE))
+        self.assertFalse(labels.is_sortable(SYNC))
+
+    def test_states_fill_the_right_rows_after_a_sort(self):
+        self.panel.sort.set_reversed(True)  # git's order, reversed: main first still
+        self.settle()
+        states = {r[0]: r[2] for r in self.rows()}
+        self.assertEqual(self.rows()[0][0], "main")
+        self.assertEqual(states["feature"], "1 changed file")
+        self.assertEqual(states["main"], "clean")
+        self.assertEqual(states["gone"], "missing folder")
+        # One worktree's new state goes to its own row, wherever the sort put it.
+        for name in ("feature", "loose"):
+            self.item(name).setText(STATE, "")
+        self.panel._render_state(str(self.tmp / "feature"), None)
+        self.assertEqual(self.item("feature").text(STATE), "1 changed file")
+        self.assertEqual(self.item("loose").text(STATE), "")
+
     def test_a_missing_worktree_can_t_be_opened(self):
         self.item("gone").setSelected(True)
         self.assertFalse(self.panel.open_action.isEnabled())
         self.tree.itemDoubleClicked.emit(self.item("gone"), 0)
         self.assertEqual(self.opened, [])
 
-    def test_the_header_menu_has_open_new_prune_and_refresh(self):
-        self.assertEqual(self.panel.header_actions,
-                         (self.panel.open_action, self.ctx.actions.new_worktree,
-                          self.panel.prune_action, self.panel.refresh_action))
+    def test_the_header_menu_has_open_new_prune_refresh_and_sort_by(self):
+        actions = self.panel.header_actions
+        self.assertEqual(actions[:4], (self.panel.open_action, self.ctx.actions.new_worktree,
+                                       self.panel.prune_action, self.panel.refresh_action))
+        self.assertTrue(actions[4].isSeparator())
+        self.assertEqual(actions[5:], (self.panel.sort.menuAction(),))
         self.assertEqual(self.panel.prune_action.text(), PRUNE)
         (self.main / "b.txt").write_text("b\n")
         self.panel.refresh_action.trigger()

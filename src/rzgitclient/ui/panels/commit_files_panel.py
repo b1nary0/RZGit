@@ -13,9 +13,10 @@ from PySide6.QtWidgets import QVBoxLayout
 
 from rzgitclient.core.selection import FileSource
 from rzgitclient.git.git_models import Commit, Stash
-from rzgitclient.ui.panels.file_list import FileList
+from rzgitclient.ui.panels.file_list import SORTS, FileList
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
+from rzgitclient.ui.widgets.sort_menu import SortMenu
 
 
 class CommitFilesPanel(Panel):
@@ -24,9 +25,12 @@ class CommitFilesPanel(Panel):
 
     # Built when a commit is first selected: the panel starts collapsed.
     _list: FileList | None
+    sort: SortMenu  # made now: the header menu has it while the list isn't built
 
     def _setup(self) -> None:
         self._list = None
+        self.sort = SortMenu(self.panel_id, SORTS, self.ctx.sorts, self)
+        self.set_header_actions([self.sort.menuAction()])
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.set_collapsed(True)
@@ -37,7 +41,8 @@ class CommitFilesPanel(Panel):
     def _on_commit(self, commit: Commit | None) -> None:
         self.ctx.session.request_commit_files(commit.sha if commit is not None else None)
         if commit is not None and self._list is None:
-            self._list = FileList(self.ctx, FileSource.COMMIT, ([], []), self.panel_id)
+            self._list = FileList(self.ctx, FileSource.COMMIT, ([], []), self.panel_id,
+                                  self.sort)
             self.layout().addWidget(self._list)
             self._list.ensurePolished()  # styled before its first rows (see StagedPanel)
             self._list.render()

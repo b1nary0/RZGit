@@ -5,6 +5,7 @@ to while it exists. This window's worktree is in bold. Collapsed while there
 is only one worktree. The panel never runs git or opens a window: it asks
 ``actions.request_open_worktree`` (or ``request_open_worktree_here``), and
 ``actions.request_worktree`` for the rest (new, remove, prune, folder, terminal).
+Sort By (RZG-43): git's order, name, branch or path; the main worktree first.
 """
 
 from __future__ import annotations
@@ -22,12 +23,14 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from rzgitclient.core.sort_options import SortOption, SortOptions
 from rzgitclient.git.git_models import Worktree, WorktreeState
 from rzgitclient.ui.app_actions import WorktreeOp
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.theme.style_roles import Role, set_role
 from rzgitclient.ui.widgets.column_header import ColumnHeader
+from rzgitclient.ui.widgets.sort_menu import SortMenu
 
 NO_WORKTREES = "No worktrees"
 CANT_LIST = "Can't list worktrees: {error}"
@@ -104,6 +107,15 @@ def sync_tooltip(state: WorktreeState | None) -> str:
     return f"{', '.join(parts)} {state.upstream}"
 
 
+# Sort By (spec §5.4): the main worktree is first in every order.
+SORTS: SortOptions[Worktree] = SortOptions((
+    SortOption("git", "Git Order"),
+    SortOption("name", "Name", lambda w: w.name.casefold(), column="Name"),
+    SortOption("branch", "Branch", lambda w: branch_text(w).casefold(), column="Branch"),
+    SortOption("path", "Path", lambda w: w.path.casefold(), column="Path"),
+), first=lambda w: w.main)
+
+
 class WorktreesPanel(Panel):
     panel_id = "worktrees"
     title = "Worktrees"
@@ -117,6 +129,7 @@ class WorktreesPanel(Panel):
     open_action: QAction
     refresh_action: QAction
     prune_action: QAction
+    sort: SortMenu
 
     def _setup(self) -> None:
         self._tree = self._labels = None
@@ -141,8 +154,13 @@ class WorktreesPanel(Panel):
         self.prune_action = QAction(PRUNE, self)
         self.prune_action.triggered.connect(
             lambda: self.ctx.actions.request_worktree(WorktreeOp.PRUNE))
+        self.sort = SortMenu(self.panel_id, SORTS, self.ctx.sorts, self)
+        self.sort.order_changed.connect(self._on_sorted)
+        separator = QAction(self)
+        separator.setSeparator(True)
         self.set_header_actions((self.open_action, self.ctx.actions.new_worktree,
-                                 self.prune_action, self.refresh_action))
+                                 self.prune_action, self.refresh_action, separator,
+                                 self.sort.menuAction()))
 
         self._muted = QColor(self.ctx.theme.current.colors.text_muted)
         if (reader := self.ctx.worktrees) is not None:
@@ -169,6 +187,7 @@ class WorktreesPanel(Panel):
         tree.setHeader(labels)
         tree.setColumnCount(len(COLUMNS))
         tree.setHeaderLabels(COLUMNS)
+        self.sort.attach(labels)
         tree.setRootIsDecorated(False)
         tree.setUniformRowHeights(True)
         tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -209,7 +228,7 @@ class WorktreesPanel(Panel):
         blocked = tree.blockSignals(True)
         try:
             tree.clear()
-            for worktree in worktrees:
+            for worktree in self.sort.apply(worktrees):
                 item = QTreeWidgetItem(
                     [worktree.name, branch_text(worktree), "", "", short_path(worktree.path)])
                 item.setData(NAME, _PATH_ROLE, worktree.path)
@@ -231,6 +250,11 @@ class WorktreesPanel(Panel):
         self._placeholder.setVisible(not worktrees)
         self._update_actions()
 
+    def _on_sorted(self) -> None:
+        self._render()
+        if self._tree is not None and (item := self._selected_item()) is not None:
+            self._tree.scrollToItem(item)
+
     def _fill_state(self, item: QTreeWidgetItem, worktree: Worktree) -> None:
         reader = self.ctx.worktrees
         state = reader.state(worktree.path) if reader is not None else None
@@ -247,8 +271,9 @@ class WorktreesPanel(Panel):
     def _render_state(self, path: str, _state: object) -> None:
         if self._tree is None or self._labels is None:
             return
-        for row, worktree in enumerate(self.worktrees):
-            if worktree.path == path and (item := self._tree.topLevelItem(row)) is not None:
+        for row in range(self._tree.topLevelItemCount()):
+            item = self._tree.topLevelItem(row)
+            if item.data(NAME, _PATH_ROLE) == path and (worktree := self.worktree_at(item)):
                 self._fill_state(item, worktree)
                 self._labels.fit(STATE)
                 self._labels.fit(SYNC)

@@ -9,7 +9,7 @@ from rzgitclient.core.column_prefs import ColumnPrefs
 from rzgitclient.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
 from rzgitclient.ui.widgets.column_header import (PADDING_X, RESET_WIDTHS, ColumnHeader,
                                                    short_label)
-from tests.support import drag_column_edge, qt_app
+from tests.support import click_column_label, drag_column_edge, qt_app
 
 LABELS = ("Message", "Branch", "Status")
 
@@ -60,8 +60,69 @@ class ColumnHeaderTests(unittest.TestCase):
         self.assertEqual(self.header.shown_label(2), "Status")
 
     def test_labels_are_not_clickable_or_movable(self):
-        self.assertFalse(self.header.sectionsClickable())
+        self.assertFalse(self.header.sectionsClickable())  # Qt's own clicks: off
         self.assertFalse(self.header.sectionsMovable())
+        clicks = []
+        self.header.sort_clicked.connect(clicks.append)
+        click_column_label(self.header, 1)
+        self.assertEqual(clicks, [])
+
+    # ---- sorting (RZG-43) ----------------------------------------------------
+
+    def test_a_sortable_label_emits_its_text_when_clicked(self):
+        clicks = []
+        self.header.sort_clicked.connect(clicks.append)
+        self.header.set_sortable(["Branch", "Status"])
+        click_column_label(self.header, 1)
+        click_column_label(self.header, 0)  # Message: not sortable
+        click_column_label(self.header, 2)
+        self.assertEqual(clicks, ["Branch", "Status"])
+
+    def test_a_press_released_on_another_label_or_a_drag_doesn_t_sort(self):
+        clicks = []
+        self.header.sort_clicked.connect(clicks.append)
+        self.header.set_sortable(LABELS)
+        viewport = self.header.viewport()
+        y = self.header.height() // 2
+        QTest.mousePress(viewport, Qt.MouseButton.LeftButton, pos=QPoint(5, y))
+        QTest.mouseRelease(viewport, Qt.MouseButton.LeftButton,
+                           pos=QPoint(self.header.sectionViewportPosition(2) + 5, y))
+        drag_column_edge(self.header, 1, 10)
+        self.assertEqual(clicks, [])
+
+    def test_a_sortable_column_keeps_room_for_its_arrow(self):
+        """Sorting never shortens a label: the room is there sorted or not."""
+        plain = self.header.sectionSizeHint(2)
+        self.header.set_sortable(["Status"])
+        self.assertGreater(self.header.sectionSizeHint(2), plain)
+        self.header.resizeSection(2, self.header.sectionSizeHint(2))
+        self.assertEqual(self.header.shown_label(2), "Status")
+        self.header.set_sort_indicator("Status")
+        self.assertEqual(self.header.shown_label(2), "Status")
+
+    def test_the_sorted_label_shows_an_arrow_up_or_down(self):
+        self.header.set_sortable(["Status"])
+        self.header.resizeSection(2, 120)
+        self.header.fill()
+        end = self.header.sectionViewportPosition(2) + self.header.sectionSize(2)
+        area = (end - PADDING_X - 12, end - PADDING_X)
+        text = QColor(LIGHT_THEME.colors.column_header_text).name()
+
+        def arrow_rows() -> list[int]:
+            image = self.header.grab().toImage()
+            return [y for y in range(image.height())
+                    if any(QColor(image.pixel(x, y)).name() == text for x in range(*area))]
+
+        self.assertEqual(arrow_rows(), [])
+        self.header.set_sort_indicator("Status", descending=False)
+        up = arrow_rows()
+        self.assertTrue(up)
+        self.header.set_sort_indicator("Status", descending=True)
+        self.assertTrue(arrow_rows())
+        self.header.set_sort_indicator(None)
+        self.assertEqual(arrow_rows(), [])
+        self.header.set_sort_indicator("Branch")  # not sortable: no arrow anywhere
+        self.assertEqual(self.header.sort_indicator, ("Branch", False))
 
     # ---- look --------------------------------------------------------------
 

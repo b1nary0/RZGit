@@ -13,8 +13,8 @@ from rzgitclient.ui.panels.files_panel import FilesPanel
 from rzgitclient.ui.panels.staged_panel import StagedPanel
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
 from rzgitclient.ui.widgets.column_header import ColumnHeader
-from tests.support import (commit_file, drag_column_edge, git, make_panel_context, make_repo,
-                           qt_app, wait_idle)
+from tests.support import (click_column_label, commit_file, drag_column_edge, git,
+                           make_panel_context, make_repo, qt_app, wait_idle)
 
 W, I = FileSource.WORKTREE, FileSource.INDEX
 
@@ -454,6 +454,77 @@ class FilesPanelTests(unittest.TestCase):
         with mock.patch.object(self.session, "stage") as stage:
             self.unstaged._list._move([self.folder("docs", W)])
         stage.assert_called_once_with(("docs/a.md",))
+
+
+    # ---- Sort By (RZG-43) --------------------------------------------------------
+
+    def make_sortable_changes(self):
+        self.make_nested_changes()
+        (self.repo / "old.txt").unlink()  # D, which sorts before M and U
+
+    def test_sort_by_is_the_header_menu(self):
+        self.assertEqual(self.unstaged.header_actions, (self.unstaged.sort.menuAction(),))
+        self.assertEqual([a.text() for a in self.unstaged.sort.actions()[:2]], ["Name", "Status"])
+
+    def test_flat_by_status_then_git_s_order(self):
+        self.make_sortable_changes()
+        self.open()
+        self.ctx.actions.file_tree.setChecked(False)
+        self.addCleanup(self.ctx.actions.file_tree.setChecked, True)
+        self.unstaged.sort.choose("status")
+        self.assertEqual(self.shown(W), [
+            ("old.txt", "D"), ("a.txt", "M"), ("docs/a.md", "U"), ("src/app/core.py", "U"),
+            ("src/app/ui/panel.py", "U"), ("src/app/ui/theme.py", "U")])
+        self.unstaged.sort.set_reversed(True)
+        self.assertEqual([path for path, _ in self.shown(W)][:2], ["docs/a.md", "src/app/core.py"])
+        self.assertEqual([path for path, _ in self.shown(W)][-2:], ["a.txt", "old.txt"])
+
+    def test_in_the_tree_the_order_applies_inside_each_folder(self):
+        self.make_sortable_changes()
+        self.open()
+        self.unstaged.sort.choose("status")
+        self.assertEqual(self.nested(W), [
+            ("docs", ["a.md"]),
+            ("src/app", [("ui", ["panel.py", "theme.py"]), "core.py"]),
+            "old.txt", "a.txt",
+        ])
+
+    def test_name_reversed_reverses_the_folders_too_they_stay_first(self):
+        self.make_sortable_changes()
+        self.open()
+        self.unstaged.sort.set_reversed(True)
+        self.assertEqual(self.nested(W), [
+            ("src/app", [("ui", ["theme.py", "panel.py"]), "core.py"]),
+            ("docs", ["a.md"]),
+            "old.txt", "a.txt",
+        ])
+
+    def test_the_status_label_sorts_and_the_selection_stays(self):
+        self.make_sortable_changes()
+        self.open()
+        self.select(W, "a.txt")
+        labels = self.unstaged._list.labels
+        click_column_label(labels, 1)
+        self.assertEqual(self.unstaged.sort.order.key, "status")
+        self.assertEqual(labels.sort_indicator, ("Status", False))
+        self.assertEqual(self.nested(W)[-2:], ["old.txt", "a.txt"])
+        self.assertEqual(self.highlighted(W), ["a.txt"])
+        self.assertEqual(self.tree(W).currentItem(), self.item("a.txt", W))
+        self.refresh()  # a refresh keeps the order
+        self.assertEqual(self.nested(W)[-2:], ["old.txt", "a.txt"])
+
+    def test_staged_files_has_its_menu_before_its_list_and_the_list_uses_it(self):
+        self.assertIsNone(self.staged._list)
+        self.assertEqual(self.staged.header_actions, (self.staged.sort.menuAction(),))
+        self.staged.sort.set_reversed(True)
+        for name in ("a.txt", "old.txt"):
+            (self.repo / name).write_text("changed")
+        git(self.repo, "add", "a.txt", "old.txt")
+        self.open()
+        self.assertEqual(self.nested(I), ["old.txt", "a.txt"])
+        self.assertEqual(self.ctx.sorts.order("staged").reversed, True)
+        self.assertIsNone(self.ctx.sorts.order("files"))  # each panel its own
+
 
 
 if __name__ == "__main__":

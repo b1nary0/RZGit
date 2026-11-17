@@ -752,6 +752,20 @@ class RepoBranchTests(unittest.TestCase):
     def test_no_remotes(self):
         self.assertEqual(self.repo.remotes(), [])
 
+    def test_branches_have_their_tip_s_committer_date(self):
+        """RZG-43: Branches' Last Commit sort."""
+        import os
+        import subprocess
+        from datetime import datetime
+        env = {**os.environ, "GIT_COMMITTER_DATE": "2026-01-02T03:04:05+01:00"}
+        git(self.path, "switch", "-q", "-c", "dated")
+        (self.path / "d.txt").write_text("d")
+        git(self.path, "add", "d.txt")
+        subprocess.run(["git", "commit", "-q", "-m", "dated"], cwd=self.path, check=True, env=env)
+        dates = {b.name: b.date for b in self.repo.branches()}
+        self.assertEqual(dates["dated"], datetime.fromisoformat("2026-01-02T03:04:05+01:00"))
+        self.assertIsNotNone(dates["main"])
+
     def test_no_branch_is_merged_into_an_unborn_head(self):
         git(self.path, "switch", "-q", "--orphan", "fresh")
         self.assertEqual(self.names(), {"main": (False, False)})

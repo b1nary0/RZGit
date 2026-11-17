@@ -10,9 +10,10 @@ from PySide6.QtWidgets import QVBoxLayout
 
 from rzgitclient.core.selection import FileSource
 from rzgitclient.git.git_models import FileStatus
-from rzgitclient.ui.panels.file_list import FileList
+from rzgitclient.ui.panels.file_list import SORTS, FileList
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
+from rzgitclient.ui.widgets.sort_menu import SortMenu
 
 
 class StagedPanel(Panel):
@@ -22,9 +23,12 @@ class StagedPanel(Panel):
     # Built when something is first staged: the panel starts collapsed (no
     # repo yet), and the list would only cost startup time (6 ms).
     _list: FileList | None
+    sort: SortMenu  # made now: the header menu has it while the list isn't built
 
     def _setup(self) -> None:
         self._list = None
+        self.sort = SortMenu(self.panel_id, SORTS, self.ctx.sorts, self)
+        self.set_header_actions([self.sort.menuAction()])
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.set_collapsed(True)
@@ -36,7 +40,8 @@ class StagedPanel(Panel):
         if self._list is None and any(f.is_staged for f in status):
             actions = self.ctx.actions
             self._list = FileList(self.ctx, FileSource.INDEX,
-                                  ([actions.unstage], [actions.unstage_all]), self.panel_id)
+                                  ([actions.unstage], [actions.unstage_all]), self.panel_id,
+                                  self.sort)
             self.layout().addWidget(self._list)
             # Styled before its first rows: a tree made after the window was
             # shown would size them before the stylesheet's row padding applies.

@@ -35,6 +35,7 @@ _COLOUR_BLIND = "theme/colour_blind"
 _COMMIT_DRAFTS = "commit/drafts"  # older versions only; moved to files
 _SAVED_LAYOUTS = "layouts/saved"
 _COLUMN_PREFS = "columns/prefs"
+_SORT_PREFS = "sort/prefs"
 
 
 class AppSettings:
@@ -219,6 +220,22 @@ class AppSettings:
     @column_prefs.setter
     def column_prefs(self, prefs: dict[str, dict[str, Any]]) -> None:
         self._set(_COLUMN_PREFS, json.dumps(prefs) if prefs else None)
+
+    @property
+    def sort_prefs(self) -> dict[str, dict[str, Any]]:
+        """Each panel's sort order by panel id, as ``SortPrefs`` wrote it ({} if
+        none, or not a JSON object; spec §6.3). ``SortPrefs`` checks the entries."""
+        raw = self._settings.value(_SORT_PREFS, "", str)
+        try:
+            data = json.loads(raw) if raw else {}
+        except ValueError as exc:
+            log.warning("Saved sort orders aren't valid JSON (%s); ignoring them", exc)
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @sort_prefs.setter
+    def sort_prefs(self, prefs: dict[str, dict[str, Any]]) -> None:
+        self._set(_SORT_PREFS, json.dumps(prefs) if prefs else None)
 
     def sync(self) -> None:
         """Write pending changes to disk now (Qt also does this on exit)."""

@@ -1,8 +1,8 @@
 """The open main windows (spec §8.1).
 
 Made once by app.py. Each main window gets its own RepoSession, RepoWatcher,
-WorktreeReader, Selection and AppActions; the settings, theme, commit drafts and column
-choices are shared.
+WorktreeReader, Selection and AppActions; the settings, theme, commit drafts, column
+choices and sort orders are shared.
 A worktree is shown in at most one window: opening it again raises that one.
 """
 
@@ -20,6 +20,7 @@ from rzgitclient.core.commit_drafts import CommitDrafts
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.repo_watcher import RepoWatcher
 from rzgitclient.core.selection import Selection
+from rzgitclient.core.sort_prefs import SortPrefs
 from rzgitclient.core.worktree_reader import WorktreeReader
 from rzgitclient.git.repo import GitError, Repo, canonical_path
 from rzgitclient.ui.app_actions import AppActions
@@ -51,13 +52,15 @@ class _Window:
 
 class AppWindows(QObject):
     def __init__(self, app: QApplication, settings: AppSettings, theme: ThemeManager,
-                 drafts: CommitDrafts, columns: ColumnPrefs, parent: QObject | None = None):
+                 drafts: CommitDrafts, columns: ColumnPrefs, sorts: SortPrefs,
+                 parent: QObject | None = None):
         super().__init__(parent)
         self._app = app
         self._settings = settings
         self._theme = theme
         self._drafts = drafts
         self._columns = columns
+        self._sorts = sorts
         self._open: list[_Window] = []
         # Every window follows its repository while the app is active (spec §4.3).
         app.applicationStateChanged.connect(self._on_app_state)
@@ -106,7 +109,7 @@ class AppWindows(QObject):
         actions = AppActions(session, selection)
         ctx = PanelContext(session=session, selection=selection, theme=self._theme,
                            actions=actions, drafts=self._drafts, columns=self._columns,
-                           worktrees=worktrees)
+                           sorts=self._sorts, worktrees=worktrees)
         window = MainWindow(ctx, self._settings, self, restore_geometry=anchor is None)
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         # Its own objects are deleted with it (after its panels, which are connected

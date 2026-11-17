@@ -77,6 +77,8 @@ src/rzgitclient/
     network_worker.py           NetworkWorker, NetworkCommand: remote commands (fetch) on a thread of their own
     commit_drafts.py            CommitDrafts: the unfinished commit message of each repository (a file each)
     column_prefs.py             ColumnPrefs: each panel's column choices (hidden columns, widths)
+    sort_options.py             SortOption, SortOptions, SortOrder: a panel's sort orders (plain Python)
+    sort_prefs.py               SortPrefs: each panel's chosen sort order
     commit_graph.py             CommitGraph, GraphRow: History's branch graph lanes (plain Python)
     selection.py                Selection: what the user has selected (commit, file)
     repo_watcher.py             RepoWatcher: refreshes the session when the repository changes on disk
@@ -104,6 +106,7 @@ src/rzgitclient/
       section_header.py         SectionHeader: shared widget used by frames and panels
       panel_segment.py          PanelSegment, PanelSegments: a panel's own internal sections
       column_header.py          ColumnHeader: the column labels of a list (painted from the theme)
+      sort_menu.py              SortMenu: a panel's Sort By menu and its sort order
     panels/
       panel.py                  Panel, PanelContext
       panel_registry.py         PANEL_TYPES, panel_type(id)
@@ -777,6 +780,7 @@ class PanelContext:
     actions: AppActions
     drafts: CommitDrafts                           # the Commit panel's unfinished messages
     columns: ColumnPrefs                           # each panel's column choices (ColumnHeader)
+    sorts: SortPrefs                               # each panel's sort order (SortMenu)
     worktrees: WorktreeReader | None = None        # the window's worktree reader (§4.4)
 
 class Panel(QWidget):
@@ -805,11 +809,36 @@ class Panel(QWidget):
 
 **The header menu** (RZG-48): `header_actions` are the panel's commands for the panel as a
 whole: Open, New Worktree…, Prune Missing Worktrees… and Refresh in Worktrees (RZG-48,
-RZG-49), later a sort order (RZG-43). The layout shows them (§6.2): a **⋯** button at the right of the section
+RZG-49), and **Sort By** (RZG-43, below). The layout shows them (§6.2): a **⋯** button at the right of the section
 header in a split, and the menu of the panel's tab when it is right-clicked in a tab
 group. A panel with none shows no button and no menu. The panel owns its actions (they
 are its children, or come from `ctx.actions`) and keeps their enabled state; the layout
 adds none of its own.
+
+**Sorting** (RZG-43). A panel whose list can be sorted declares its orders as a
+`SortOptions` (`core/sort_options.py`, plain Python): a tuple of `SortOption`s, each with
+a saved key, a label, a key function on the panel's own items, a default direction
+(newest first is descending) and optionally the column label that picks it. The first
+option is the **natural order**, git's or the app's own, with no key function: the
+default and the way back. `apply(items, order)` is a stable sort, so ties keep the
+natural order; `first` names rows kept at the top in every order (the main worktree).
+- **`SortMenu`** (`ui/widgets/sort_menu.py`) is a panel's **Sort By ▸** submenu: the options
+  as radio items, a separator, then **Reversed** (relative to the option's default
+  direction). The panel puts its `menuAction()` last in its header actions. It holds the
+  panel's `SortOrder` (an option's key and `reversed`), read from `ctx.sorts` when it is
+  built and written there on each change, and emits `order_changed`; the panel renders
+  again with `sort.apply(items)`.
+- **Column labels:** `attach(column_header)` makes the labels of its options' columns
+  clickable (§5.2). Clicking one picks that option; clicking the current one flips
+  Reversed. The sorted column's label shows an arrow.
+- **Through a re-sort** the selection stays on the same items (by identity: the file,
+  the stash's sha, the worktree's path, the branch's name), and the current row is
+  scrolled into view. A refresh keeps the order.
+- A panel that builds its list later (Staged Files, Commit Files) makes its `SortMenu`
+  in `_setup`, so the menu is there while it is collapsed, and its list uses the saved
+  order.
+- **History** isn't sortable: its paging and graph need commit order, and its header
+  menu keeps Topological Order (RZG-58). Grouping is a separate feature (RZG-53).
 
 `set_collapsed(True)` asks the layout to give the panel's space to its neighbours for now,
 without hiding it (§6.2): the panel stays in the tree, View → Panels still shows it
@@ -910,7 +939,11 @@ theme's `column_header_*` tokens (§7.1); the owning panel passes the theme on i
   ("Status" → "S.."), cut off if even that doesn't fit; its tooltip then gives it whole.
   A column's size hint is the whole label's, so fitting a column to its contents never
   shortens its label: only a column made narrower than that does.
-- **Not clickable:** labels don't sort or select.
+- **Sorting** (RZG-43): a label is clickable only when the panel's `SortMenu` has an
+  option for its column (§5.1); others don't sort or select. A sortable column's size
+  hint makes room for the arrow, so sorting never shortens its label. The sorted
+  column's label shows a small triangle at its right edge, in the label's text colour:
+  pointing up for ascending (A to Z; in Age, newest first), down for descending.
 - **Showing and hiding columns:** right-clicking the labels gives a checkable list of the
   columns. The main column (Subject, Message, Name; the first, except in History,
   whose first is the Graph, `ColumnHeader(main_column=...)`) is always shown, so
@@ -966,7 +999,7 @@ The first three are extracted from the original `main_window.py` with the same b
 | Panel | id | Default area | Shows | Writes |
 |---|---|---|---|---|
 | ControlsPanel | `controls` | Controls | Open, Refresh, Fetch (`ctx.actions`), the branch button | switches and makes branches, through `actions.request_branch`; fetches, through `actions.fetch`; (later: pull/push) |
-| BranchesPanel | `branches` | Sidebar | branches, current in bold | branch operations, through `actions.request_branch` |
+| BranchesPanel | `branches` | Sidebar | branches, current in bold; by name or last commit | branch operations, through `actions.request_branch` |
 | StashPanel | `stash` | Sidebar | "Stashes": message, branch and age of each, newest first | `selection.commit` (a `Stash`); stash operations, through `actions.request_stash` |
 | HistoryPanel | `history` | Main pane | Uncommitted changes, then the commit table; no row while a stash is selected | `selection.commit` |
 | CommitDetailsPanel | `commit_details` | Main pane | "Commit Details", below History and Diff: the selected commit's message, author, committer, SHA, parents and refs; collapsed for Uncommitted changes | `selection.commit` (a parent link) |
@@ -1000,6 +1033,8 @@ keeps the other operations. Like Branches, it never runs git or shows a dialog.
 **Branches** (BranchesPanel, RZG-35) is where branches are worked with. It never runs
 git or shows a dialog: it asks `actions.request_branch(op, name)` (§8), and the list
 follows the session.
+- **Sort By** (RZG-43; its header menu's only entry): **Name** (git's order, the default)
+  or **Last Commit** (the tip's committer date, `Branch.date`, newest first).
 - **Double-click** a branch to switch to it (MainWindow confirms first). The current
   branch, and the "(no commits)" row of a fresh repository, do nothing.
 - **Right-click** a branch for its menu, built by `menu_for(name)`:
@@ -1050,7 +1085,11 @@ runs git or shows a dialog.
   Then (RZG-49) **Open Folder** and **Open Terminal**, disabled on a missing one, and
   **Remove…**, disabled with the reason: "(main worktree)", "(this window)" or
   "(locked)". Each asks `ctx.actions.request_worktree(op, path)`.
-- The selection is kept by path through refreshes.
+- The selection is kept by path through refreshes and re-sorts.
+- **Sort By** (RZG-43), last in the header menu: **Git Order** (the default), **Name**,
+  **Branch** and **Path**, the last three also from their column labels (ignoring case).
+  State and ↑↓ don't sort. The main worktree is first in every order. (RZG-50 adds
+  Recently used.)
 
 **Stashes** (StashPanel, RZG-36) lists `session.stashes`, newest first, in three
 labelled columns: **Message**, **Branch** and **Age** ("now", "5 min", "3 h", "2 days", "3 weeks",
@@ -1067,6 +1106,9 @@ says "No stashes". Like Branches, it never runs git or shows a dialog.
   (§4.1): while `session.status` isn't empty they are disabled and say why: "(commit or
   stash your changes first)".
 - **Stash Changes…** (`actions.stash_changes`, §8) is a button above the list.
+- **Sort By** (RZG-43), the header menu: **Age** (git's order, newest first, the
+  default), **Message** and **Branch** (ignoring case, then by age), each from its column
+  label too.
 
 **Unstaged Files** (FilesPanel) and **Staged Files** (StagedPanel, `staged_panel.py`)
 are one list each, as in GitKraken. Both are a thin panel around a `FileList`
@@ -1157,6 +1199,11 @@ can't collapse), it shows the placeholder "No commit selected".
   (`src/rzgitclient/ui`). Folders come first, then files, each by name. With it off, the
   list is flat, one full path per row, as before. The tree is built by `file_tree.py`,
   plain Python tested without Qt.
+  - **Sort By** (RZG-43), in each of the three panels' header menu, saved per panel:
+    **Name** (the default: git's path order when flat; by name inside each folder in the
+    tree) and **Status** (the status letter as shown, then that order), from the Name and
+    Status labels too. In the tree, folders stay first and the order applies inside each
+    folder (`sort_tree`); Name reversed reverses the folders too.
   - **Expanded by default.** A folder the user collapses stays collapsed, by its path,
     through refreshes, staging and toggling, while the app runs (not saved). Opening
     another repository forgets them.
@@ -1270,7 +1317,7 @@ theme when Qt asks, so a theme change is one `dataChanged`.
     painting (it has no text, and the style draws no background for it), which costs more
     than the graph; pens and brushes are made once per theme. A full repaint of History
     on RZE costs about 19 ms against 16 ms without the graph (offscreen).
-  - History keeps commit order: it isn't sortable while the graph is shown (RZG-43).
+  - History keeps commit order: it isn't sortable (§5.1, RZG-43).
 - **Updates:** an appended page inserts rows. Any other change resets the model; the panel
   then re-selects the same commit and keeps the same commit at the top of the view (or
   stays at the top, so new commits show).
@@ -1688,7 +1735,7 @@ typed accessors (`last_repo`, `layout`, `layout_preset`, `window_geometry`,
 `app.py` creates it and `AppWindows` passes it to each `MainWindow`; panels don't get it.
 One `AppSettings` is shared by every window. What panels save goes through a small object
 in `ctx` that holds only that: the commit draft through `CommitDrafts` (§5.4), column
-choices through `ColumnPrefs`.
+choices through `ColumnPrefs`, sort orders through `SortPrefs`.
 
 **What goes where** (RZG-47): `AppSettings` holds options, settings and general app state:
 preferences, layout and theme customisation (column choices among them), `last_repo`,
@@ -1702,6 +1749,13 @@ label: `column_prefs` is JSON, `{"stash": {"hidden": ["Branch"], "widths": {"Age
 60}}}`: the hidden columns and the widths the user dragged. A panel with columns hidden
 at first (§5.2) keeps `"hidden": []` once the user shows them all. Malformed entries are
 dropped (logged). Each change is written at once.
+
+**Sort orders** (`SortPrefs`, `core/sort_prefs.py`, RZG-43) are app-wide too, per panel
+id: `sort_prefs` is JSON, `{"stash": {"by": "branch", "reversed": true}}`. A panel on its
+natural order, not reversed, has no entry. Malformed entries are dropped (logged), and an
+unknown key reads as the natural order. Each change is written at once. A panel reads
+its order when it is built; a change applies to that panel only, so other open windows
+keep theirs until they are built again (the last change wins).
 
 **Stored folder paths** (RZG-29) are canonical: `canonical_path(path)` (`git/repo.py`)
 expands `~` and resolves symlinks. `Repo.root` is git's `--show-toplevel` made canonical,

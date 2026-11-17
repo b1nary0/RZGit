@@ -14,6 +14,7 @@ from rzgitclient.core.column_prefs import ColumnPrefs
 from rzgitclient.core.commit_drafts import CommitDrafts
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import Selection
+from rzgitclient.core.sort_prefs import SortPrefs
 from rzgitclient.core.worktree_reader import WorktreeReader
 from rzgitclient.ui.app_actions import AppActions
 from rzgitclient.ui.theme.app_theme import AppTheme
@@ -32,6 +33,7 @@ class PanelContext:
     actions: AppActions
     drafts: CommitDrafts  # the Commit panel's unfinished messages
     columns: ColumnPrefs  # each panel's column choices (ColumnHeader, spec §5.2)
+    sorts: SortPrefs  # each panel's sort order (SortMenu, spec §5.1)
     worktrees: WorktreeReader | None = None  # the Worktrees window's (spec §4.4)
 
 

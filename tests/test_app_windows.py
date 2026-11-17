@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QStyle
 from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.column_prefs import ColumnPrefs
 from rzgitclient.core.commit_drafts import CommitDrafts
+from rzgitclient.core.sort_prefs import SortPrefs
 from rzgitclient.ui.app_actions import WorktreeOp
 from rzgitclient.ui.app_windows import AppWindows
 from rzgitclient.ui.layout.layout_model import Area, to_dict
@@ -36,7 +37,7 @@ class AppWindowsTests(unittest.TestCase):
         self.drafts = CommitDrafts(self.tmp / "drafts")
         self.columns = ColumnPrefs()
         self.windows = AppWindows(self.app, self.settings, self.theme, self.drafts,
-                                  self.columns)
+                                  self.columns, SortPrefs())
         self.addCleanup(self.close_all)
         self.one = self.repo("one")
         self.two = self.repo("two")

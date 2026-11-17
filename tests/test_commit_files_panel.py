@@ -33,6 +33,20 @@ class CommitFilesPanelTests(unittest.TestCase):
         wait_idle(self.session)
         self.third = self.session.history[0]
 
+    def test_sort_by_is_there_before_the_list_and_sorts_by_status(self):
+        """RZG-43: made in _setup, so the collapsed panel's header menu has it."""
+        panel = CommitFilesPanel(self.ctx)
+        self.addCleanup(panel.deleteLater)
+        self.assertIsNone(panel._list)
+        self.assertEqual(panel.header_actions, (panel.sort.menuAction(),))
+        panel.sort.choose("status")  # M, R: the same; reversed puts the rename first
+        panel.sort.set_reversed(True)
+        self.selection.commit = self.third
+        wait_idle(self.session)
+        tree = panel._list._tree
+        self.assertEqual([tree.topLevelItem(i).text(1) for i in range(tree.topLevelItemCount())],
+                         ["R", "M"])
+
     def tearDown(self):
         self.session.shutdown()
         self._tmp.cleanup()

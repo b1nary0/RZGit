@@ -1,3 +1,5 @@
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,6 +46,34 @@ class BranchesPanelTests(unittest.TestCase):
         self.assertEqual(self.rows(), ["feature", "main"])
         bold = {self.list.item(i).text(): self.list.item(i).font().bold() for i in range(2)}
         self.assertEqual(bold, {"feature": False, "main": True})
+
+    def commit_dated(self, name: str, when: str) -> None:
+        (self.repo / f"{name}.txt").write_text(name)
+        git(self.repo, "add", f"{name}.txt")
+        subprocess.run(["git", "commit", "-q", "-m", name], cwd=self.repo, check=True,
+                       env={**os.environ, "GIT_COMMITTER_DATE": when})
+
+    def test_sort_by_name_or_last_commit(self):
+        """RZG-43: the header menu's only entry; newest first; the selection stays."""
+        self.assertEqual(self.panel.header_actions, (self.panel.sort.menuAction(),))
+        self.commit_dated("first", "2026-01-01T00:00:00+00:00")
+        git(self.repo, "branch", "old")
+        self.commit_dated("second", "2026-03-01T00:00:00+00:00")
+        git(self.repo, "switch", "-q", "-c", "zed")
+        self.commit_dated("third", "2026-02-01T00:00:00+00:00")
+        git(self.repo, "switch", "-q", "main")
+        git(self.repo, "reset", "-q", "--hard", "HEAD")
+        self.ctx.session.open(self.repo)
+        wait_idle(self.ctx.session)
+        self.assertEqual(self.rows(), ["main", "old", "zed"])
+        self.list.setCurrentRow(1)  # old
+        self.panel.sort.choose("last_commit")
+        self.assertEqual(self.rows(), ["main", "zed", "old"])  # Mar, Feb, Jan
+        self.assertEqual(self.list.currentItem().text(), "old")
+        self.panel.sort.set_reversed(True)
+        self.assertEqual(self.rows(), ["old", "zed", "main"])
+        self.assertTrue(self.list.item(2).font().bold())  # the current branch, still bold
+        self.assertEqual(self.ctx.sorts.order("branches").key, "last_commit")
 
     def test_selection_survives_refresh(self):
         commit_file(self.repo, "a.txt", "1", "first")

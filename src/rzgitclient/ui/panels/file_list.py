@@ -7,7 +7,8 @@ it lists ``session.commit_files``, and has no staging menu or double-click. Each
 ``selection.files`` that are its own, so one of the two holds the selection
 at a time, and Selection decides what stays selected after a refresh (§4.2).
 With Show Files as Tree on, files sit under folder rows (``file_tree.py``);
-selecting a folder selects every file under it.
+selecting a folder selects every file under it. Sort By (RZG-43): the owning
+panel's ``SortMenu`` orders the rows, inside each folder in the tree.
 """
 
 from __future__ import annotations
@@ -27,11 +28,13 @@ from PySide6.QtWidgets import (
 )
 
 from rzgitclient.core.selection import FileSelection, FileSource, other_source
+from rzgitclient.core.sort_options import SortOption, SortOptions
 from rzgitclient.git.git_models import FileStatus
-from rzgitclient.ui.panels.file_tree import FolderNode, build_tree, file_label
+from rzgitclient.ui.panels.file_tree import FolderNode, build_tree, file_label, sort_tree
 from rzgitclient.ui.panels.panel import PanelContext
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.widgets.column_header import ColumnHeader
+from rzgitclient.ui.widgets.sort_menu import SortMenu
 
 STATUS_LABELS = {
     "M": "Modified",
@@ -53,8 +56,22 @@ _ROW = Qt.ItemDataRole.UserRole  # (FileSelection, status code) of a file row
 _FOLDER = Qt.ItemDataRole.UserRole + 1  # the folder path of a folder row
 _INDENT = 10  # px per tree level
 
+Row = tuple[FileStatus, str]  # a file row: its status and code (see rows())
 
-def rows(changes: Iterable[FileStatus], source: FileSource) -> list[tuple[FileStatus, str]]:
+
+def _status_letter(row: Row) -> str:
+    return STATUS_LETTERS.get(row[1], row[1])
+
+
+# Sort By (spec §5.4), the same in the three file panels, each saving its own.
+# Name is git's path order when flat, by name in each folder in the tree.
+SORTS: SortOptions[Row] = SortOptions((
+    SortOption("name", "Name", column="Name"),
+    SortOption("status", "Status", _status_letter, column="Status"),
+))
+
+
+def rows(changes: Iterable[FileStatus], source: FileSource) -> list[Row]:
     """The rows for ``source``, as ``(status, code)``; ``code`` picks label and colour."""
     if source is FileSource.COMMIT:  # a commit's changes, coded like staged ones
         return [(f, f.index) for f in changes]
@@ -95,10 +112,12 @@ class FileList(QWidget):
 
     def __init__(self, ctx: PanelContext, source: FileSource,
                  menu: tuple[list[QAction], list[QAction]], panel_id: str,
-                 parent: QWidget | None = None):
-        """``panel_id``: the owning panel's, which keys its column choices."""
+                 sort: SortMenu, parent: QWidget | None = None):
+        """``panel_id``: the owning panel's, which keys its column choices;
+        ``sort``: its Sort By menu (made by the panel, so it is there before the list)."""
         super().__init__(parent)
         self.ctx, self.source, self._menu_actions = ctx, source, menu
+        self.sort = sort
         self._showing = False  # putting Selection on screen: not the user's choice
         # Passing the user's choice to Selection: the tree already shows it, and
         # mid-click it is half done (current moved, not selected yet), so putting
@@ -112,6 +131,8 @@ class FileList(QWidget):
         self._tree.setHeader(self.labels)
         self._tree.setColumnCount(len(COLUMNS))
         self._tree.setHeaderLabels(COLUMNS)
+        sort.attach(self.labels)
+        sort.order_changed.connect(self._on_sorted)
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         layout = QVBoxLayout(self)
@@ -171,10 +192,14 @@ class FileList(QWidget):
 
         changes = rows(self._changes(), self.source)
         if tree:
-            items = self._tree_items(build_tree((f.path, (f, code)) for f, code in changes),
-                                     file_item, QColor(theme.colors.text_muted))
+            root = build_tree((f.path, (f, code)) for f, code in changes)
+            order = self.sort.order
+            by_name = order.key == SORTS.default.key
+            sort_tree(root, lambda files: self.sort.apply(files, of=lambda node: node.data),
+                      folders_reversed=by_name and order.reversed)
+            items = self._tree_items(root, file_item, QColor(theme.colors.text_muted))
         else:
-            items = [file_item(f, code) for f, code in changes]
+            items = [file_item(f, code) for f, code in self.sort.apply(changes)]
         blocked = self._tree.blockSignals(True)
         try:
             self._tree.clear()
@@ -208,6 +233,13 @@ class FileList(QWidget):
             items.append(item)
         items.extend(file_item(*node.data) for node in folder.files)
         return items
+
+    def _on_sorted(self) -> None:
+        """Rows in the new order; the selection stays (it is Selection's), and the
+        current row is scrolled into view."""
+        self.render()
+        if (current := self._tree.currentItem()) is not None:
+            self._tree.scrollToItem(current)
 
     def _show_selection(self, *_args: object) -> None:
         """Select the rows ``selection.files`` has of this panel's (none, if the

@@ -15,15 +15,19 @@ user gives the other columns are kept, and saved per panel in
 Column Widths** fits them all. Qt's own resizing is off (``Fixed``): this
 class does the dragging, the cursor and the fitting. Right-clicking the
 labels also shows or hides columns (the main one is always shown).
+
+Sorting (RZG-43): the labels a panel's ``SortMenu`` names are clickable
+(``set_sortable``; a click emits ``sort_clicked``), and the sorted one shows
+an arrow at its right edge (``set_sort_indicator``).
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 
-from PySide6.QtCore import QAbstractItemModel, QEvent, QRect, QSize, Qt
-from PySide6.QtGui import (QColor, QHelpEvent, QMouseEvent, QPainter, QPaintEvent,
-                           QResizeEvent)
+from PySide6.QtCore import QAbstractItemModel, QEvent, QPointF, QRect, QSize, Qt, Signal
+from PySide6.QtGui import (QColor, QHelpEvent, QMouseEvent, QPainter, QPainterPath,
+                           QPaintEvent, QResizeEvent)
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QMenu, QStyle, QToolTip, QWidget
 
 from rzgitclient.core.column_prefs import ColumnPrefs
@@ -34,6 +38,8 @@ PADDING_X, PADDING_Y = 6, 4  # around a label's text
 SEPARATOR_INSET = 0.2  # of the row's height, above and below a separator (60% drawn)
 MAIN_COLUMN = 0  # the default main column: always shown; takes what the others leave
 RESET_WIDTHS = "Reset Column Widths"
+ARROW_SCALE = 0.45  # the sort arrow's width, of the font's height
+ARROW_GAP = 4  # between a sortable label's text and its arrow
 
 
 def short_label(label: str) -> str:
@@ -46,6 +52,8 @@ class ColumnHeader(QHeaderView):
     the columns' saved widths and the columns it hides in ``prefs``. ``main_column``
     (Subject, Message, Name) is always shown and takes what the others leave: the
     first, except where another comes before it (History's graph)."""
+
+    sort_clicked = Signal(str)  # a sortable label was clicked: its text (RZG-43)
 
     def __init__(self, panel_id: str, prefs: ColumnPrefs, theme: AppTheme,
                  parent: QWidget | None = None, *, hidden_by_default: Iterable[str] = (),
@@ -60,6 +68,9 @@ class ColumnHeader(QHeaderView):
         self._user: dict[int, int] = {}  # the user's widths, by column (never the main one)
         # A separator being dragged: (left, right, their widths, the press's x).
         self._pair: tuple[int, int, int, int, int] | None = None
+        self._sortable: frozenset[str] = frozenset()  # labels that sort when clicked
+        self._indicator: tuple[str, bool] | None = None  # (label, descending): the arrow
+        self._pressed = -1  # the sortable label a press started on
         self.setSectionsClickable(False)
         self.setSectionsMovable(False)
         self.setHighlightSections(False)
@@ -85,13 +96,14 @@ class ColumnHeader(QHeaderView):
     def shown_label(self, logical: int) -> str:
         """The label as drawn at the column's width: whole, or shortened."""
         label = self.label(logical)
-        room = self.sectionSize(logical) - 2 * PADDING_X
+        room = self.sectionSize(logical) - 2 * PADDING_X - self._arrow_room(logical)
         return label if self.fontMetrics().horizontalAdvance(label) <= room else short_label(label)
 
     def sectionSizeFromContents(self, logical: int) -> QSize:
         """The whole label's size: fitting a column never shortens its label."""
         metrics = self.fontMetrics()
-        width = metrics.horizontalAdvance(self.label(logical)) + 2 * PADDING_X
+        width = (metrics.horizontalAdvance(self.label(logical)) + 2 * PADDING_X
+                 + self._arrow_room(logical))
         return QSize(width, metrics.height() + 2 * PADDING_Y + 1)  # + the line under the row
 
     def _update_minimum(self) -> None:
@@ -100,6 +112,55 @@ class ColumnHeader(QHeaderView):
         widest = max((metrics.horizontalAdvance(short_label(self.label(c)))
                       for c in range(self.count())), default=0)
         self.setMinimumSectionSize(widest + 2 * PADDING_X)
+
+    # ---- sorting (RZG-43) -------------------------------------------------------
+
+    def set_sortable(self, labels: Iterable[str]) -> None:
+        """The labels that sort when clicked (the others don't)."""
+        self._sortable = frozenset(labels)
+        self.viewport().update()
+
+    def is_sortable(self, logical: int) -> bool:
+        return 0 <= logical < self.count() and self.label(logical) in self._sortable
+
+    def set_sort_indicator(self, label: str | None, descending: bool = False) -> None:
+        """Show the arrow on ``label``'s column (None: on none): down for descending."""
+        indicator = (label, descending) if label is not None else None
+        if indicator != self._indicator:
+            self._indicator = indicator
+            self.viewport().update()
+
+    @property
+    def sort_indicator(self) -> tuple[str, bool] | None:
+        return self._indicator
+
+    def _arrow_width(self) -> int:
+        return max(5, round(self.fontMetrics().height() * ARROW_SCALE))
+
+    def _arrow_room(self, logical: int) -> int:
+        """The space a sortable column keeps for its arrow, sorted or not, so
+        sorting never shortens its label."""
+        return self._arrow_width() + ARROW_GAP if self.is_sortable(logical) else 0
+
+    def _paint_arrow(self, painter: QPainter, rect: QRect, descending: bool) -> None:
+        width = self._arrow_width()
+        height = width / 2
+        right = rect.right() - PADDING_X
+        left = right - width
+        middle = rect.top() + (rect.height() - 1) / 2
+        top, bottom = middle - height / 2, middle + height / 2
+        path = QPainterPath()
+        if descending:  # pointing down
+            path.moveTo(QPointF(left, top))
+            path.lineTo(QPointF(left + width, top))
+            path.lineTo(QPointF(left + width / 2, bottom))
+        else:
+            path.moveTo(QPointF(left, bottom))
+            path.lineTo(QPointF(left + width, bottom))
+            path.lineTo(QPointF(left + width / 2, top))
+        path.closeSubpath()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillPath(path, painter.pen().color())
 
     # ---- widths (RZG-40) ------------------------------------------------------
 
@@ -184,6 +245,9 @@ class ColumnHeader(QHeaderView):
             self._pair = (left, right, self.sectionSize(left), self.sectionSize(right), x)
             event.accept()
             return
+        if event.button() == Qt.MouseButton.LeftButton:
+            logical = self.logicalIndexAt(x)
+            self._pressed = logical if self.is_sortable(logical) else -1
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
@@ -205,7 +269,11 @@ class ColumnHeader(QHeaderView):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if self._pair is None:
+            pressed, self._pressed = self._pressed, -1
             super().mouseReleaseEvent(event)
+            if (event.button() == Qt.MouseButton.LeftButton and pressed >= 0
+                    and self.logicalIndexAt(int(event.position().x())) == pressed):
+                self.sort_clicked.emit(self.label(pressed))
             return
         left, right = self._pair[:2]
         self._pair = None
@@ -261,11 +329,17 @@ class ColumnHeader(QHeaderView):
         hover = logical == self.hover_section
         painter.setPen(QColor(c.column_header_text_hover if hover else c.column_header_text))
         painter.setFont(self.font())
-        text_rect = rect.adjusted(PADDING_X, 0, -PADDING_X, -1)
+        text_rect = rect.adjusted(PADDING_X, 0, -PADDING_X - self._arrow_room(logical), -1)
         painter.setClipRect(text_rect)
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                          self.shown_label(logical))
         painter.setClipping(False)
+        label = self.label(logical)
+        if self._indicator is not None and self._indicator[0] == label and self.is_sortable(logical):
+            painter.save()
+            painter.setClipRect(rect)
+            self._paint_arrow(painter, rect, self._indicator[1])
+            painter.restore()
         if self.visualIndex(logical) < self._last_visual():
             inset = round(rect.height() * SEPARATOR_INSET)
             painter.setPen(QColor(c.column_header_separator))

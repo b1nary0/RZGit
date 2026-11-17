@@ -1,4 +1,7 @@
-"""The branch list, and the place to work with branches (spec §5.4)."""
+"""The branch list, and the place to work with branches (spec §5.4).
+
+Sort By (RZG-43), its header menu: by name (git's order) or by last commit.
+"""
 
 from __future__ import annotations
 
@@ -6,11 +9,26 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QListWidget, QListWidgetItem, QMenu, QVBoxLayout
 
+from rzgitclient.core.sort_options import SortOption, SortOptions
+from rzgitclient.git.git_models import Branch
 from rzgitclient.ui.app_actions import BranchOp, WorktreeOp
 from rzgitclient.ui.panels.panel import Panel
+from rzgitclient.ui.widgets.sort_menu import SortMenu
 
 _NAME = Qt.ItemDataRole.UserRole  # a branch row's name; None for "(no commits)"
 _CURRENT = " (current branch)"
+
+
+def _last_commit(branch: Branch) -> float:
+    """Its tip's date as a number; one with none sorts as the oldest."""
+    return branch.date.timestamp() if branch.date is not None else float("-inf")
+
+
+# Sort By (spec §5.4): git's order is by name.
+SORTS: SortOptions[Branch] = SortOptions((
+    SortOption("name", "Name"),
+    SortOption("last_commit", "Last Commit", _last_commit, descending=True),
+))
 
 
 class BranchesPanel(Panel):
@@ -18,8 +36,12 @@ class BranchesPanel(Panel):
     title = "Branches"
 
     _list: QListWidget
+    sort: SortMenu
 
     def _setup(self) -> None:
+        self.sort = SortMenu(self.panel_id, SORTS, self.ctx.sorts, self)
+        self.sort.order_changed.connect(self._on_sorted)
+        self.set_header_actions([self.sort.menuAction()])
         self._list = QListWidget()
         self._list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -39,12 +61,12 @@ class BranchesPanel(Panel):
         # Depends on both the branches and HEAD, so it reads the session.
         branches, head = self.ctx.session.branches, self.ctx.session.head
         current = self._list.currentItem()
-        keep = current.text() if current else None
+        keep = current.data(_NAME) if current else None
 
         blocked = self._list.blockSignals(True)
         try:
             self._list.clear()
-            for b in branches:
+            for b in self.sort.apply(branches):
                 item = QListWidgetItem(b.name)
                 item.setData(_NAME, b.name)
                 if b.is_current:
@@ -59,6 +81,11 @@ class BranchesPanel(Panel):
                 self._list.addItem(QListWidgetItem(f"{head} (no commits)"))
         finally:
             self._list.blockSignals(blocked)
+
+    def _on_sorted(self) -> None:
+        self._render()
+        if (current := self._list.currentItem()) is not None:
+            self._list.scrollToItem(current)
 
     # ---- operations (spec §5.4): asked of AppActions, never run here ------
 

@@ -555,6 +555,7 @@ class HeaderMenuHostTests(unittest.TestCase):
         tabs = self.host.findChild(QTabWidget)
         menu = tabs.menu_for(tabs.indexOf(history))
         self.assertEqual(menu.actions(), [action])
+        self.host.panels["files"].set_header_actions([])
         self.assertIsNone(tabs.menu_for(tabs.indexOf(self.host.panels["files"])))
         self.assertIsNone(tabs.menu_for(-1))
 

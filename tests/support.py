@@ -144,11 +144,12 @@ class SignalRecorder:
 
 def make_panel_context() -> PanelContext:
     """A PanelContext with a fresh session (no repo open), the light theme and
-    commit drafts and column choices kept in memory."""
+    commit drafts, column choices and sort orders kept in memory."""
     from rzgitclient.core.column_prefs import ColumnPrefs
     from rzgitclient.core.commit_drafts import CommitDrafts
     from rzgitclient.core.repo_session import RepoSession
     from rzgitclient.core.selection import Selection
+    from rzgitclient.core.sort_prefs import SortPrefs
     from rzgitclient.ui.app_actions import AppActions
     from rzgitclient.ui.panels.panel import PanelContext
     from rzgitclient.ui.theme.app_theme import LIGHT_THEME
@@ -163,6 +164,7 @@ def make_panel_context() -> PanelContext:
         actions=AppActions(session, selection),
         drafts=CommitDrafts(),
         columns=ColumnPrefs(),
+        sorts=SortPrefs(),
     )
 
 
@@ -182,3 +184,12 @@ def drag_column_edge(header, logical: int, by: int) -> None:
         pos = QPointF(at, viewport.height() / 2)
         QApplication.sendEvent(viewport, QMouseEvent(kind, pos, viewport.mapToGlobal(pos), button,
                                                      buttons, Qt.KeyboardModifier.NoModifier))
+
+
+def click_column_label(header, logical: int) -> None:
+    """Click the middle of ``header``'s label ``logical``, as the user would."""
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    x = header.sectionViewportPosition(logical) + header.sectionSize(logical) // 2
+    QTest.mouseClick(header.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(x, header.height() // 2))
