@@ -58,7 +58,7 @@ _RESET = Refresh.ALL | Refresh.LAST_COMMIT
 _PARTS = (Refresh.HEAD, Refresh.BRANCHES, Refresh.HISTORY, Refresh.STATUS, Refresh.STASHES,
           Refresh.COUNT, Refresh.LAST_COMMIT)
 _EMPTY: dict[Refresh, object] = {
-    Refresh.HEAD: None,
+    Refresh.HEAD: (None, None),  # (branch, sha): two values, two signals (spec §4.1)
     Refresh.BRANCHES: (),
     Refresh.HISTORY: (),
     Refresh.STATUS: (),
@@ -71,6 +71,7 @@ _EMPTY: dict[Refresh, object] = {
 class RepoSession(QObject):
     repo_changed = Signal(object)  # Repo | None
     head_changed = Signal(object)  # str | None  (None = detached, or no repo)
+    head_sha_changed = Signal(object)  # str | None  (None before the first commit, or no repo)
     branches_changed = Signal(object)  # tuple[Branch, ...]
     history_changed = Signal(object)  # tuple[Commit, ...]
     status_changed = Signal(object)  # tuple[FileStatus, ...]
@@ -148,7 +149,12 @@ class RepoSession(QObject):
 
     @property
     def head(self) -> str | None:
-        return self._values[Refresh.HEAD]  # type: ignore[return-value]
+        return self._values[Refresh.HEAD][0]  # type: ignore[index]
+
+    @property
+    def head_sha(self) -> str | None:
+        """The commit HEAD points at; None before the first commit, or with no repo."""
+        return self._values[Refresh.HEAD][1]  # type: ignore[index]
 
     @property
     def branches(self) -> tuple[Branch, ...]:
@@ -581,10 +587,17 @@ class RepoSession(QObject):
     def _store(self, part: Refresh, value: object) -> None:
         forced = part in self._forced
         self._forced &= ~part
-        if not forced and self._values[part] == value:
+        old = self._values[part]
+        if not forced and old == value:
             return
         self._values[part] = value
-        self._signals[part].emit(value)
+        if part is Refresh.HEAD:
+            # (branch, sha): each has its own signal, emitted only for its own change.
+            for i, signal in enumerate((self.head_changed, self.head_sha_changed)):
+                if forced or old[i] != value[i]:  # type: ignore[index]
+                    signal.emit(value[i])  # type: ignore[index]
+        else:
+            self._signals[part].emit(value)
 
     def _store_diff(self, file: FileSelection | None, diff: FileDiff | None) -> None:
         if (file, diff) == self._diff:
@@ -742,7 +755,7 @@ def _error(exc: Exception, what: object) -> str:
 
 def _load(repo: Repo, part: Refresh) -> object:
     if part is Refresh.HEAD:
-        return repo.current_branch()
+        return repo.current_branch(), repo.head_sha()
     if part is Refresh.BRANCHES:
         return tuple(repo.branches())
     if part is Refresh.STATUS:

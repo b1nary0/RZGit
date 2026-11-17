@@ -14,7 +14,7 @@ from rzgitclient.git.git_models import DiffSource, FileStatus
 from rzgitclient.git.repo import GitError, Repo
 from tests.support import SignalRecorder, commit_file, git, make_repo, qt_app, wait_idle
 
-DATA_SIGNALS = ("head_changed", "branches_changed", "history_changed", "status_changed",
+DATA_SIGNALS = ("head_changed", "head_sha_changed", "branches_changed", "history_changed", "status_changed",
                 "stashes_changed", "commit_count_changed")
 ALL_SIGNALS = ("repo_changed", *DATA_SIGNALS, "error_occurred")
 BUSY = "busy_changed"
@@ -98,7 +98,8 @@ class RepoSessionTests(unittest.TestCase):
         # parts never loaded must not keep the previous repo's data.
         self.assertEqual(
             self.rec.names(),
-            ["repo_changed", "head_changed", "branches_changed", "error_occurred",
+            ["repo_changed", "head_changed", "head_sha_changed", "branches_changed",
+             "error_occurred",
              "history_changed", "status_changed", "stashes_changed", "commit_count_changed"],
         )
         self.assertEqual(self.session.history, ())
@@ -116,6 +117,54 @@ class RepoSessionTests(unittest.TestCase):
         self.assertIsNone(s.repo)
         self.assertIsNone(s.head)
         self.assertEqual((s.branches, s.history, s.status), ((), (), ()))
+
+    def test_close_forgets_head_sha(self):
+        self.open_and_clear()
+        self.assertIsNotNone(self.session.head_sha)
+        self.session.close()
+        self.assertIsNone(self.session.head_sha)
+        self.assertEqual(self.rec.values("head_sha_changed"), [None])
+
+    # ---- HEAD: branch and sha (spec §4.1) -------------------------------
+
+    def test_head_sha_is_heads_commit(self):
+        self.open_and_clear()
+        self.assertEqual(self.session.head_sha, git(self.path, "rev-parse", "HEAD").strip())
+
+    def test_head_sha_is_none_before_the_first_commit(self):
+        empty = make_repo(self.tmp / "empty")
+        self.open_and_clear(empty)
+        self.assertEqual(self.session.head, "main")
+        self.assertIsNone(self.session.head_sha)
+
+    def test_a_new_commit_fires_only_head_sha_changed_of_the_two(self):
+        self.open_and_clear()
+        commit_file(self.path, "b.txt", "1", "second")
+        self.session.refresh(Refresh.HEAD)
+        wait_idle(self.session)
+        sha = git(self.path, "rev-parse", "HEAD").strip()
+        self.assertEqual(self.rec.names(), ["head_sha_changed"])
+        self.assertEqual(self.rec.values("head_sha_changed"), [sha])
+        self.assertEqual(self.session.head_sha, sha)
+
+    def test_switching_at_the_same_commit_fires_only_head_changed(self):
+        self.open_and_clear()
+        git(self.path, "switch", "-q", "feature")
+        self.session.refresh(Refresh.HEAD)
+        wait_idle(self.session)
+        self.assertEqual(self.rec.names(), ["head_changed"])
+        self.assertEqual(self.session.head, "feature")
+
+    def test_moving_a_detached_head_fires_head_sha_changed(self):
+        commit_file(self.path, "b.txt", "1", "second")
+        git(self.path, "checkout", "-q", "--detach")
+        self.open_and_clear()
+        self.assertIsNone(self.session.head)
+        git(self.path, "checkout", "-q", "--detach", "HEAD~1")
+        self.session.refresh(Refresh.HEAD)
+        wait_idle(self.session)
+        self.assertEqual(self.rec.names(), ["head_sha_changed"])
+        self.assertEqual(self.session.head_sha, git(self.path, "rev-parse", "HEAD").strip())
 
     def test_close_without_repo_does_nothing(self):
         self.session.close()
@@ -143,10 +192,10 @@ class RepoSessionTests(unittest.TestCase):
         commit_file(self.path, "a.txt", "2", "second")
         self.session.refresh()
         wait_idle(self.session)
-        # A new commit changes history, status and the count; HEAD and the
-        # branch list (names and which is current) stay the same.
-        self.assertEqual(self.rec.names(), ["history_changed", "status_changed",
-                                            "commit_count_changed"])
+        # A new commit moves HEAD's sha and changes history, status and the
+        # count; the branch and the branch list (names, which is current) stay.
+        self.assertEqual(self.rec.names(), ["head_sha_changed", "history_changed",
+                                            "status_changed", "commit_count_changed"])
 
     def test_refresh_without_repo_does_nothing(self):
         self.session.refresh()

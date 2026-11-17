@@ -170,7 +170,9 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(window.findChildren(QToolBar), [])
         buttons = window.layout_host.panels["controls"].findChildren(QToolButton)
         actions = window.ctx.actions
-        self.assertEqual([b.defaultAction() for b in buttons], [actions.open_repo, actions.refresh])
+        # The action buttons; the branch button (a menu, no action) is last.
+        self.assertEqual([b.defaultAction() for b in buttons],
+                         [actions.open_repo, actions.refresh, None])
 
     def test_view_menu_has_layout_panels_and_reset(self):
         window = self.start()

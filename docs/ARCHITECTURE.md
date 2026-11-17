@@ -105,7 +105,7 @@ src/rzgitclient/
     panels/
       panel.py                  Panel, PanelContext
       panel_registry.py         PANEL_TYPES, panel_type(id)
-      controls_panel.py         ControlsPanel: Open, Refresh, current branch (replaces the toolbar)
+      controls_panel.py         ControlsPanel: Open, Refresh, the branch button (replaces the toolbar)
       branches_panel.py         BranchesPanel
       stash_panel.py            StashPanel: the stashes; apply, pop and drop them
       worktrees_panel.py        WorktreesPanel: the repository's worktrees and their state; open one
@@ -164,6 +164,7 @@ There is one per main window (§8.1), with its own `Selection`, `AppActions` and
 class RepoSession(QObject):
     repo_changed     = Signal(object)  # Repo | None
     head_changed     = Signal(object)  # str | None  (branch name, None = detached)
+    head_sha_changed = Signal(object)  # str | None  (HEAD's commit, None before the first)
     branches_changed = Signal(object)  # tuple[Branch, ...]
     history_changed  = Signal(object)  # tuple[Commit, ...]
     status_changed   = Signal(object)  # tuple[FileStatus, ...]
@@ -212,7 +213,7 @@ class RepoSession(QObject):
     commands_in_flight: tuple[GitCommand, ...]   # queued or running, until command_finished
 
     # Latest values, so a panel created later renders at once (read-only properties):
-    repo, head, branches, history, status, stashes, commit_count, history_complete, diff_file, diff,
+    repo, head, head_sha, branches, history, status, stashes, commit_count, history_complete, diff_file, diff,
     commit_files_sha, commit_files, commit_details_sha, commit_details, last_commit
 ```
 
@@ -228,8 +229,12 @@ class RepoSession(QObject):
 - **Opening and closing.** A failed `open()` leaves the current repo open and returns False.
   A successful one forgets the stored values first, so every signal fires for the new repo
   even when its data equals the old repo's. Signals go out in a fixed order: `repo_changed`
-  (panels reset), then `head`, `branches`, `history`, `status`, `stashes`, `commit_count`. `close()` sends
+  (panels reset), then `head`, `head_sha`, `branches`, `history`, `status`, `stashes`, `commit_count`. `close()` sends
   `repo_changed(None)` and then empty data.
+- **HEAD is two values** (RZG-56): `Refresh.HEAD` reads the branch (`symbolic-ref`) and
+  the commit (`rev-parse`) in the same job. `head_changed` and `head_sha_changed` each
+  fire only when their own value changed, so a commit on a branch fires only
+  `head_sha_changed`, and a switch between two branches at one commit only `head_changed`.
 - **Errors go through `error_occurred`.** MainWindow shows them. Panels never pop up dialogs
   for git failures, so errors look the same wherever they come from. `refresh()` stops at the
   first part that fails and sends one error. Parts already loaded keep their new values;
@@ -873,7 +878,7 @@ The first three are extracted from the original `main_window.py` with the same b
 
 | Panel | id | Surface | Shows | Writes |
 |---|---|---|---|---|
-| ControlsPanel | `controls` | chrome | Open, Refresh (`ctx.actions`), current branch | (later: fetch/pull/push, switch branch) |
+| ControlsPanel | `controls` | chrome | Open, Refresh (`ctx.actions`), the branch button | switches and makes branches, through `actions.request_branch`; (later: fetch/pull/push) |
 | BranchesPanel | `branches` | sidebar | branches, current in bold | branch operations, through `actions.request_branch` |
 | StashPanel | `stash` | sidebar | "Stashes": message, branch and age of each, newest first | `selection.commit` (a `Stash`); stash operations, through `actions.request_stash` |
 | HistoryPanel | `history` | content | Uncommitted changes, then the commit table; no row while a stash is selected | `selection.commit` |
@@ -884,6 +889,26 @@ The first three are extracted from the original `main_window.py` with the same b
 | DiffPanel | `diff` | content | the diff of `selection.file`, unified or side by side | stages, unstages and discards hunks and lines |
 | CommitPanel | `commit` | sidebar | the commit message being written | commits the staged changes |
 | WorktreesPanel | `worktrees` | sidebar | "Worktrees": each worktree's name, state and ahead/behind (branch and path on request); collapsed with only one worktree | opens a worktree, through `actions.request_open_worktree` and `request_open_worktree_here`; asks for worktree operations (`request_worktree`) |
+
+**The branch button** (ControlsPanel, RZG-56) names the current branch and switches to
+another. It sits at the right end of the Controls panel, beside the Branches panel, which
+keeps the other operations. Like Branches, it never runs git or shows a dialog.
+- **Label:** the branch's name; "detached at *sha*" (8 characters of `session.head_sha`)
+  when HEAD is detached; "*main* (no commits)" before the first commit. It follows
+  `head_changed` and `head_sha_changed`. A name longer than 360 px is cut
+  short in the middle; the tooltip gives the full label. With no repository it is
+  disabled and says "No repository".
+- **The arrow** is the style's menu indicator, drawn from the theme palette (the
+  `branch-button` style role sets only its padding).
+- **The menu** is built each time it opens, from `session.branches`, so a branch made,
+  renamed or deleted anywhere is in it:
+  - the local branches, checkable, the current one checked and disabled (a fresh
+    repository's branch is its one, checked, entry); choosing one asks
+    `request_branch(SWITCH, name)`, so it gets Branches' confirmations (§8);
+  - with more than 15 branches, a **filter box** on top: typing hides the branches whose
+    names don't contain the text (ignoring case), and Enter switches to the only one left;
+  - a separator, then **New Branch…**: `request_branch(NEW, start)` from the current
+    branch, or from HEAD's sha when detached. Disabled before the first commit.
 
 **Branches** (BranchesPanel, RZG-35) is where branches are worked with. It never runs
 git or shows a dialog: it asks `actions.request_branch(op, name)` (§8), and the list
@@ -1824,7 +1849,7 @@ Per-widget sheets are slow to apply and scatter the rules.
   plus while more history is unloaded ("500+ commits").
 - **No toolbar:** its buttons are the **Controls panel** (§5.4), placed by the layout across
   the top and styled like the toolbar was. Remote controls (fetch/pull/push) join it when
-  those commands exist; switching branches is in the Branches panel.
+  those commands exist. The branch button switches branches, as the Branches panel does.
 
 ### 8.1 Windows
 

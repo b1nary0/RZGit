@@ -186,6 +186,14 @@ QToolButton[role="header-menu"]::menu-indicator {
     image: none;
     width: 0px;
 }
+QToolButton[role="branch-button"] {
+    padding: 4px 20px 4px 8px;
+}
+QToolButton[role="branch-button"]::menu-indicator {
+    subcontrol-origin: padding;
+    subcontrol-position: right center;
+    right: 6px;
+}
 QWidget[role="segment-header"] {
     background: $header_bg;
 }
