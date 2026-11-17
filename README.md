@@ -31,6 +31,22 @@ python3 -m venv --system-site-packages .venv
 
 With no path, it reopens the last repository you used.
 
+### App launcher entry
+
+To list RZGitClient in your desktop's launcher and menus, with its icon:
+
+```sh
+packaging/linux/install-desktop.sh
+```
+
+It installs for your user only, under `~/.local/share`, and the entry starts this
+checkout's `.venv/bin/rzgit`. Run it again after moving the checkout or updating the
+icons: each run is a clean reinstall. To remove it:
+
+```sh
+packaging/linux/install-desktop.sh --uninstall
+```
+
 ## Tests
 
 ```sh

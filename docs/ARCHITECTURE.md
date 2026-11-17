@@ -133,6 +133,11 @@ src/rzgitclient/
 tests/
   support.py                    temp-repo builder, shared offscreen QApplication
   test_<module>.py              one file per module, named after it (test_layout_model.py, …)
+packaging/
+  linux/
+    rzgitclient.desktop         the desktop entry; install-desktop.sh fills in its Exec
+    install-desktop.sh          installs the entry and the icon PNGs for the current user
+                                (re-running is a clean reinstall); --uninstall removes them
 ```
 
 **Naming rule:** a module is named after the main class it holds, in snake_case, so its
