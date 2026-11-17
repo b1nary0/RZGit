@@ -1,6 +1,6 @@
 ---
 name: lanes
-description: Run several RZG Linear issues in parallel as "lanes" - one git worktree, one Konsole tab and one Claude session per issue, each named after its issue ID (RZG-N). This is the default way to work any RZG issue (even a single one): use it whenever the user asks to work on, start or do an issue, unless they explicitly ask to do it in the current session. Also for planning which issues can run side by side.
+description: Run several RZG Linear issues in parallel as "lanes" - one git worktree, one Konsole tab and one Claude session per issue, each named after its issue ID (RZG-N). This is the default way to work an RZG issue: use it whenever the user asks to work on, start or do one, except a small issue (done in the coordinator session) or when they ask to do it in the current session. Also for planning which issues can run side by side.
 ---
 
 # Lanes: parallel issues in Konsole tabs
@@ -13,7 +13,18 @@ One lane works on one Linear issue. A lane is named after its issue's ID, **RZG-
 
 Each lane is a Claude session in its own tab. It runs the issue's normal per-issue workflow with the user (review, plan, build, verify, report, commit) and lands its commit on `main` by fast-forward.
 
-This session is the **coordinator**. It plans the lanes, starts them, starts lanes that were waiting, and cleans up. It doesn't do lane work itself. While lanes run, it never commits in the main checkout or edits it: lanes fast-forward `main` there.
+This session is the **coordinator**. It plans the lanes, starts them, starts lanes that were waiting, and cleans up. It doesn't do lane work itself, apart from small issues (step 0). While lanes run, it never commits in the main checkout or edits it: lanes fast-forward `main` there.
+
+## 0. Lane or coordinator?
+
+**Small issues are done in the coordinator session, not as a lane.** Small means:
+- a few files
+- no new module, and no change to the architecture
+- about one short sitting (for example: always open on the History tab)
+
+Everything else is a lane. When unsure, tell the user which you'd pick and why.
+
+A small issue follows the same per-issue workflow. While lanes are running, the coordinator does it in its own worktree (`/home/JPOD/dev/RZGitClient-RZG-N`, branch `RZG-N`, with no tab), and lands it with `merge --ff-only` like a lane. Its changes must never sit in the main checkout, because a dirty main checkout makes the lanes' fast-forward landing fail.
 
 ## 1. Plan (wait for the user)
 
