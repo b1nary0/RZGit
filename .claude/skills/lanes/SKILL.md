@@ -89,7 +89,9 @@ Then open the tab and start Claude in it. This is Konsole's D-Bus API on this wi
 ```bash
 P=<scratchpad>/RZG-N.md
 SET=<scratchpad>/lanes/settings-RZG-N.json
+HERE=$(qdbus-qt6 "$KONSOLE_DBUS_SERVICE" "$KONSOLE_DBUS_WINDOW" currentSession)
 ID=$(qdbus-qt6 "$KONSOLE_DBUS_SERVICE" "$KONSOLE_DBUS_WINDOW" newSession "" /home/JPOD/dev/RZGitClient-RZG-N)
+qdbus-qt6 "$KONSOLE_DBUS_SERVICE" "$KONSOLE_DBUS_WINDOW" setCurrentSession "$HERE"   # the new tab doesn't take focus
 qdbus-qt6 "$KONSOLE_DBUS_SERVICE" /Sessions/$ID setTabTitleFormat 0 "RZG-N"
 qdbus-qt6 "$KONSOLE_DBUS_SERVICE" /Sessions/$ID setTabTitleFormat 1 "RZG-N"
 qdbus-qt6 "$KONSOLE_DBUS_SERVICE" /Sessions/$ID setTitle 1 "RZG-N"
@@ -115,7 +117,7 @@ Tell the user which lanes started (the tab and the session ID). They review and 
 ## 3. While lanes run
 
 - **When a lane needs the user, tell them.** Each watch event is a lane that finished its turn (questions, a plan waiting for "start", a report) or is stuck on a permission prompt. Reply with just one line naming the lane and what it needs ("RZG-58 needs you: six review questions"). Don't mention the monitor or the event.
-- **Tab colours:** the watch colours each lane's tab red (`#c0392b`) while it needs the user, and green (`#3b8f5a`) once they have answered it. An answer shows as a new `user` record in the lane's transcript. A lane started without the hooks gets neither colours nor events: say so.
+- **Tab colours:** the watch colours each lane's tab red (`#c0392b`) while it needs the user, green (`#3b8f5a`) once they have answered it, and blue (`#2f6fd0`) while it has stopped but is waiting on one of its own shell commands (a background task), not the user. An answer shows as a new `user` record in the lane's transcript. A lane started without the hooks gets neither colours nor events: say so.
 
 - When the user says a lane has landed, check `git log --oneline main`. Then start any lane that was waiting for it (step 2).
 - If the user asks about a lane, read its issue in Linear (state, Result note) and `git -C <worktree> log`/`status`. Don't guess.

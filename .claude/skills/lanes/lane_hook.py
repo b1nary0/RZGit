@@ -47,7 +47,7 @@ else:
 
 tp = data.get("transcript_path", "")
 state = {"session": os.environ.get("KONSOLE_DBUS_SESSION", ""), "transcript": tp,
-         "offset": os.path.getsize(tp) if tp and os.path.exists(tp) else 0, "state": "attention"}
+         "offset": os.path.getsize(tp) if tp and os.path.exists(tp) else 0, "state": "attention", "event": event}
 (root / "state").mkdir(parents=True, exist_ok=True)
 (root / "state" / f"{lane}.json").write_text(json.dumps(state))
 with (root / "attention.log").open("a") as f:
