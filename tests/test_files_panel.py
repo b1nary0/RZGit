@@ -11,6 +11,7 @@ from rzgitclient.core.selection import FileSelection, FileSource
 from rzgitclient.ui.panels.files_panel import FilesPanel
 from rzgitclient.ui.panels.staged_panel import StagedPanel
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
+from rzgitclient.ui.widgets.column_header import ColumnHeader
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 W, I = FileSource.WORKTREE, FileSource.INDEX
@@ -115,6 +116,21 @@ class FilesPanelTests(unittest.TestCase):
                          ("Unstaged Files", "Staged Files"))
         self.assertTrue(self.staged.collapsed)
         self.assertFalse(self.unstaged.collapsed)
+
+    def test_columns_are_labelled_name_and_status(self):
+        """RZG-41: on a ColumnHeader, keyed by the panel's id."""
+        tree = self.unstaged._list._tree
+        header = tree.header()
+        self.assertIsInstance(header, ColumnHeader)
+        self.assertFalse(tree.isHeaderHidden())
+        self.assertEqual([header.label(c) for c in range(2)], ["Name", "Status"])
+        self.assertEqual(header.panel_id, "files")
+
+    def test_a_new_list_hides_what_was_hidden(self):
+        self.ctx.columns.set_hidden("files", "Status", True)
+        panel = FilesPanel(self.ctx)
+        self.addCleanup(panel.deleteLater)
+        self.assertTrue(panel._list._tree.isColumnHidden(1))
 
     def test_each_panel_lists_its_side(self):
         (self.repo / "a.txt").write_text("staged")

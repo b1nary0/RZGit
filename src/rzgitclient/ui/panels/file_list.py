@@ -32,6 +32,7 @@ from rzgitclient.git.git_models import FileStatus
 from rzgitclient.ui.panels.file_tree import FolderNode, build_tree, file_label
 from rzgitclient.ui.panels.panel import PanelContext
 from rzgitclient.ui.theme.app_theme import AppTheme
+from rzgitclient.ui.widgets.column_header import ColumnHeader
 
 STATUS_LABELS = {
     "M": "Modified",
@@ -47,6 +48,7 @@ STATUS_LABELS = {
 # VS Code, so a conflict is "!".
 STATUS_LETTERS = {"M": "M", "A": "A", "D": "D", "R": "R", "C": "C", "U": "!", "T": "T", "?": "U"}
 
+COLUMNS = ("Name", "Status")  # the column labels (spec §5.2)
 _STATUS_COLUMN = 1
 _ROW = Qt.ItemDataRole.UserRole  # (FileSelection, status code) of a file row
 _FOLDER = Qt.ItemDataRole.UserRole + 1  # the folder path of a folder row
@@ -93,7 +95,9 @@ class FileList(QWidget):
     count = 0  # files after the last render
 
     def __init__(self, ctx: PanelContext, source: FileSource,
-                 menu: tuple[list[QAction], list[QAction]], parent: QWidget | None = None):
+                 menu: tuple[list[QAction], list[QAction]], panel_id: str,
+                 parent: QWidget | None = None):
+        """``panel_id``: the owning panel's, which keys its column choices."""
         super().__init__(parent)
         self.ctx, self.source, self._menu_actions = ctx, source, menu
         self._showing = False  # putting Selection on screen: not the user's choice
@@ -105,13 +109,14 @@ class FileList(QWidget):
         self._collapsed: set[str] = set()  # folder paths the user collapsed
 
         self._tree = _GuidedTree()
-        self._tree.setColumnCount(2)
-        self._tree.setHeaderHidden(True)
+        self.labels = ColumnHeader(panel_id, ctx.columns, ctx.theme.current)
+        self._tree.setHeader(self.labels)
+        self._tree.setColumnCount(len(COLUMNS))
+        self._tree.setHeaderLabels(COLUMNS)
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        header = self._tree.header()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setStretchLastSection(False)
+        self.labels.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.labels.setStretchLastSection(False)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._tree)
@@ -234,6 +239,7 @@ class FileList(QWidget):
             self._showing = False
 
     def apply_theme(self, theme: AppTheme) -> None:
+        self.labels.set_theme(theme)
         # Rebuilding is the fast way to recolour (see render); the selection is kept.
         if theme != self._rendered_theme:
             self.render()

@@ -25,6 +25,11 @@ class ThemeColors:
     border: str
     border_light: str
     tree_guide: str  # the indent guides of a folder tree (file panels)
+    column_header_bg: str  # a list's column labels (ColumnHeader, spec §5.2)
+    column_header_text: str
+    column_header_text_hover: str
+    column_header_separator: str  # the inset line between two labels
+    column_header_border: str  # the line under the row of labels
     # text
     text: str
     text_muted: str
@@ -213,6 +218,11 @@ LIGHT_THEME = AppTheme(
         border="#c6c6c6",
         border_light="#e4e4e4",
         tree_guide="#cdcdcd",
+        column_header_bg="#f3f3f3",  # between the lists' white and grey, lighter than header_bg
+        column_header_text="#2b2b2b",
+        column_header_text_hover="#000000",
+        column_header_separator="#c6c6c6",
+        column_header_border="#c6c6c6",
         text="#2b2b2b",
         text_muted="#8a8a8a",
         placeholder="#a8a8a8",
@@ -273,6 +283,11 @@ DARK_THEME = AppTheme(
         border="#41424d",
         border_light="#36373f",
         tree_guide="#41424d",
+        column_header_bg="#303139",  # between the sidebar and content, darker than header_bg
+        column_header_text="#eaeaf2",
+        column_header_text_hover="#ffffff",
+        column_header_separator="#5b5d6a",  # a step lighter than border: a 1 px line needs ~2:1
+        column_header_border="#41424d",
         text="#eaeaf2",
         text_muted="#aaabb1",
         placeholder="#757783",

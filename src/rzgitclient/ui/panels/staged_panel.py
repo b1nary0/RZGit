@@ -38,7 +38,7 @@ class StagedPanel(Panel):
         if self._list is None and any(f.is_staged for f in status):
             actions = self.ctx.actions
             self._list = FileList(self.ctx, FileSource.INDEX,
-                                  ([actions.unstage], [actions.unstage_all]))
+                                  ([actions.unstage], [actions.unstage_all]), self.panel_id)
             self.layout().addWidget(self._list)
             # Styled before its first rows: a tree made after the window was
             # shown would size them before the stylesheet's row padding applies.

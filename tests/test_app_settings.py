@@ -109,6 +109,20 @@ class AppSettingsTests(unittest.TestCase):
         self.settings._settings.setValue("commit/drafts", '{"/a": 3, "/b": "ok"}')
         self.assertEqual(self.settings.commit_drafts, {"/b": "ok"})
 
+    def test_column_prefs_survive_a_reopen(self):
+        self.assertEqual(self.settings.column_prefs, {})
+        self.settings.column_prefs = {"stash": {"hidden": ["Age"]}}
+        self.assertEqual(self.reopen().column_prefs, {"stash": {"hidden": ["Age"]}})
+        self.settings.column_prefs = {}
+        self.assertEqual(self.reopen().column_prefs, {})
+
+    def test_column_prefs_that_are_not_valid_are_ignored(self):
+        self.settings._settings.setValue("columns/prefs", "{not json")
+        with self.assertLogs("rzgitclient.core.app_settings", "WARNING"):
+            self.assertEqual(self.settings.column_prefs, {})
+        self.settings._settings.setValue("columns/prefs", "[1, 2]")
+        self.assertEqual(self.settings.column_prefs, {})
+
     def test_layout_preset_survives_a_reopen(self):
         self.assertIsNone(self.settings.layout_preset)
         self.settings.layout_preset = "Standard"

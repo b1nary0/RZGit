@@ -9,6 +9,7 @@ from rzgitclient.git.git_models import Stash
 from rzgitclient.ui.app_actions import StashOp
 from rzgitclient.ui.panels import stash_panel
 from rzgitclient.ui.panels.stash_panel import StashPanel, age
+from rzgitclient.ui.widgets.column_header import ColumnHeader
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 
@@ -66,6 +67,28 @@ class StashPanelTests(unittest.TestCase):
         self.assertEqual(self.panel.header, "Stashes (2)")
         self.assertIn("stash@{1}", self.tree.topLevelItem(1).toolTip(0))
         self.assertFalse(self.panel._placeholder.isVisibleTo(self.panel))
+
+    def test_columns_are_labelled(self):
+        """RZG-41: Message, Branch and Age, on a ColumnHeader."""
+        header = self.tree.header()
+        self.assertIsInstance(header, ColumnHeader)
+        self.assertFalse(self.tree.isHeaderHidden())
+        self.assertEqual([header.label(c) for c in range(3)], ["Message", "Branch", "Age"])
+
+    def test_a_new_panel_hides_what_was_hidden(self):
+        """The labels are set after the header is: the choice still applies (a restart)."""
+        self.ctx.columns.set_hidden("stash", "Age", True)
+        panel = StashPanel(self.ctx)
+        self.addCleanup(panel.deleteLater)
+        self.assertTrue(panel._tree.isColumnHidden(2))
+        self.assertFalse(panel._tree.isColumnHidden(1))
+
+    def test_a_hidden_column_stays_hidden_through_a_refresh(self):
+        self.tree.header().set_column_shown("Branch", False)
+        self.assertEqual(self.ctx.columns.hidden("stash"), {"Branch"})
+        self.ctx.session.refresh()
+        wait_idle(self.ctx.session)
+        self.assertTrue(self.tree.isColumnHidden(1))
 
     def test_no_stashes(self):
         git(self.repo, "stash", "clear")

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
 
 from rzgitclient.ui.panels.history_panel import HistoryPanel
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
+from rzgitclient.ui.widgets.column_header import ColumnHeader
 from tests.support import SignalRecorder, commit_file, make_panel_context, make_repo, qt_app, wait_idle
 
 ROLE = Qt.ItemDataRole
@@ -71,6 +72,21 @@ class HistoryPanelTests(unittest.TestCase):
         self.assertIsNone(self.cell(1, 0, ROLE.ForegroundRole))  # subject: normal text
         for col in (1, 2, 3):
             self.assertEqual(self.cell(1, col, ROLE.ForegroundRole).name(), LIGHT_THEME.colors.text_muted)
+
+    def test_columns_are_labelled_by_a_column_header(self):
+        """RZG-41: History's labels get the shared look."""
+        header = self.panel._view.horizontalHeader()
+        self.assertIsInstance(header, ColumnHeader)
+        self.assertEqual([header.label(c) for c in range(4)], ["Subject", "Author", "Date", "Commit"])
+
+    def test_a_hidden_column_stays_hidden_through_a_reload(self):
+        self.open()
+        self.panel._view.horizontalHeader().set_column_shown("Author", False)
+        commit_file(self.repo, "b.txt", "2", "third")
+        self.ctx.session.refresh()
+        wait_idle(self.ctx.session)
+        self.assertEqual(self.subjects()[1], "third")
+        self.assertTrue(self.panel._view.isColumnHidden(1))
 
     def test_uncommitted_changes_is_row_0_selected_by_default(self):
         self.open()

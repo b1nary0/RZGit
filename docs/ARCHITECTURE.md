@@ -74,6 +74,7 @@ src/rzgitclient/
     diff_patch.py               build_patch: a patch of chosen lines of a FileDiff (plain Python)
     git_commands.py             GitCommand, run_command (the worker side of commands: stage, commit, …)
     commit_drafts.py            CommitDrafts: the unfinished commit message of each repository
+    column_prefs.py             ColumnPrefs: each panel's column choices (the columns it hides)
     selection.py                Selection: what the user has selected (commit, file)
     repo_watcher.py             RepoWatcher: refreshes the session when the repository changes on disk
     inotify_watcher.py          InotifyWatcher: Linux inotify on a QSocketNotifier (folders → named events)
@@ -91,6 +92,7 @@ src/rzgitclient/
     widgets/
       section_header.py         SectionHeader: shared widget used by frames and panels
       panel_segment.py          PanelSegment, PanelSegments: a panel's own internal sections
+      column_header.py          ColumnHeader: the column labels of a list (painted from the theme)
     panels/
       panel.py                  Panel, PanelContext
       panel_registry.py         PANEL_TYPES, panel_type(id)
@@ -574,6 +576,7 @@ class PanelContext:
     theme: ThemeManager
     actions: AppActions
     drafts: CommitDrafts                           # the Commit panel's unfinished messages
+    columns: ColumnPrefs                           # each panel's column choices (ColumnHeader)
 
 class Panel(QWidget):
     panel_id: ClassVar[str]                        # stable, saved in layouts: "history"
@@ -676,6 +679,28 @@ areas.
   pinned segments plus the fill segments' minimums, so nothing is ever cut off.
 - Contents never scroll sideways: they get the segment's width.
 
+**Column labels** (RZG-41): a list with columns labels them with a `ColumnHeader`
+(`ui/widgets/column_header.py`), never Qt's plain header. History, Stashes and the three
+file lists have them. `ColumnHeader(panel_id, prefs)` is a `QHeaderView` (so columns stay
+aligned with the list and keep Qt's drag-resizing) that paints its own sections from the
+theme's `column_header_*` tokens (§7.1); the owning panel passes the theme on in
+`apply_theme`. There is no stylesheet rule for it.
+- **Look:** a row of chrome: its own background, labels at full text strength and normal
+  weight (the section header above stays the stronger level), a 1 px line under the row,
+  and an inset separator (60% of the row's height) between neighbouring labels, none after
+  the last. The hovered label's text is `column_header_text_hover`. The same on sidebar
+  and content surfaces. Its font is `FontKind.COLUMN_HEADER` (the `QHeaderView` class
+  font, §7.3).
+- **Short labels:** a label too wide for its column shows its first letter and ".."
+  ("Status" → "S.."), cut off if even that doesn't fit; its tooltip then gives it whole.
+  A column's size hint is the whole label's, so fitting a column to its contents never
+  shortens its label: only a column made narrower than that does.
+- **Not clickable:** labels don't sort or select.
+- **Showing and hiding columns:** right-clicking the labels gives a checkable list of the
+  columns. The first column (the main one: Subject, Message, Name) is always shown, so
+  its entry is disabled. The choice is saved per panel in `ctx.columns` (`ColumnPrefs`,
+  §6.3) and applied whenever the list's columns are (re)created.
+
 ### 5.3 Registry
 
 `panels/panel_registry.py` has an explicit `PANEL_TYPES = (ControlsPanel, BranchesPanel,
@@ -717,9 +742,9 @@ follows the session.
   the empty space below the list have no menu.
 
 **Stashes** (StashPanel, RZG-36) lists `session.stashes`, newest first, in three
-columns: **Message**, **Branch** and **Age** ("now", "5 min", "3 h", "2 days", "3 weeks",
-"4 months", "2 years"; redrawn every minute). Like the other sidebar lists it has no
-column header; branch and age are muted (`text_muted`), as in History. A row's tooltip has the whole message, the
+labelled columns: **Message**, **Branch** and **Age** ("now", "5 min", "3 h", "2 days", "3 weeks",
+"4 months", "2 years"; redrawn every minute). branch and age are muted (`text_muted`), as in History, under the column labels
+(§5.2). A row's tooltip has the whole message, the
 date and its `stash@{n}`. The header counts them ("Stashes (2)"); with none, the list
 says "No stashes". Like Branches, it never runs git or shows a dialog.
 - **Selecting** a stash sets `selection.commit` to it (§4.2): Commit Details and Commit
@@ -776,6 +801,8 @@ can't collapse), it shows the placeholder "No commit selected".
 - **Parents** are links when that commit is loaded in `session.history`: a click sets
   `selection.commit` to it, and History selects and scrolls to it. Others are plain text.
   The links are worked out again on `history_changed`.
+- **Column labels** (RZG-41): **Name** and **Status** (§5.2); in tree mode **Name**
+  heads the folder tree.
 - **Selecting:** extended selection (Ctrl and Shift) within a panel. One panel holds the
   selection at a time: selecting in one clears the other, since each shows only the rows
   of `selection.files` that are its own.
@@ -815,7 +842,7 @@ asks, so a theme change is one `dataChanged`.
   of them on every insert or reset: a page cost 63 ms with 20k rows loaded and 232 ms with
   100k. A table with fixed row heights costs the same at any depth (13–24 ms). The view
   hides the grid and row numbers, selects and hovers whole rows (a small delegate), and
-  its header is left-aligned and not clickable; the stylesheet's tree rules cover
+  its header is a `ColumnHeader` (§5.2); the stylesheet's tree rules cover
   `QTableView` too. It renders pixel-identical to the tree it replaced.
 
 - **Uncommitted changes:** while a repo is open, row 0 is "Uncommitted changes (N)", N
@@ -1104,9 +1131,15 @@ Commit Details and Commit Files are directly below Unstaged Files (`files`), in 
 
 `AppSettings` (`core/app_settings.py`) is the only code that touches `QSettings`. It has
 typed accessors (`last_repo`, `layout`, `layout_preset`, `window_geometry`,
-`side_by_side_diff`, `commit_drafts`, `saved_layouts`) and takes a file path for tests. `app.py` creates it and passes it to
-`MainWindow`; panels don't get it. The one thing a panel saves, the commit draft, goes
-through `CommitDrafts` (§5.4), which holds only that.
+`side_by_side_diff`, `commit_drafts`, `saved_layouts`, `column_prefs`) and takes a file path for tests. `app.py` creates it and passes it to
+`MainWindow`; panels don't get it. What panels save goes through a small object in
+`ctx` that holds only that: the commit draft through `CommitDrafts` (§5.4), column
+choices through `ColumnPrefs`.
+
+**Column choices** (`ColumnPrefs`, `core/column_prefs.py`, RZG-41) are app-wide, the
+same in every layout and repository, keyed by panel id and then by column label:
+`column_prefs` is JSON, `{"stash": {"hidden": ["Branch"]}}`. Unknown or malformed
+entries are dropped (logged). Each change is written at once.
 
 **Stored folder paths** (RZG-29) are canonical: `canonical_path(path)` (`git/repo.py`)
 expands `~` and resolves symlinks. `Repo.root` is git's `--show-toplevel` made canonical,
@@ -1228,6 +1261,8 @@ back where the user had it. The default place is only the fallback.
 ```python
 @dataclass(frozen=True)
 class ThemeColors:   menubar_bg: str; toolbar_bg: str; tab_bg: str; header_bg: str; sidebar_bg: str; content_bg: str; border: str; tree_guide: str;
+                     column_header_bg, column_header_text, column_header_text_hover,
+                     column_header_separator, column_header_border: str   # ColumnHeader (§5.2)
                      text: str; text_muted: str; hover: str; selection: str; content_selection: str;
                      accent: str; button_*: str; scroll_*: str; diff_*: str (incl. diff_hunk_bg, diff_hunk_text, diff_line_button*, diff_*_selected_bg, diff_*_word); …
 @dataclass(frozen=True)
@@ -1269,6 +1304,12 @@ def colour_blind_theme(base: AppTheme) -> AppTheme   # LIGHT_THEME → LIGHT_CB_
 - **Two base themes:** `LIGHT_THEME` and `DARK_THEME`. Both set every token; neither derives
   from the other. `dark` tells Qt which colour scheme the theme is, so Fusion's own
   drawing (frames, arrows) and native dialogs match it.
+- **Column labels** (RZG-41): `column_header_bg` is a step away from both list
+  backgrounds (sidebar and content) and from `header_bg`, so the labels read as their own
+  row of chrome under a section header. Their text is `text` (at least 7:1 on it), the
+  hovered label a step stronger, and the line under the row `border`. The separators are
+  at least 1.5:1 on the label background, so a 1 px line shows: `border` in the light
+  theme, a step lighter in the dark one.
 - **Colour-blind variants** (RZG-33): `LIGHT_CB_THEME` and `DARK_CB_THEME` derive from
   their base with `dataclasses.replace`, so they share every token except those that tell
   kinds apart: `status.*`, `diff_added*` / `diff_removed*`, `diff_line_button*` and
@@ -1309,7 +1350,8 @@ A surface or role is added when a widget first needs it (`Surface.CHROME` came w
 Controls panel: the toolbar's background), not ahead of time. A test checks that every
 value is used by the stylesheet, so a role can't be defined and forgotten.
 
-Roles style **widgets**. Things inside a list (a muted author column, a monospace hash) are
+Roles style **widgets**. A widget that paints itself (`ColumnHeader`, the diff gutter)
+takes its colours from the theme's tokens instead, given by its panel. Things inside a list (a muted author column, a monospace hash) are
 per-row data, which Qt's stylesheet can't target, so panels set them from the theme's tokens
 (`theme.colors.text_muted`, `theme.mono_font()`).
 

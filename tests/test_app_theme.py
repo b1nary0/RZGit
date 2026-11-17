@@ -113,6 +113,22 @@ class AppThemeTests(unittest.TestCase):
         with self.assertRaises(dataclasses.FrozenInstanceError):
             LIGHT_THEME.colors.text = "#000000"  # type: ignore[misc]
 
+    def test_column_labels_are_their_own_row_of_chrome(self):
+        """RZG-41: a background a step from both lists' and the section header's,
+        text readable on it, a visible line under the row."""
+        for theme in ALL_THEMES:
+            c = theme.colors
+            for other in (c.sidebar_bg, c.content_bg, c.header_bg):
+                self.assertGreaterEqual(contrast(c.column_header_bg, other), 1.05, (theme.name, other))
+            self.assertGreaterEqual(contrast(c.column_header_text, c.column_header_bg), 7, theme.name)
+            self.assertGreater(contrast(c.column_header_text_hover, c.column_header_bg),
+                               contrast(c.column_header_text, c.column_header_bg), theme.name)
+            self.assertGreaterEqual(contrast(c.column_header_border, c.column_header_bg), 1.25,
+                                    theme.name)
+            self.assertGreaterEqual(contrast(c.column_header_separator, c.column_header_bg), 1.5,
+                                    theme.name)
+            self.assertNotIn("QHeaderView", theme.stylesheet())
+
     def test_palette_and_mono_font(self):
         qt_app()
         palette = LIGHT_THEME.palette()

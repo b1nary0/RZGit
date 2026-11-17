@@ -213,23 +213,6 @@ QWidget[surface="content"] QTreeView::item:selected,
 QWidget[surface="content"] QTableView::item:selected {
     background: $content_selection;
 }
-QHeaderView {
-    background: $content_bg;
-    border: none;
-}
-QHeaderView::section {
-    background: $content_bg;
-    color: $text_muted;
-    border: none;
-    border-bottom: 1px solid $border_light;
-    padding: 3px 6px;
-}
-QHeaderView::section:hover {
-    color: $text;
-}
-QWidget[surface="sidebar"] QHeaderView, QWidget[surface="sidebar"] QHeaderView::section {
-    background: $sidebar_bg;
-}
 
 /* ---- tabs ----------------------------------------------------------- */
 QTabWidget::pane {
