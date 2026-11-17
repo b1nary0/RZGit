@@ -12,7 +12,7 @@ from datetime import datetime
 from html import escape
 
 from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from rzgitclient.git.git_models import Commit, CommitDetails, Stash
+from rzgitclient.ui.panels.commit_message_text import reflow
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.theme.style_roles import Role, Surface, set_role
@@ -35,6 +36,9 @@ DETAILS = "Details"
 PARENTS, BASED_ON = "Parents", "Based on"  # a stash's other parents are its own parts
 COPY = "Copy"
 COPY_SHA = "Copy SHA"
+COPY_SELECTION = "Copy Selection"
+COPY_MESSAGE = "Copy Message (Git Format)"  # not the reflowed text: git's own lines
+SELECT_ALL = "Select All"
 _SELECTABLE = (Qt.TextInteractionFlag.TextSelectableByMouse
                | Qt.TextInteractionFlag.TextSelectableByKeyboard)
 _SHORT = 8  # as Commit.short_sha
@@ -155,6 +159,11 @@ class CommitDetailsPanel(Panel):
         self._committer = self._label()
         self._committer_name = self._add_row(grid, "Committer", self._committer)
 
+        for label in (self._summary, self._body):
+            label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            label.customContextMenuRequested.connect(
+                lambda pos, lbl=label: self.message_menu(lbl).popup(lbl.mapToGlobal(pos)))
+
         self._content = PanelSegments(
             (summary, self._body_segment, PanelSegment(details, header=DETAILS)))
         self.layout().addWidget(self._content)
@@ -211,7 +220,7 @@ class CommitDetailsPanel(Panel):
             self._set_row(self._committer_name, self._committer, "")
             return
         self._summary.setText(details.summary)
-        self._body.setText(details.body)
+        self._body.setText(reflow(details.body))  # the label wraps it to the panel
         self._body_segment.setVisible(bool(details.body))
         self._sha.setText(details.sha)
         self._sha.setToolTip(details.sha)
@@ -269,6 +278,25 @@ class CommitDetailsPanel(Panel):
 
     def _copy_sha(self) -> None:
         QGuiApplication.clipboard().setText(self._sha.text())
+
+    def message_menu(self, label: QLabel) -> QMenu:
+        """The right-click menu of the summary or the body: the selection as shown,
+        or the whole message with git's own line breaks (spec §5.4)."""
+        menu = QMenu(label)
+        copy = menu.addAction(COPY_SELECTION,
+                              lambda: QGuiApplication.clipboard().setText(label.selectedText()))
+        copy.setShortcut(QKeySequence(QKeySequence.StandardKey.Copy))
+        copy.setEnabled(label.hasSelectedText())
+        details = self.details()
+        message = menu.addAction(COPY_MESSAGE)
+        if details is not None:
+            text = details.message
+            message.triggered.connect(lambda: QGuiApplication.clipboard().setText(text))
+        message.setEnabled(details is not None)
+        menu.addSeparator()
+        select = menu.addAction(SELECT_ALL, lambda: label.setSelection(0, len(label.text())))
+        select.setShortcut(QKeySequence(QKeySequence.StandardKey.SelectAll))
+        return menu
 
     def _parent_menu(self, label: QLabel, _pos: QPoint) -> QMenu:
         menu = QMenu(label)

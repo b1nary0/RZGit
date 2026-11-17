@@ -105,6 +105,7 @@ src/rzgitclient/
       file_tree.py              FileTree: changed files grouped by folder (plain Python, no Qt)
       commit_files_panel.py     CommitFilesPanel: the files the selected commit changed
       commit_details_panel.py   CommitDetailsPanel: the selected commit's message, people, SHA, parents, refs
+      commit_message_text.py    reflow: a hard-wrapped message body as paragraphs (plain Python, no Qt)
       diff_panel.py             DiffPanel
       diff_view.py              DiffView: read-only diff text, row backgrounds, hunk header links
       diff_gutter.py            DiffGutter: line buttons, line numbers and +/− marks beside a DiffView
@@ -771,8 +772,25 @@ can't collapse), it shows the placeholder "No commit selected".
   index and its untracked part) it has **Based on**: the first parent only. The content
   never scrolls sideways: a value too long for the panel (the SHA in a narrow sidebar)
   is cut off, and the SHA's tooltip and Copy still give it whole.
-- **Copying:** every text is selectable with the mouse and copied with Ctrl+C. Copy puts
-  the full sha on the clipboard. Right-clicking a parent offers *Copy SHA* (its full sha).
+- **The body is reflowed** (RZG-37): commit messages are hard-wrapped at about 72
+  characters, which a narrow sidebar would wrap again into ragged lines, so
+  `reflow(body)` (`commit_message_text.py`, plain Python) joins the lines of each
+  paragraph and the label wraps them to the panel. Each line is blank, a list item
+  (`-`, `*`, `+`, `•`, `1.`, `1)`), indented (two spaces or a tab), a trailer
+  (`Token: value`, the token without spaces: `Co-Authored-By:`, `Fixes:`, but only in a
+  paragraph of nothing else, as git reads trailers: a wrapped prose line may start
+  "thread: positions only") or prose. A
+  prose line joins the line before only when that is prose too, and not when that line is
+  under 50 characters and this one starts with a capital (a short headline). A list
+  item's wrapped continuation, indented to the item's text, joins its item. Everything
+  else keeps its line break: when in doubt, the break stays. Joined lines are joined with
+  one space; blank lines and indented lines are kept exactly. Only the display changes:
+  `CommitDetails.message` and `body` are git's.
+- **Copying:** every text is selectable with the mouse and copied with Ctrl+C, as shown
+  (the body reflowed). Right-clicking the summary or the body offers **Copy Selection**
+  (Ctrl+C; disabled with nothing selected), **Copy Message (Git Format)** (the whole
+  message as git has it, its line breaks too) and **Select All**. Copy puts the full
+  sha on the clipboard. Right-clicking a parent offers *Copy SHA* (its full sha).
 - **Parents** are links when that commit is loaded in `session.history`: a click sets
   `selection.commit` to it, and History selects and scrolls to it. Others are plain text.
   The links are worked out again on `history_changed`.

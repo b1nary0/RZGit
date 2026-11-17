@@ -59,7 +59,7 @@ class CommitDetailsPanelTests(unittest.TestCase):
         self.assertFalse(p.collapsed)
         self.assertFalse(p._placeholder.isVisibleTo(p))
         self.assertEqual(p._summary.text(), "Second commit")
-        self.assertEqual(p._body.text(), "Why it was made,\nin two lines.")
+        self.assertEqual(p._body.text(), "Why it was made, in two lines.")  # reflowed
         self.assertEqual(p._sha.text(), self.second.sha)
         self.assertEqual([lbl.property("sha") for lbl in p._parents], [self.first.sha])
         self.assertEqual(p._author.text(),
@@ -137,7 +137,7 @@ class CommitDetailsPanelTests(unittest.TestCase):
         late = CommitDetailsPanel(self.ctx)
         self.addCleanup(late.deleteLater)
         self.assertFalse(late.collapsed)
-        self.assertEqual(late._body.text(), "Why it was made,\nin two lines.")
+        self.assertEqual(late._body.text(), "Why it was made, in two lines.")
 
     def test_the_sha_never_makes_it_scroll_sideways(self):
         self.panel.resize(200, 300)  # narrower than the SHA
@@ -181,6 +181,52 @@ class CommitDetailsPanelTests(unittest.TestCase):
         self.choose(self.third)  # "third": a summary only
         _top, body, _details = self.panel._content.segments
         self.assertFalse(body.isVisibleTo(self.panel))
+
+    def test_a_hard_wrapped_body_is_reflowed_for_display_only(self):
+        """RZG-37: the label wraps paragraphs to the panel; git's lines stay git's."""
+        body = ("A body hard-wrapped at seventy-two characters, as editors do it,\n"
+                "so it reads as one paragraph here.\n\n- an item\n- another")
+        git(self.repo, "commit", "-q", "--allow-empty", "-m", f"Wrapped\n\n{body}")
+        self.session.refresh()
+        wait_idle(self.session)
+        self.choose(self.session.history[0])
+        self.assertEqual(self.panel._body.text(), (
+            "A body hard-wrapped at seventy-two characters, as editors do it, so it reads "
+            "as one paragraph here.\n\n- an item\n- another"))
+        self.assertEqual(self.panel.details().body, body)
+
+    def test_the_message_menu_copies_the_selection_or_git_s_message(self):
+        git(self.repo, "commit", "-q", "--allow-empty", "-m",
+            "Wrapped\n\nA body hard-wrapped at seventy-two characters, as editors\ndo it.")
+        self.session.refresh()
+        wait_idle(self.session)
+        self.choose(self.session.history[0])
+        body = self.panel._body
+        menu = self.panel.message_menu(body)
+        copy, message, _sep, select = menu.actions()
+        self.assertEqual([copy.text(), message.text(), select.text()],
+                         [commit_details_panel.COPY_SELECTION, commit_details_panel.COPY_MESSAGE,
+                          commit_details_panel.SELECT_ALL])
+        self.assertFalse(copy.isEnabled())  # nothing selected
+        message.trigger()
+        self.assertEqual(QGuiApplication.clipboard().text(),
+                         "Wrapped\n\nA body hard-wrapped at seventy-two characters, as "
+                         "editors\ndo it.")
+        select.trigger()
+        self.assertEqual(body.selectedText(), body.text())
+        copy = self.panel.message_menu(body).actions()[0]
+        self.assertTrue(copy.isEnabled())
+        copy.trigger()
+        self.assertEqual(QGuiApplication.clipboard().text(),
+                         "A body hard-wrapped at seventy-two characters, as editors do it.")
+        summary_menu = self.panel.message_menu(self.panel._summary)
+        self.assertEqual(len(summary_menu.actions()), 4)
+
+    def test_copy_message_waits_for_the_details(self):
+        self.selection.commit = self.second  # not waited for
+        message = self.panel.message_menu(self.panel._summary).actions()[1]
+        self.assertFalse(message.isEnabled())
+        wait_idle(self.session)
 
     def test_the_theme_keeps_the_fonts(self):
         self.choose(self.third)
