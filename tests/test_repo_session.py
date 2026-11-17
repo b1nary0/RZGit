@@ -1047,6 +1047,57 @@ class RepoSessionBranchTests(unittest.TestCase):
 
 
 
+class RepoSessionWorktreeTests(unittest.TestCase):
+    """Worktree commands, and what they reload (RZG-49, spec §4.1)."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name).resolve()
+        self.path = make_repo(self.tmp / "repo")
+        commit_file(self.path, "a.txt", "1\n", "first")
+        self.session = RepoSession()
+        self.addCleanup(self.session.shutdown)
+        self.finished = []
+        self.session.command_finished.connect(lambda c, ok: self.finished.append((c, ok)))
+        self.assertTrue(self.session.open(self.path))
+        wait_idle(self.session)
+
+    def test_add_reloads_the_branches_and_reports_its_command(self):
+        command = self.session.add_worktree(str(self.tmp / "wt"), "topic", "main")
+        self.assertEqual((command.path, command.branch, command.start),
+                         (str(self.tmp / "wt"), "topic", "main"))
+        wait_idle(self.session)
+        self.assertEqual(self.finished, [(command, True)])
+        self.assertIn("topic", [b.name for b in self.session.branches])
+        self.assertTrue((self.tmp / "wt" / "a.txt").is_file())
+
+    def test_remove_and_prune(self):
+        git(self.path, "worktree", "add", "-q", "-b", "a", str(self.tmp / "a"))
+        git(self.path, "worktree", "add", "-q", "-b", "b", str(self.tmp / "b"))
+        (self.tmp / "a" / "x").write_text("x")
+        refused = self.session.remove_worktree(str(self.tmp / "a"))
+        forced = self.session.remove_worktree(str(self.tmp / "a"), force=True)
+        wait_idle(self.session)
+        self.assertEqual(self.finished, [(refused, False), (forced, True)])
+        self.assertFalse((self.tmp / "a").exists())
+        shutil.rmtree(self.tmp / "b")
+        pruned = self.session.prune_worktrees()
+        wait_idle(self.session)
+        self.assertEqual(self.finished[-1], (pruned, True))
+        self.assertEqual(len(Repo(self.path).worktrees()), 1)
+
+    def test_no_repository_no_command(self):
+        self.session.close()
+        self.assertIsNone(self.session.add_worktree("/x", "b"))
+        self.assertIsNone(self.session.remove_worktree("/x"))
+        self.assertIsNone(self.session.prune_worktrees())
+
+
 class RepoSessionLastCommitTests(unittest.TestCase):
     """Refresh.LAST_COMMIT and amend (spec §4.1)."""
 

@@ -1,3 +1,4 @@
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -264,6 +265,40 @@ class SwitchCommandTests(unittest.TestCase):
             with self.subTest(kind), mock.patch.object(Repo, call) as method:
                 run_command(self.repo, GitCommand(kind, **kwargs))
                 method.assert_called_once_with(*args, **options)
+
+
+
+class WorktreeCommandTests(unittest.TestCase):
+    """The worktree commands' worker side (RZG-49, spec §4.1)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name).resolve()
+        self.path = make_repo(self.tmp / "repo")
+        commit_file(self.path, "a.txt", "1", "first")
+        git(self.path, "branch", "side")
+        self.repo = Repo(self.path)
+
+    def listed(self):
+        return {w.path: w.branch for w in self.repo.worktrees()}
+
+    def test_add_remove_and_prune(self):
+        new, side = str(self.tmp / "new"), str(self.tmp / "side")
+        run_command(self.repo, GitCommand(CommandKind.WORKTREE_ADD, path=new, branch="topic",
+                                          start="side"))
+        run_command(self.repo, GitCommand(CommandKind.WORKTREE_ADD, path=side, branch="side"))
+        self.assertEqual(self.listed(), {str(self.path): "main", new: "topic", side: "side"})
+
+        (self.tmp / "new" / "x.txt").write_text("x")
+        with self.assertRaises(GitError):  # changes, and no force
+            run_command(self.repo, GitCommand(CommandKind.WORKTREE_REMOVE, path=new))
+        run_command(self.repo, GitCommand(CommandKind.WORKTREE_REMOVE, path=new, force=True))
+        self.assertNotIn(new, self.listed())
+
+        shutil.rmtree(side)
+        run_command(self.repo, GitCommand(CommandKind.WORKTREE_PRUNE))
+        self.assertEqual(self.listed(), {str(self.path): "main"})
 
 
 if __name__ == "__main__":

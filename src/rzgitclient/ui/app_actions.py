@@ -37,6 +37,16 @@ class StashOp(StrEnum):
     DROP = "drop"
 
 
+class WorktreeOp(StrEnum):
+    """A worktree operation the Worktrees or Branches panel asks for (spec §8)."""
+
+    NEW = "new"  # target: the branch to start from, or "" for none
+    REMOVE = "remove"  # target: the worktree's path, as for the rest
+    PRUNE = "prune"  # the missing worktrees' records; no target
+    OPEN_FOLDER = "open_folder"
+    OPEN_TERMINAL = "open_terminal"
+
+
 class AppActions(QObject):
     """Holds the actions and their enabled state. Window-level handlers (the
     Open dialog, closing the window, resetting the layout, confirming a
@@ -53,6 +63,8 @@ class AppActions(QObject):
     # a window of its own or this one.
     open_worktree_requested = Signal(str)  # the worktree's path
     open_worktree_here_requested = Signal(str)
+    # A worktree operation; WorktreeDialogs asks if need be, then runs it (spec §8).
+    worktree_requested = Signal(object, str)  # WorktreeOp, path or branch ("" for none)
 
     def __init__(self, session: RepoSession, selection: Selection,
                  parent: QObject | None = None):
@@ -104,6 +116,9 @@ class AppActions(QObject):
         self.stash_changes = self._action("document-save", "Stas&h Changes…")
         # Show Worktrees (spec §8): MainWindow shows the Worktrees panel and raises it.
         self.worktrees = self._action("view-list-details", "Show &Worktrees", "Ctrl+Shift+W")
+        # New Worktree… (spec §8): WorktreeDialogs asks for the branch and folder.
+        self.new_worktree = self._action("folder-new", "New Wor&ktree…")
+        self.new_worktree.triggered.connect(lambda: self.request_worktree(WorktreeOp.NEW))
 
         # triggered(bool) would land in refresh's `parts` argument.
         self.refresh.triggered.connect(lambda: session.refresh())
@@ -177,6 +192,11 @@ class AppActions(QObject):
         """Show the worktree at ``path`` in this window (spec §8)."""
         self.open_worktree_here_requested.emit(path)
 
+    def request_worktree(self, op: WorktreeOp, target: str = "") -> None:
+        """Ask for ``op`` on the worktree at ``target`` (for NEW, the branch to
+        start from), once confirmed where it loses work (spec §8)."""
+        self.worktree_requested.emit(op, target)
+
     def selected(self, source: FileSource) -> tuple[str, ...]:
         """Paths of the selected rows from ``source`` (Stage, Unstage, Discard)."""
         return tuple(f.path for f in self._selection.files if f.source is source)
@@ -195,6 +215,7 @@ class AppActions(QObject):
         session = self._session
         self.refresh.setEnabled(session.repo is not None)
         self.worktrees.setEnabled(session.repo is not None)
+        self.new_worktree.setEnabled(session.repo is not None)
         worktree = bool(self.selected(FileSource.WORKTREE))
         self.stage.setEnabled(worktree)
         self.discard.setEnabled(worktree)

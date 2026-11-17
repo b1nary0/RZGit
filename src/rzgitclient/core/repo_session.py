@@ -442,6 +442,25 @@ class RepoSession(QObject):
         """Drop stash ``sha``. No undo: callers confirm first."""
         return self._command(GitCommand(CommandKind.STASH_DROP, sha=sha), Refresh.STASHES)
 
+    # Worktrees (spec §4.1): the list is the WorktreeReader's (§4.4), so they reload
+    # only the branches.
+    def add_worktree(self, path: str, branch: str,
+                     start: str | None = None) -> GitCommand | None:
+        """A worktree at ``path`` on a new branch ``branch`` from ``start``, or
+        on the existing ``branch`` without ``start``."""
+        return self._command(GitCommand(CommandKind.WORKTREE_ADD, path=str(path),
+                                        branch=branch, start=start), Refresh.BRANCHES)
+
+    def remove_worktree(self, path: str, force: bool = False) -> GitCommand | None:
+        """Delete the worktree at ``path``; git refuses one with changes unless
+        ``force``. Callers confirm first."""
+        return self._command(GitCommand(CommandKind.WORKTREE_REMOVE, path=str(path),
+                                        force=force), Refresh.BRANCHES)
+
+    def prune_worktrees(self) -> GitCommand | None:
+        """Drop the records of missing worktrees. Callers confirm first."""
+        return self._command(GitCommand(CommandKind.WORKTREE_PRUNE), Refresh.BRANCHES)
+
     def amend(self, message: str) -> GitCommand | None:
         """Replace HEAD's commit with the staged changes, if any, and ``message``."""
         return self._command(GitCommand(CommandKind.AMEND, message=message), Refresh.ALL)

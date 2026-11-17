@@ -20,6 +20,7 @@ from rzgitclient.ui.layout.panels_menu import PanelsMenu
 from rzgitclient.ui.panels.panel import PanelContext
 from rzgitclient.ui.panels.worktrees_panel import WorktreesPanel
 from rzgitclient.ui.stash_dialogs import StashDialogs
+from rzgitclient.ui.worktree_dialogs import WorktreeDialogs
 
 
 class WindowDirectory(Protocol):
@@ -87,11 +88,15 @@ class MainWindow(QMainWindow):
         repo_menu.addSeparator()
         repo_menu.addAction(actions.stash_changes)
         repo_menu.addSeparator()
-        repo_menu.addAction(actions.worktrees)
+        repo_menu.addActions([actions.worktrees, actions.new_worktree])
         actions.worktrees.triggered.connect(self.show_worktrees)
         actions.open_worktree_requested.connect(self.open_in_window)
         actions.open_worktree_here_requested.connect(self.open_repo)
         self.stash_dialogs = StashDialogs(self, self.session, actions)
+        self.worktree_dialogs = WorktreeDialogs(
+            self, self.session, actions, self.ctx.worktrees,
+            open_in_window=self.open_in_window,
+            window_for=lambda root: self.windows.window_for(root) if self.windows else None)
         actions.set_amend_confirmer(self.confirm_amend)
 
         actions.reset_layout.triggered.connect(self.reset_layout)

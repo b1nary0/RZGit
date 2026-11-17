@@ -539,6 +539,78 @@ class RepoCommitTests(unittest.TestCase):
         self.repo.commit("Hook read nothing")  # stdin is closed, not the test's terminal
 
 
+
+class WorktreeCommandTests(unittest.TestCase):
+    """Adding, removing and pruning worktrees (RZG-49, spec §4.1)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = canonical_path(self._tmp.name)
+        self.main = make_repo(self.tmp / "main")
+        commit_file(self.main, "a.txt", "1\n", "first")
+        git(self.main, "branch", "side")
+        self.repo = Repo(self.main)
+
+    def listed(self):
+        return {w.path: w.branch for w in self.repo.worktrees()}
+
+    def test_add_on_a_new_branch_from_a_start_point(self):
+        git(self.main, "switch", "-q", "-c", "later")
+        commit_file(self.main, "b.txt", "2\n", "second")
+        self.repo.worktree_add("-odd", "topic", "side")  # like an option; in the repo's folder
+        self.assertEqual(self.listed()[str(self.main / "-odd")], "topic")
+        self.assertEqual(git(self.main, "rev-parse", "topic").strip(),
+                         git(self.main, "rev-parse", "side").strip())
+
+    def test_add_on_an_existing_branch(self):
+        self.repo.worktree_add(self.tmp / "side", "side")
+        self.assertEqual(self.listed()[str(self.tmp / "side")], "side")
+        self.assertTrue((self.tmp / "side" / "a.txt").is_file())
+
+    def test_add_refuses_a_branch_checked_out_elsewhere_and_a_folder_in_use(self):
+        with self.assertRaises(GitError):
+            self.repo.worktree_add(self.tmp / "again", "main")
+        (self.tmp / "full").mkdir()
+        (self.tmp / "full" / "x").write_text("x")
+        with self.assertRaises(GitError):
+            self.repo.worktree_add(self.tmp / "full", "side")
+        self.assertEqual(set(self.listed()), {str(self.main)})
+
+    def test_remove_refuses_changes_unless_forced_and_keeps_the_branch(self):
+        self.repo.worktree_add(self.tmp / "side", "side")
+        (self.tmp / "side" / "new.txt").write_text("n")
+        with self.assertRaises(GitError):
+            self.repo.worktree_remove(self.tmp / "side")
+        self.assertTrue((self.tmp / "side" / "new.txt").exists())
+        self.repo.worktree_remove(self.tmp / "side", force=True)
+        self.assertFalse((self.tmp / "side").exists())
+        self.assertEqual(set(self.listed()), {str(self.main)})
+        self.assertIn("side", git(self.main, "branch", "--list", "side"))
+
+    def test_remove_refuses_a_locked_worktree_even_forced(self):
+        self.repo.worktree_add(self.tmp / "side", "side")
+        git(self.main, "worktree", "lock", str(self.tmp / "side"))
+        with self.assertRaises(GitError):
+            self.repo.worktree_remove(self.tmp / "side", force=True)
+        self.assertTrue((self.tmp / "side").is_dir())
+
+    def test_remove_a_missing_worktree_drops_its_record(self):
+        self.repo.worktree_add(self.tmp / "side", "side")
+        shutil.rmtree(self.tmp / "side")
+        self.repo.worktree_remove(self.tmp / "side")
+        self.assertEqual(set(self.listed()), {str(self.main)})
+
+    def test_prune_drops_missing_worktrees_but_not_locked_ones(self):
+        self.repo.worktree_add(self.tmp / "side", "side")
+        self.repo.worktree_add(self.tmp / "kept", "kept", "main")
+        git(self.main, "worktree", "lock", str(self.tmp / "kept"))
+        shutil.rmtree(self.tmp / "side")
+        shutil.rmtree(self.tmp / "kept")
+        self.repo.worktree_prune()
+        self.assertEqual(set(self.listed()), {str(self.main), str(self.tmp / "kept")})
+
+
 if __name__ == "__main__":
     unittest.main()
 

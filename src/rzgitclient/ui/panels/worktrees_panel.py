@@ -3,7 +3,8 @@
 Below Branches, from the window's ``ctx.worktrees`` reader, which it attaches
 to while it exists. This window's worktree is in bold. Collapsed while there
 is only one worktree. The panel never runs git or opens a window: it asks
-``actions.request_open_worktree`` (or ``request_open_worktree_here``).
+``actions.request_open_worktree`` (or ``request_open_worktree_here``), and
+``actions.request_worktree`` for the rest (new, remove, prune, folder, terminal).
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from rzgitclient.git.git_models import Worktree, WorktreeState
+from rzgitclient.ui.app_actions import WorktreeOp
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.theme.style_roles import Role, Surface, set_role
@@ -35,6 +37,10 @@ _MUTED = (BRANCH, SYNC, PATH)
 HIDDEN_AT_FIRST = ("Branch", "Path")  # the sidebar is narrow; both are in the tooltip
 OPEN_NEW = "Open in New Window"
 OPEN_HERE = "Open in This Window"
+OPEN_FOLDER = "Open Folder"
+OPEN_TERMINAL = "Open Terminal"
+REMOVE = "Remove…"
+PRUNE = "&Prune Missing Worktrees…"
 _PATH_ROLE = Qt.ItemDataRole.UserRole
 THIS_WINDOW = " (this window)"
 PATH_MAX_CHARS = 48  # the path column fits its text up to about this; it elides in the middle
@@ -111,6 +117,7 @@ class WorktreesPanel(Panel):
     _layout: QVBoxLayout
     open_action: QAction
     refresh_action: QAction
+    prune_action: QAction
 
     def _setup(self) -> None:
         self._tree = self._labels = None
@@ -132,7 +139,11 @@ class WorktreesPanel(Panel):
         self.open_action.triggered.connect(lambda: self._open(self._selected_item()))
         self.refresh_action = QAction("&Refresh", self)
         self.refresh_action.triggered.connect(self._refresh)
-        self.set_header_actions((self.open_action, self.refresh_action))
+        self.prune_action = QAction(PRUNE, self)
+        self.prune_action.triggered.connect(
+            lambda: self.ctx.actions.request_worktree(WorktreeOp.PRUNE))
+        self.set_header_actions((self.open_action, self.ctx.actions.new_worktree,
+                                 self.prune_action, self.refresh_action))
 
         self._muted = QColor(self.ctx.theme.current.colors.text_muted)
         if (reader := self.ctx.worktrees) is not None:
@@ -284,6 +295,8 @@ class WorktreesPanel(Panel):
         worktree = self.worktree_at(self._selected_item())
         self.open_action.setEnabled(worktree is not None and not worktree.missing)
         self.refresh_action.setEnabled(self.ctx.worktrees is not None)
+        # Git prunes no locked worktree (spec §4.1).
+        self.prune_action.setEnabled(any(w.missing and not w.locked for w in self.worktrees))
 
     def _open(self, item: QTreeWidgetItem | None) -> None:
         worktree = self.worktree_at(item)
@@ -306,7 +319,30 @@ class WorktreesPanel(Panel):
         here = menu.addAction(OPEN_HERE)
         here.setEnabled(not worktree.missing and worktree.path != self._owner_path())
         here.triggered.connect(lambda _=False: actions.request_open_worktree_here(worktree.path))
+        menu.addSeparator()
+        for text, op in ((OPEN_FOLDER, WorktreeOp.OPEN_FOLDER),
+                         (OPEN_TERMINAL, WorktreeOp.OPEN_TERMINAL)):
+            action = menu.addAction(text)
+            action.setEnabled(not worktree.missing)
+            action.triggered.connect(
+                lambda _=False, op=op: actions.request_worktree(op, worktree.path))
+        menu.addSeparator()
+        blocked = self.cant_remove(worktree)
+        remove = menu.addAction(REMOVE + (f" ({blocked})" if blocked else ""))
+        remove.setEnabled(not blocked)
+        remove.triggered.connect(
+            lambda _=False: actions.request_worktree(WorktreeOp.REMOVE, worktree.path))
         return menu
+
+    def cant_remove(self, worktree: Worktree) -> str | None:
+        """Why ``worktree`` can't be removed from here, or None (spec §5.4)."""
+        if worktree.main:
+            return "main worktree"
+        if worktree.path == self._owner_path():
+            return "this window"
+        if worktree.locked:
+            return "locked"
+        return None
 
     def _refresh(self) -> None:
         if self.ctx.worktrees is not None:

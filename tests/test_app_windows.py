@@ -1,4 +1,5 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -9,7 +10,9 @@ from PySide6.QtWidgets import QStyle
 from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.column_prefs import ColumnPrefs
 from rzgitclient.core.commit_drafts import CommitDrafts
+from rzgitclient.ui.app_actions import WorktreeOp
 from rzgitclient.ui.app_windows import AppWindows
+from rzgitclient.ui.worktree_dialogs import REMOVE, NewWorktree
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
 from rzgitclient.ui.theme.theme_manager import ThemeManager, ThemeMode
 from tests.support import commit_file, git, make_repo, qt_app, wait_idle
@@ -84,6 +87,41 @@ class AppWindowsTests(unittest.TestCase):
         window.ctx.actions.request_open_worktree(str(linked))
         window.ctx.actions.request_open_worktree(str(self.one))
         self.assertEqual(len(self.windows.windows()), 2)  # raised, not opened again
+
+    def test_new_worktree_with_open_it_opens_it_in_a_window_of_its_own(self):
+        window = self.open(self.one)
+        path = self.tmp / "one-topic"
+        with mock.patch.object(window.worktree_dialogs, "ask_new",
+                               return_value=NewWorktree(str(path), "topic", "main", True)):
+            window.ctx.actions.new_worktree.trigger()
+        wait_idle(window.session)
+        other = self.windows.window_for(path)
+        self.assertIsNotNone(other)  # once the add finished
+        self.assertIsNot(other, window)
+        wait_idle(other.session)
+        self.assertEqual(other.session.head, "topic")
+
+    def test_removing_a_worktree_closes_the_window_showing_it(self):
+        linked = self.tmp / "one-linked"
+        git(self.one, "worktree", "add", "-q", "-b", "linked", str(linked))
+        window = self.open(self.one)
+        window.ctx.actions.request_open_worktree(str(linked))
+        other = self.windows.window_for(linked)
+        wait_idle(other.session)
+        reader = window.ctx.worktrees
+        reader.refresh()
+        deadline = 200
+        while reader.busy and deadline:
+            QCoreApplication.processEvents()
+            deadline -= 1
+            time.sleep(0.01)
+        self.assertIn(str(linked), [w.path for w in reader.worktrees])
+        with mock.patch.object(window.worktree_dialogs, "ask", return_value=REMOVE):
+            window.ctx.actions.request_worktree(WorktreeOp.REMOVE, str(linked))
+        wait_idle(window.session)
+        self.assertEqual(self.windows.windows(), (window,))
+        self.assertFalse(linked.exists())
+        self.assertIn("linked", git(self.one, "branch", "--list", "linked"))  # kept
 
     def test_open_in_this_window_raises_the_window_already_showing_it(self):
         linked = self.tmp / "one-linked"

@@ -449,7 +449,7 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual([a for a in menu.actions() if not a.isSeparator()],
                          [actions.stage, actions.unstage, actions.discard,
                           actions.stage_all, actions.unstage_all, actions.commit, actions.amend,
-                          actions.stash_changes, actions.worktrees])
+                          actions.stash_changes, actions.worktrees, actions.new_worktree])
 
     def test_discard_asks_first_and_acts_only_on_unstaged_rows(self):
         window = self.start()

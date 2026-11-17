@@ -42,6 +42,14 @@ class CommandKind(StrEnum):
     STASH_PUSH = "stash_push"  # with ``message``; ``untracked`` files too
     STASH_APPLY = "stash_apply"  # rolled back if it fails; ``pop``: dropped if it worked
     STASH_DROP = "stash_drop"
+    # Worktrees (``path`` is the worktree's folder; spec §4.1):
+    WORKTREE_ADD = "worktree_add"  # on ``branch``: new from ``start``, or existing without
+    WORKTREE_REMOVE = "worktree_remove"  # ``force``: even with changes
+    WORKTREE_PRUNE = "worktree_prune"  # the records of missing worktrees
+
+
+WORKTREE_COMMANDS = frozenset({CommandKind.WORKTREE_ADD, CommandKind.WORKTREE_REMOVE,
+                               CommandKind.WORKTREE_PRUNE})
 
 
 @dataclass(frozen=True, eq=False)
@@ -58,10 +66,12 @@ class GitCommand:
     new_name: str = ""  # CREATE_BRANCH's and RENAME_BRANCH's
     stash: bool = False  # SWITCH's
     switch: bool = False  # CREATE_BRANCH's
-    force: bool = False  # DELETE_BRANCH's
+    force: bool = False  # DELETE_BRANCH's and WORKTREE_REMOVE's
     sha: str = ""  # the stash commands'
     untracked: bool = False  # STASH_PUSH's
     pop: bool = False  # STASH_APPLY's
+    path: str = ""  # the worktree commands': the worktree's folder
+    start: str | None = None  # WORKTREE_ADD's: a new ``branch`` from here; None: existing
 
 
 def run_command(repo: Repo, command: GitCommand) -> str | None:
@@ -104,6 +114,12 @@ def run_command(repo: Repo, command: GitCommand) -> str | None:
             return _apply_stash(repo, command.sha, command.pop)
         case CommandKind.STASH_DROP:
             repo.stash_drop(_stash(repo, command.sha).ref)
+        case CommandKind.WORKTREE_ADD:
+            repo.worktree_add(command.path, command.branch, command.start)
+        case CommandKind.WORKTREE_REMOVE:
+            repo.worktree_remove(command.path, force=command.force)
+        case CommandKind.WORKTREE_PRUNE:
+            repo.worktree_prune()
         case _:
             raise ValueError(f"not a command: {command.kind!r}")
     return None

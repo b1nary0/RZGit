@@ -6,7 +6,7 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QListWidget, QListWidgetItem, QMenu, QVBoxLayout
 
-from rzgitclient.ui.app_actions import BranchOp
+from rzgitclient.ui.app_actions import BranchOp, WorktreeOp
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.style_roles import Surface
 
@@ -94,6 +94,9 @@ class BranchesPanel(Panel):
 
         add(menu, f"Switch to {label}", BranchOp.SWITCH, not_current=True)
         add(menu, f"New Branch from {label}…", BranchOp.NEW)
+        worktree = menu.addAction(f"New Worktree from {label}…")
+        worktree.triggered.connect(
+            lambda _=False: self.ctx.actions.request_worktree(WorktreeOp.NEW, name))
         add(menu, f"Rename {label}…", BranchOp.RENAME)
         add(menu, f"Delete {label}…", BranchOp.DELETE, not_current=True)
         integrate = menu.addMenu("Merge / Rebase")

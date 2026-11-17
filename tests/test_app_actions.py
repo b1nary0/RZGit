@@ -7,7 +7,7 @@ from PySide6.QtGui import QKeySequence
 
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import FileSelection, FileSource, Selection
-from rzgitclient.ui.app_actions import AppActions, BranchOp
+from rzgitclient.ui.app_actions import AppActions, BranchOp, WorktreeOp
 from rzgitclient.ui.theme.theme_manager import ThemeMode
 from tests.support import commit_file, git, make_repo, qt_app, wait_idle
 
@@ -56,6 +56,20 @@ class AppActionsTests(unittest.TestCase):
         self.assertTrue(self.actions.refresh.isEnabled())
         self.session.close()
         self.assertFalse(self.actions.refresh.isEnabled())
+
+    def test_new_worktree_needs_a_repo_and_asks_with_no_branch(self):
+        seen = []
+        self.actions.worktree_requested.connect(lambda op, target: seen.append((op, target)))
+        self.assertFalse(self.actions.new_worktree.isEnabled())
+        self.assertEqual(self.actions.new_worktree.text(), "New Wor&ktree…")
+        self.assertTrue(self.actions.new_worktree.shortcut().isEmpty())  # no shortcuts
+        commit_file(self.repo, "a.txt", "1", "first")
+        self.session.open(self.repo)
+        wait_idle(self.session)
+        self.assertTrue(self.actions.new_worktree.isEnabled())
+        self.actions.new_worktree.trigger()
+        self.actions.request_worktree(WorktreeOp.REMOVE, "/x/wt")
+        self.assertEqual(seen, [(WorktreeOp.NEW, ""), (WorktreeOp.REMOVE, "/x/wt")])
 
     def test_worktrees_needs_a_repo_and_opening_a_worktree_is_asked_for(self):
         self.assertFalse(self.actions.worktrees.isEnabled())

@@ -5,7 +5,7 @@ from unittest import mock
 
 from PySide6.QtWidgets import QApplication
 
-from rzgitclient.ui.app_actions import BranchOp
+from rzgitclient.ui.app_actions import BranchOp, WorktreeOp
 from rzgitclient.ui.panels.branches_panel import BranchesPanel
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
@@ -108,6 +108,7 @@ class BranchesPanelTests(unittest.TestCase):
         self.assertEqual(self.entries(self.panel.menu_for("feature")), [
             ("Switch to feature", True),
             ("New Branch from feature…", True),
+            ("New Worktree from feature…", True),
             ("Rename feature…", True),
             ("Delete feature…", True),
             ("Merge / Rebase", [("Merge feature into main…", True),
@@ -121,6 +122,7 @@ class BranchesPanelTests(unittest.TestCase):
         self.assertEqual(self.entries(self.panel.menu_for("main")), [
             ("Switch to main (current branch)", False),
             ("New Branch from main…", True),
+            ("New Worktree from main…", True),
             ("Rename main…", True),
             ("Delete main… (current branch)", False),
             ("Merge / Rebase", [("Merge main into main… (current branch)", False),
@@ -135,11 +137,16 @@ class BranchesPanelTests(unittest.TestCase):
         menu = self.panel.menu_for("feature")
         actions = [a for a in menu.actions() if not a.isSeparator()]
         submenu = next(a.menu() for a in actions if a.menu() is not None)
-        for action in [*actions[:4], *submenu.actions()]:
+        worktree_seen = []
+        self.ctx.actions.worktree_requested.connect(
+            lambda op, target: worktree_seen.append((op, target)))
+        for action in [*actions[:5], *submenu.actions()]:
             action.trigger()
         self.assertEqual(seen, [(op, "feature") for op in (
             BranchOp.SWITCH, BranchOp.NEW, BranchOp.RENAME, BranchOp.DELETE,
             BranchOp.MERGE, BranchOp.REBASE)])
+        # New Worktree from X… asks for a worktree starting from X (spec §5.4).
+        self.assertEqual(worktree_seen, [(WorktreeOp.NEW, "feature")])
 
     def test_copy_name(self):
         self.open_with_branches("feature/x")
@@ -153,7 +160,7 @@ class BranchesPanelTests(unittest.TestCase):
         self.ctx.session.refresh()
         wait_idle(self.ctx.session)
         entries = self.entries(self.panel.menu_for("main"))
-        self.assertEqual(entries[4], ("Merge / Rebase", [("Merge main into HEAD…", True),
+        self.assertEqual(entries[5], ("Merge / Rebase", [("Merge main into HEAD…", True),
                                                          ("Rebase HEAD onto main…", True)]))
         self.assertTrue(entries[0][1])
 

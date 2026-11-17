@@ -267,6 +267,23 @@ class Repo:
         repository's entry is left out."""
         return list_worktrees(self.common_dir)
 
+    def worktree_add(self, path: str | Path, branch: str, start: str | None = None) -> None:
+        """A worktree at ``path``: on a new branch ``branch`` from ``start``, or,
+        without ``start``, on the existing branch ``branch`` (spec §4.1)."""
+        if start is None:
+            self.git("worktree", "add", "--quiet", "--", str(path), branch)
+        else:
+            self.git("worktree", "add", "--quiet", "-b", branch, "--", str(path), start)
+
+    def worktree_remove(self, path: str | Path, *, force: bool = False) -> None:
+        """Delete the worktree at ``path`` and git's record of it; git refuses one
+        with changes unless ``force``, and a locked one either way."""
+        self.git("worktree", "remove", *(["--force"] if force else []), "--", str(path))
+
+    def worktree_prune(self) -> None:
+        """Drop the records of worktrees whose folders are gone (not locked ones)."""
+        self.git("worktree", "prune")
+
     def listed_files(self) -> list[str]:
         """Tracked files and untracked ones git doesn't ignore, relative to the root."""
         out = self.git("ls-files", "-z", "--cached", "--others", "--exclude-standard")

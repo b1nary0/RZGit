@@ -10,11 +10,16 @@ from PySide6.QtGui import QColor
 from rzgitclient.core.worktree_reader import WorktreeReader
 from rzgitclient.git.git_models import Worktree, WorktreeState
 from rzgitclient.git.repo import canonical_path
+from rzgitclient.ui.app_actions import WorktreeOp
 from rzgitclient.ui.panels.worktrees_panel import (
     COLUMNS,
     NO_WORKTREES,
+    OPEN_FOLDER,
     OPEN_HERE,
     OPEN_NEW,
+    OPEN_TERMINAL,
+    PRUNE,
+    REMOVE,
     WorktreesPanel,
     PATH,
     branch_text,
@@ -231,8 +236,10 @@ class WorktreesPanelTests(unittest.TestCase):
         here = []
         self.ctx.actions.open_worktree_here_requested.connect(here.append)
         menu = self.panel.menu_for(self.panel.worktree_at(self.item("main")))
-        self.assertEqual([a.text() for a in menu.actions()], [OPEN_NEW, OPEN_HERE])
-        new_action, here_action = menu.actions()
+        self.assertEqual([a.text() for a in menu.actions()],
+                         [OPEN_NEW, OPEN_HERE, "", OPEN_FOLDER, OPEN_TERMINAL, "",
+                          REMOVE + " (main worktree)"])
+        new_action, here_action = menu.actions()[:2]
         self.assertTrue(new_action.isEnabled() and here_action.isEnabled())
         new_action.trigger()
         here_action.trigger()
@@ -241,13 +248,43 @@ class WorktreesPanelTests(unittest.TestCase):
 
     def test_this_window_s_own_worktree_can_t_be_opened_here(self):
         new_action, here_action = self.panel.menu_for(
-            self.panel.worktree_at(self.item("feature"))).actions()
+            self.panel.worktree_at(self.item("feature"))).actions()[:2]
         self.assertTrue(new_action.isEnabled())  # raises this window
         self.assertFalse(here_action.isEnabled())
 
     def test_a_missing_worktree_s_menu_is_disabled(self):
-        actions = self.panel.menu_for(self.panel.worktree_at(self.item("gone"))).actions()
-        self.assertEqual([a.isEnabled() for a in actions], [False, False])
+        actions = [a for a in self.panel.menu_for(
+            self.panel.worktree_at(self.item("gone"))).actions() if not a.isSeparator()]
+        # Only Remove: a missing worktree's record can be removed (spec §5.4).
+        self.assertEqual([(a.text(), a.isEnabled()) for a in actions],
+                         [(OPEN_NEW, False), (OPEN_HERE, False), (OPEN_FOLDER, False),
+                          (OPEN_TERMINAL, False), (REMOVE, True)])
+
+    def menu_actions(self, name):
+        menu = self.panel.menu_for(self.panel.worktree_at(self.item(name)))
+        return {a.text(): a for a in menu.actions() if not a.isSeparator()}
+
+    def worktree_requests(self):
+        seen = []
+        self.ctx.actions.worktree_requested.connect(lambda op, t: seen.append((op, t)))
+        return seen
+
+    def test_remove_says_why_it_is_disabled(self):
+        self.assertFalse(self.menu_actions("main")[REMOVE + " (main worktree)"].isEnabled())
+        self.assertFalse(self.menu_actions("feature")[REMOVE + " (this window)"].isEnabled())
+        self.assertFalse(self.menu_actions("loose")[REMOVE + " (locked)"].isEnabled())
+
+    def test_folder_terminal_and_remove_ask_for_their_operation(self):
+        git(self.main, "worktree", "add", "-q", "-b", "other", str(self.tmp / "other"))
+        self.settle()
+        seen = self.worktree_requests()
+        actions = self.menu_actions("other")
+        for text in (OPEN_FOLDER, OPEN_TERMINAL, REMOVE):
+            self.assertTrue(actions[text].isEnabled(), text)
+            actions[text].trigger()
+        path = str(self.tmp / "other")
+        self.assertEqual(seen, [(WorktreeOp.OPEN_FOLDER, path),
+                                (WorktreeOp.OPEN_TERMINAL, path), (WorktreeOp.REMOVE, path)])
 
     def test_the_owner_s_worktree_is_bold(self):
         self.assertTrue(self.item("feature").font(0).bold())
@@ -282,12 +319,28 @@ class WorktreesPanelTests(unittest.TestCase):
         self.tree.itemDoubleClicked.emit(self.item("gone"), 0)
         self.assertEqual(self.opened, [])
 
-    def test_the_header_menu_has_open_and_refresh(self):
+    def test_the_header_menu_has_open_new_prune_and_refresh(self):
         self.assertEqual(self.panel.header_actions,
-                         (self.panel.open_action, self.panel.refresh_action))
+                         (self.panel.open_action, self.ctx.actions.new_worktree,
+                          self.panel.prune_action, self.panel.refresh_action))
+        self.assertEqual(self.panel.prune_action.text(), PRUNE)
         (self.main / "b.txt").write_text("b\n")
         self.panel.refresh_action.trigger()
         self.assertTrue(self.reader.busy)
+
+    def test_prune_is_enabled_while_an_unlocked_worktree_is_missing(self):
+        seen = self.worktree_requests()
+        self.assertTrue(self.panel.prune_action.isEnabled())  # "gone"
+        self.panel.prune_action.trigger()
+        self.assertEqual(seen, [(WorktreeOp.PRUNE, "")])
+        git(self.main, "worktree", "prune")
+        self.settle()
+        self.assertFalse(self.panel.prune_action.isEnabled())
+        # A missing locked worktree isn't pruned by git, so it doesn't count.
+        shutil.rmtree(self.tmp / "loose")
+        self.settle()
+        self.assertTrue(self.panel.worktree_at(self.item("loose")).missing)
+        self.assertFalse(self.panel.prune_action.isEnabled())
 
     def test_the_selection_is_kept_through_a_refresh(self):
         self.item("loose").setSelected(True)

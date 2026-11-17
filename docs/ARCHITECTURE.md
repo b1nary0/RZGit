@@ -84,9 +84,10 @@ src/rzgitclient/
   ui/
     main_window.py              MainWindow: thin shell (menus, status bar, LayoutHost)
     app_windows.py              AppWindows: the open main windows; open a window on a path, or raise it
-    app_actions.py              AppActions: every QAction, defined once; BranchOp, StashOp
+    app_actions.py              AppActions: every QAction, defined once; BranchOp, StashOp, WorktreeOp
     branch_dialogs.py           BranchDialogs: the confirmations and name boxes of branch operations
     stash_dialogs.py            StashDialogs: Stash Changes… and the Drop confirmation
+    worktree_dialogs.py         WorktreeDialogs, NewWorktreeDialog: New Worktree…, Remove, Prune; folder, terminal
     app_icon.py                 app_icon(): the app's QIcon, built from assets/icon (app.py sets it)
     assets/                     image files shipped as package data (no modules)
       icon/                     the app icon: its SVG source and PNGs at 16–512 px
@@ -205,6 +206,9 @@ class RepoSession(QObject):
     def stash_changes(self, message, untracked=True) -> GitCommand | None   # git stash push
     def apply_stash(self, sha, pop=False) -> GitCommand | None   # rolled back on a conflict
     def drop_stash(self, sha) -> GitCommand | None
+    def add_worktree(self, path, branch, start=None) -> GitCommand | None  # git worktree add (RZG-49)
+    def remove_worktree(self, path, force=False) -> GitCommand | None    # --force: even with changes
+    def prune_worktrees(self) -> GitCommand | None    # the records of missing worktrees
     commands_in_flight: tuple[GitCommand, ...]   # queued or running, until command_finished
 
     # Latest values, so a panel created later renders at once (read-only properties):
@@ -440,6 +444,21 @@ class RepoSession(QObject):
     - **Notices:** `run_command` returns a message when a command worked, but not quite
       as asked. The session sends each through `notice_occurred`, after the parts and
       before `command_finished`, and MainWindow shows it in an information box.
+  - **Worktree commands** (RZG-49) change the repository's list of worktrees, which
+    the session doesn't hold (§4.4). They run in this window's worktree (any worktree
+    of the repository can) and reload `BRANCHES`. A command carries the folder
+    (`path`, passed after `--`).
+    - **Add** (`git worktree add --quiet [-b <branch>] -- <path> <start or branch>`):
+      with `start`, a new branch `branch` from `start`; without it, the existing branch
+      `branch` checked out. Git refuses a branch already checked out in another worktree,
+      a taken branch name, and a folder that exists and isn't empty.
+    - **Remove** (`git worktree remove [--force] -- <path>`) deletes the folder (with its
+      ignored files) and git's record of it; the branch is kept. Without `force`, git
+      refuses a worktree with changes or untracked files, so a stale state can't lose
+      work. It refuses a locked one either way. On a missing worktree it drops only the
+      record.
+    - **Prune** (`git worktree prune`) drops the records of worktrees whose folders are
+      gone, except locked ones.
   - **No editor or prompt, ever:** git runs with `GIT_EDITOR=false` and
     `GIT_TERMINAL_PROMPT=0`, and with stdin closed unless a command passes input. A
     command that would open an editor fails instead of waiting for it.
@@ -653,6 +672,9 @@ class WorktreeReader(QObject):
   Without inotify, only opening and activation read anything.
 - **Shutdown** (the window closing) drops queued work and waits for the running git
   command; results that arrive after it are dropped.
+- **After a worktree command** (§4.1, RZG-49) `WorktreeDialogs` calls `refresh()`, so
+  this window's list follows even without inotify. Other windows' readers follow
+  through their watches.
 
 ## 5. Panels
 
@@ -695,8 +717,8 @@ class Panel(QWidget):
 ```
 
 **The header menu** (RZG-48): `header_actions` are the panel's commands for the panel as a
-whole: Open and Refresh in Worktrees, later Prune Missing Worktrees… (RZG-49) and a sort
-order (RZG-43). The layout shows them (§6.2): a **⋯** button at the right of the section
+whole: Open, New Worktree…, Prune Missing Worktrees… and Refresh in Worktrees (RZG-48,
+RZG-49), later a sort order (RZG-43). The layout shows them (§6.2): a **⋯** button at the right of the section
 header in a split, and the menu of the panel's tab when it is right-clicked in a tab
 group. A panel with none shows no button and no menu. The panel owns its actions (they
 are its children, or come from `ctx.actions`) and keeps their enabled state; the layout
@@ -861,7 +883,7 @@ The first three are extracted from the original `main_window.py` with the same b
 | StagedPanel | `staged` | sidebar | "Staged Files": the index's changes; collapsed when empty | `selection.select()`; unstages |
 | DiffPanel | `diff` | content | the diff of `selection.file`, unified or side by side | stages, unstages and discards hunks and lines |
 | CommitPanel | `commit` | sidebar | the commit message being written | commits the staged changes |
-| WorktreesPanel | `worktrees` | sidebar | "Worktrees": each worktree's name, state and ahead/behind (branch and path on request); collapsed with only one worktree | opens a worktree, through `actions.request_open_worktree` and `request_open_worktree_here` |
+| WorktreesPanel | `worktrees` | sidebar | "Worktrees": each worktree's name, state and ahead/behind (branch and path on request); collapsed with only one worktree | opens a worktree, through `actions.request_open_worktree` and `request_open_worktree_here`; asks for worktree operations (`request_worktree`) |
 
 **Branches** (BranchesPanel, RZG-35) is where branches are worked with. It never runs
 git or shows a dialog: it asks `actions.request_branch(op, name)` (§8), and the list
@@ -869,7 +891,8 @@ follows the session.
 - **Double-click** a branch to switch to it (MainWindow confirms first). The current
   branch, and the "(no commits)" row of a fresh repository, do nothing.
 - **Right-click** a branch for its menu, built by `menu_for(name)`:
-  Switch to *X*, New Branch from *X*…, Rename *X*…, Delete *X*…; a **Merge / Rebase**
+  Switch to *X*, New Branch from *X*…, New Worktree from *X*… (RZG-49), Rename *X*…,
+  Delete *X*…; a **Merge / Rebase**
   submenu with Merge *X* into *current*… and Rebase *current* onto *X*…; then, after a
   separator, Copy Name (to the clipboard, the panel's own job). *current* is the
   current branch, or "HEAD" when detached. On the current branch, Switch, Delete, Merge
@@ -904,9 +927,17 @@ runs git or shows a dialog.
   the selected row: it is disabled with none selected and for a missing worktree, and
   double-clicking a missing one does nothing. **Refresh** in the header menu calls
   `ctx.worktrees.refresh()`.
+- **The header menu** (RZG-49): Open, **New Worktree…** (`ctx.actions.new_worktree`),
+  **Prune Missing Worktrees…** and Refresh. Prune asks
+  `ctx.actions.request_worktree(WorktreeOp.PRUNE)`, and is enabled when a listed
+  worktree is missing and not locked (git prunes no locked one). The panel is collapsed
+  with one worktree, but its ⋯ button still shows, so New Worktree… is there too.
 - **Right-click** a worktree for **Open in New Window** (as Open) and **Open in This
   Window** (`ctx.actions.request_open_worktree_here(path)`). Open in This Window is
   disabled on this window's own worktree; both are disabled on a missing one.
+  Then (RZG-49) **Open Folder** and **Open Terminal**, disabled on a missing one, and
+  **Remove…**, disabled with the reason: "(main worktree)", "(this window)" or
+  "(locked)". Each asks `ctx.actions.request_worktree(op, path)`.
 - The selection is kept by path through refreshes.
 
 **Stashes** (StashPanel, RZG-36) lists `session.stashes`, newest first, in three
@@ -1720,6 +1751,40 @@ Per-widget sheets are slow to apply and scatter the rules.
   `actions.request_open_worktree_here(path)` (**Open in This Window**) sends
   `open_worktree_here_requested`, and MainWindow opens it with `open_repo`: here, unless
   another window shows it, which is raised instead.
+- **Worktree operations** (RZG-49): the Worktrees panel and the Branches panel call
+  `actions.request_worktree(op, target)`, with a `WorktreeOp` (`NEW`, `REMOVE`, `PRUNE`,
+  `OPEN_FOLDER`, `OPEN_TERMINAL`), which sends `worktree_requested`. `target` is a
+  worktree's path, or for `NEW` the branch to start from ("" for none). **New
+  Worktree…** (`actions.new_worktree`, after Show Worktrees in the Repository menu, and
+  in the Worktrees header menu) asks for `NEW` with no branch; it is enabled when a
+  repository is open. **`WorktreeDialogs`** (`ui/worktree_dialogs.py`, made by MainWindow)
+  asks, then calls the session, and calls `ctx.worktrees.refresh()` when a worktree
+  command finishes (§4.4).
+  - **New Worktree…** (`NewWorktreeDialog`): **Existing branch**, a list of the local
+    branches, where one checked out in a worktree shows as "*X* (in worktree *Y*)" and
+    can't be picked; or **New branch**, a name and a start point (an editable list of
+    the branches, the current one, or `HEAD` when detached, by default). **New
+    Worktree from *X*…** starts on existing branch *X* when it is free, else on a new
+    branch from *X*. The **folder** is `<main repository folder>-<branch>` beside the
+    main repository (a `/` in the branch becomes `-`), following the branch until it is
+    edited, with **Browse…**. **Open it** is checked. **Create** is enabled when the
+    branch can be used and the folder doesn't exist or is empty. With Open it, once
+    the add command finishes without error (`command_finished`, by identity), the
+    worktree opens with `open_in_window` (§8.1).
+  - **Remove…:** "Remove worktree *X*?" (Cancel default): its folder is deleted, with
+    any ignored files, and its branch is kept; for a missing one, only git's record is
+    removed. If the reader's state (§4.4) has changes, a second box says they will be
+    lost and asks **Remove Anyway**, which forces it. The main worktree, a locked one and
+    this window's own are refused. A window showing the worktree is closed first
+    (`AppWindows.window_for`, §8.1).
+  - **Prune Missing Worktrees…:** lists the reader's missing worktrees that aren't
+    locked ("Prune 2 missing worktrees?"), naming any missing locked ones as kept,
+    then calls `session.prune_worktrees()`. Branches are kept.
+  - **Open Folder** opens the folder with `QDesktopServices.openUrl`. **Open
+    Terminal** starts a terminal there (`QProcess.startDetached`, the folder as its
+    working directory): `$TERMINAL` if set and found (split like a shell would), else the first of
+    `konsole`, `gnome-terminal`, `xfce4-terminal`, `x-terminal-emulator` on the `PATH`
+    (`find_terminal`). If neither works, a box says so. No git runs.
 - **`MainWindow`** is a thin shell: menus built from `AppActions`, the status
   bar summary (from session signals: path · branch · commits · changed files), error dialogs (from `error_occurred`), and a
   `LayoutHost` as the central widget. The Open, Quit and Reset Layout handlers live here
@@ -1785,6 +1850,9 @@ The app can have several main windows open, each on its own repository or worktr
   down anything still open.
 - **A restart** brings back only the last repository (§6.3), not every window. A second
   `rzgitclient <path>` started while the app runs is a second process, as before.
+- **A removed worktree's window closes** (RZG-49): before removing a worktree,
+  `WorktreeDialogs` closes the window showing it (`window_for`), which saves and shuts
+  down as on any close. A window never removes its own worktree.
 - **Each window's worktree reader** (`WorktreeReader`, §4.4) is one of its own objects,
   like its watcher: made with it, told when the app is active, and shut down when it
   closes.
