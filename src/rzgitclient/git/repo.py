@@ -24,6 +24,7 @@ from rzgitclient.git.git_models import (
     Hunk,
     LastCommit,
     LineKind,
+    Stash,
 )
 
 
@@ -325,12 +326,68 @@ class Repo:
         """``git branch -d``, which refuses an unmerged branch; ``-D`` with ``force``."""
         self.git("branch", "-D" if force else "-d", name)
 
-    def stash_push(self, message: str) -> bool:
-        """Stash staged, unstaged and untracked changes (not ignored files).
+    def stash_push(self, message: str, *, untracked: bool = True) -> bool:
+        """Stash staged and unstaged changes, and with ``untracked`` untracked
+        files too (never ignored ones). An empty ``message`` gives git's own.
         True if a stash was made: with nothing to stash, git makes none."""
         before = self._resolve("refs/stash")
-        self.git("stash", "push", "-q", "--include-untracked", "-m", message)
+        args = ["stash", "push", "-q"]
+        if untracked:
+            args.append("--include-untracked")
+        if message:
+            args += ["-m", message]
+        self.git(*args)
         return self._resolve("refs/stash") != before
+
+    def stashes(self) -> list[Stash]:
+        """The stashes, newest first (spec §4.1)."""
+        out = self.git("stash", "list", "-z", "--format=%H%x1f%P%x1f%an%x1f%cI%x1f%gs")
+        result = []
+        for index, record in enumerate(r for r in out.split("\0") if r):
+            sha, parents, author, date, subject = record.split("\x1f", 4)
+            branch, message = _stash_subject(subject)
+            result.append(Stash(sha, author, datetime.fromisoformat(date), message,
+                                index, branch, message, len(parents.split()) > 2))
+        return result
+
+    def stash_files(self, stash: Stash) -> list[FileStatus]:
+        """The files ``stash`` holds: its tracked changes, as a commit's, then its
+        untracked files, each with ``index`` "?"."""
+        files = self.commit_files(stash.sha)
+        if stash.untracked:
+            files += [FileStatus("?", "?", path) for path in self.stash_untracked(stash.sha)]
+        return files
+
+    def stash_untracked(self, sha: str) -> list[str]:
+        """The files of stash ``sha``'s untracked part."""
+        out = self.git("ls-tree", "-r", "-z", "--name-only", f"{sha}^3")
+        return [p for p in out.split("\0") if p]
+
+    def stash_apply(self, sha: str, *, index: bool = True) -> None:
+        """Apply stash ``sha``, its untracked files too; with ``index``, its staged
+        changes staged again. A failure can leave the work tree half-applied; its
+        error is git's CONFLICT and error lines, without the status after them."""
+        try:
+            self.git("stash", "apply", *(["--index"] if index else []), sha)
+        except GitError as exc:
+            lines = [line for line in str(exc).splitlines()
+                     if line.startswith(("CONFLICT", "error:", "fatal:"))]
+            if not lines:
+                raise
+            raise GitError("\n".join(lines), exc.returncode) from exc
+
+    def stash_drop(self, ref: str) -> None:
+        """Drop the stash ``ref`` (``stash@{n}``)."""
+        self.git("stash", "drop", "-q", ref)
+
+    def reset_hard(self) -> None:
+        """The index and tracked files back to HEAD."""
+        self.git("reset", "--hard", "-q")
+
+    def clean(self, paths: Collection[str]) -> None:
+        """Delete the untracked files ``paths`` (only those, never ignored ones)."""
+        if paths:
+            self._literal("clean", "-f", "-q", "--", *paths)
 
     def stash_pop(self) -> None:
         """Put the newest stash back, staged changes staged again."""
@@ -511,6 +568,18 @@ def parse_diff(
             binary = True
     end_hunk()
     return FileDiff(path, tuple(hunks), old_path, binary, line_count=line_count)
+
+
+_STASH_SUBJECT = re.compile(r"^(?:WIP on|On) (.+?): (.*)$", re.DOTALL)
+
+
+def _stash_subject(subject: str) -> tuple[str, str]:
+    """The branch and message of a stash's reflog subject, "On main: message"
+    (or "WIP on main: a1b2c3d subject" when made without a message)."""
+    match = _STASH_SUBJECT.match(subject)
+    if match is None:
+        return "", subject
+    return match.group(1), match.group(2)
 
 
 def _aborted(exc: GitError, what: str) -> GitError:

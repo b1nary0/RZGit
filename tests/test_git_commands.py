@@ -268,3 +268,111 @@ class SwitchCommandTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StashCommandTests(unittest.TestCase):
+    """Stash Changes, Apply, Pop and Drop, by sha (RZG-36, spec §4.1)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        commit_file(self.path, "a.txt", "1\n2\n3\n4\n5\n6\n", "first")
+        self.repo = Repo(self.path)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def run_(self, kind, **fields):
+        return run_command(self.repo, GitCommand(kind, **fields))
+
+    def status(self):
+        return {f.path: f.index + f.worktree for f in self.repo.status()}
+
+    def stash(self, message="saved", untracked=True):
+        self.assertIsNone(self.run_(CommandKind.STASH_PUSH, message=message,
+                                    untracked=untracked))
+        return self.repo.stashes()[0]
+
+    def test_stash_changes_with_or_without_untracked_files(self):
+        (self.path / "a.txt").write_text("changed\n")
+        (self.path / "new.txt").write_text("new")
+        self.assertEqual(self.stash(untracked=False).message, "saved")
+        self.assertEqual(self.status(), {"new.txt": "??"})
+        self.assertTrue(self.stash("rest").untracked)
+        self.assertEqual(self.status(), {})
+
+    def test_nothing_to_stash_is_a_notice(self):
+        (self.path / "new.txt").write_text("new")
+        notice = self.run_(CommandKind.STASH_PUSH, message="m", untracked=False)
+        self.assertEqual(notice, git_commands.NOTHING_TO_STASH)
+
+    def test_apply_restores_staged_unstaged_and_untracked_and_keeps_the_stash(self):
+        (self.path / "a.txt").write_text("staged\n")
+        git(self.path, "add", "a.txt")
+        (self.path / "new.txt").write_text("new")
+        stash = self.stash()
+        self.assertIsNone(self.run_(CommandKind.STASH_APPLY, sha=stash.sha))
+        self.assertEqual(self.status(), {"a.txt": "M ", "new.txt": "??"})
+        self.assertEqual(self.repo.stashes(), [stash])
+
+    def test_pop_drops_it_by_sha_after_another_stash_was_made(self):
+        (self.path / "a.txt").write_text("older\n")
+        older = self.stash("older")
+        (self.path / "b.txt").write_text("newer")
+        newer = self.stash("newer")  # older is stash@{1} now
+        self.run_(CommandKind.STASH_APPLY, sha=older.sha, pop=True)
+        self.assertEqual((self.path / "a.txt").read_text(), "older\n")
+        self.assertEqual([s.sha for s in self.repo.stashes()], [newer.sha])
+
+    def test_drop_by_sha(self):
+        (self.path / "a.txt").write_text("older\n")
+        older = self.stash("older")
+        (self.path / "a.txt").write_text("newer\n")
+        newer = self.stash("newer")
+        self.run_(CommandKind.STASH_DROP, sha=older.sha)
+        self.assertEqual([s.sha for s in self.repo.stashes()], [newer.sha])
+        with self.assertRaises(GitError) as caught:
+            self.run_(CommandKind.STASH_DROP, sha=older.sha)
+        self.assertIn("gone", str(caught.exception))
+
+    def test_apply_needs_a_clean_working_tree(self):
+        (self.path / "a.txt").write_text("saved\n")
+        stash = self.stash()
+        (self.path / "new.txt").write_text("in the way")  # even untracked
+        with self.assertRaises(GitError) as caught:
+            self.run_(CommandKind.STASH_APPLY, sha=stash.sha, pop=True)
+        self.assertEqual(str(caught.exception), git_commands.NOT_CLEAN)
+        self.assertEqual(self.status(), {"new.txt": "??"})
+        self.assertEqual(self.repo.stashes(), [stash])
+
+    def test_a_conflict_is_rolled_back_and_the_stash_kept(self):
+        (self.path / "a.txt").write_text("stashed\n")
+        (self.path / "new.txt").write_text("restored, then cleaned")
+        (self.path / "dir").mkdir()
+        (self.path / "dir" / "deep.txt").write_text("also")
+        stash = self.stash()
+        commit_file(self.path, "a.txt", "committed\n", "conflicting")
+        commit_file(self.path, ".gitignore", "*.log\n", "ignore")
+        (self.path / "keep.log").write_text("ignored, so kept")
+        with self.assertRaises(GitError) as caught:
+            self.run_(CommandKind.STASH_APPLY, sha=stash.sha, pop=True)
+        self.assertIn("CONFLICT", str(caught.exception))
+        self.assertIn("the stash is kept", str(caught.exception))
+        self.assertEqual(self.status(), {})  # as before: nothing half-applied
+        self.assertEqual((self.path / "a.txt").read_text(), "committed\n")
+        self.assertFalse((self.path / "new.txt").exists())
+        self.assertTrue((self.path / "keep.log").exists())
+        self.assertEqual(self.repo.stashes(), [stash])
+
+    def test_staged_changes_that_dont_fit_as_staged_come_back_unstaged(self):
+        # The staged change no longer applies as a patch (its context moved), but
+        # merges: git refuses --index ("conflicts in index").
+        (self.path / "a.txt").write_text("ONE\n2\n3\n4\n5\n6\n")
+        git(self.path, "add", "a.txt")
+        stash = self.stash()
+        commit_file(self.path, "a.txt", "1\n2\nTHREE\n4\n5\n6\n", "three")
+        notice = self.run_(CommandKind.STASH_APPLY, sha=stash.sha, pop=True)
+        self.assertEqual(notice, git_commands.UNSTAGED)
+        self.assertEqual((self.path / "a.txt").read_text(), "ONE\n2\nTHREE\n4\n5\n6\n")
+        self.assertEqual(self.status(), {"a.txt": " M"})
+        self.assertEqual(self.repo.stashes(), [])

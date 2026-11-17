@@ -28,6 +28,7 @@ from rzgitclient.git.git_models import (
     FileDiff,
     FileStatus,
     LastCommit,
+    Stash,
 )
 from rzgitclient.git.repo import GitError, Repo
 
@@ -44,7 +45,8 @@ class Refresh(Flag):
     HISTORY = auto()
     STATUS = auto()
     COUNT = auto()  # commits reachable from HEAD; never in the same job as HISTORY
-    ALL = HEAD | BRANCHES | HISTORY | STATUS | COUNT
+    STASHES = auto()
+    ALL = HEAD | BRANCHES | HISTORY | STATUS | STASHES | COUNT
     LAST_COMMIT = auto()  # HEAD's message, for amending: only when asked for, not in ALL
 
 
@@ -53,13 +55,14 @@ _RESET = Refresh.ALL | Refresh.LAST_COMMIT
 
 
 # The order parts load and emit in (spec §4.1), and their value with no repo.
-_PARTS = (Refresh.HEAD, Refresh.BRANCHES, Refresh.HISTORY, Refresh.STATUS, Refresh.COUNT,
-          Refresh.LAST_COMMIT)
+_PARTS = (Refresh.HEAD, Refresh.BRANCHES, Refresh.HISTORY, Refresh.STATUS, Refresh.STASHES,
+          Refresh.COUNT, Refresh.LAST_COMMIT)
 _EMPTY: dict[Refresh, object] = {
     Refresh.HEAD: None,
     Refresh.BRANCHES: (),
     Refresh.HISTORY: (),
     Refresh.STATUS: (),
+    Refresh.STASHES: (),
     Refresh.COUNT: None,
     Refresh.LAST_COMMIT: None,
 }
@@ -71,6 +74,7 @@ class RepoSession(QObject):
     branches_changed = Signal(object)  # tuple[Branch, ...]
     history_changed = Signal(object)  # tuple[Commit, ...]
     status_changed = Signal(object)  # tuple[FileStatus, ...]
+    stashes_changed = Signal(object)  # tuple[Stash, ...], newest first
     commit_count_changed = Signal(object)  # int | None  (None: not counted yet)
     diff_changed = Signal(object, object)  # FileSelection | None, FileDiff | None
     commit_files_changed = Signal(object, object)  # sha | None, tuple[FileStatus, ...] | None
@@ -78,6 +82,7 @@ class RepoSession(QObject):
     commit_details_changed = Signal(object, object)  # sha | None, CommitDetails | None
     command_finished = Signal(object, bool)  # GitCommand, whether it ran without error
     error_occurred = Signal(str)
+    notice_occurred = Signal(str)  # a command worked, but not quite as asked
     busy_changed = Signal(bool)  # True while git work is queued or running
 
     def __init__(self, parent: QObject | None = None):
@@ -126,6 +131,7 @@ class RepoSession(QObject):
             Refresh.BRANCHES: self.branches_changed,
             Refresh.HISTORY: self.history_changed,
             Refresh.STATUS: self.status_changed,
+            Refresh.STASHES: self.stashes_changed,
             Refresh.COUNT: self.commit_count_changed,
             Refresh.LAST_COMMIT: self.last_commit_changed,
         }
@@ -155,6 +161,11 @@ class RepoSession(QObject):
     @property
     def status(self) -> tuple[FileStatus, ...]:
         return self._values[Refresh.STATUS]  # type: ignore[return-value]
+
+    @property
+    def stashes(self) -> tuple[Stash, ...]:
+        """The stashes, newest first."""
+        return self._values[Refresh.STASHES]  # type: ignore[return-value]
 
     @property
     def commit_count(self) -> int | None:
@@ -412,6 +423,24 @@ class RepoSession(QObject):
         Callers confirm first: it rewrites commits."""
         return self._command(GitCommand(CommandKind.REBASE, branch=onto), Refresh.ALL)
 
+    # Stashes (spec §4.1, "Stash commands"): by sha, which doesn't move.
+
+    def stash_changes(self, message: str, untracked: bool = True) -> GitCommand | None:
+        """Stash the changes, with ``untracked`` files too; "" for git's own message."""
+        return self._command(GitCommand(CommandKind.STASH_PUSH, message=message,
+                                        untracked=untracked),
+                             Refresh.STATUS | Refresh.STASHES)
+
+    def apply_stash(self, sha: str, pop: bool = False) -> GitCommand | None:
+        """Apply stash ``sha`` to the clean working tree, rolled back if it fails;
+        with ``pop``, drop it once applied."""
+        return self._command(GitCommand(CommandKind.STASH_APPLY, sha=sha, pop=pop),
+                             Refresh.STATUS | Refresh.STASHES)
+
+    def drop_stash(self, sha: str) -> GitCommand | None:
+        """Drop stash ``sha``. No undo: callers confirm first."""
+        return self._command(GitCommand(CommandKind.STASH_DROP, sha=sha), Refresh.STASHES)
+
     def amend(self, message: str) -> GitCommand | None:
         """Replace HEAD's commit with the staged changes, if any, and ``message``."""
         return self._command(GitCommand(CommandKind.AMEND, message=message), Refresh.ALL)
@@ -451,6 +480,7 @@ class RepoSession(QObject):
             diff = None
         self._diff_pending = False
         files_sha = self._files_sha if self._files_pending else None
+        files_stash = next((s for s in self.stashes if s.sha == files_sha), None)
         self._files_pending = False
         refs_may_change = bool(parts & (Refresh.BRANCHES | Refresh.HISTORY))
         details_sha = self._details_sha if self._details_pending or refs_may_change else None
@@ -467,7 +497,7 @@ class RepoSession(QObject):
         job = _Job(self._repo, self._generation, parts, loaded, more,  # type: ignore[arg-type]
                    diff, self._diff_generation, self.status, commands,
                    files_sha, self._files_generation, known,
-                   details_sha, self._details_generation)
+                   details_sha, self._details_generation, files_stash)
         relay = self._relay
         self._running = True
         self._loading_more = more
@@ -506,6 +536,8 @@ class RepoSession(QObject):
                     # A count queued behind a failed load would fail too: one error is enough.
                     self._pending &= ~Refresh.COUNT
             self._store_forced_as_empty()  # parts a failed first load left behind
+            for notice in result.notices:
+                self.notice_occurred.emit(notice)
             for i, command in enumerate(result.commands):
                 self.command_finished.emit(command, i < result.commands_ok)
         self._job_commands = ()
@@ -580,6 +612,7 @@ class _Job:
     commit_files: tuple[FileStatus, ...] = ()  # the latest, for a commit file's diff
     details_sha: str | None = None  # the commit to read in full, after its files
     details_generation: int = 0
+    files_stash: Stash | None = None  # files_sha's stash, if it is one
 
 
 @dataclass(frozen=True)
@@ -603,6 +636,7 @@ class _JobResult:
     details_wanted: bool = False  # the job was to read a commit's details
     details_read: bool = False  # it tried; ``details`` is None if that failed
     details: CommitDetails | None = None
+    notices: tuple[str, ...] = ()  # the commands'
 
 
 class _Relay(QObject):
@@ -620,19 +654,23 @@ def _run_job(job: _Job) -> _JobResult:
                                "files_wanted": job.files_sha is not None,
                                "details_generation": job.details_generation,
                                "details_wanted": job.details_sha is not None}
+    notices: list[str] = []
     for ran, command in enumerate(job.commands):
         try:
-            run_command(job.repo, command)
+            notice = run_command(job.repo, command)
         except Exception as exc:
             # Skip the commands after it, but load the parts: show what really happened.
             loaded = _run_job(dataclasses.replace(job, commands=()))
             # The command's error comes first: it happened first.
             return dataclasses.replace(loaded, error=_error(exc, command.kind),
                                        command_failed=True, commands=job.commands,
-                                       commands_ok=ran)
+                                       commands_ok=ran, notices=tuple(notices))
+        if notice:
+            notices.append(notice)
     if job.commands:
         loaded = _run_job(dataclasses.replace(job, commands=()))
-        return dataclasses.replace(loaded, commands=job.commands, commands_ok=len(job.commands))
+        return dataclasses.replace(loaded, commands=job.commands, commands_ok=len(job.commands),
+                                   notices=tuple(notices))
     for part in _PARTS:
         wanted = part in job.parts or (part is Refresh.HISTORY and job.more)
         if not wanted:
@@ -648,7 +686,10 @@ def _run_job(job: _Job) -> _JobResult:
     commit_files = job.commit_files
     if job.files_sha is not None:
         try:
-            commit_files = tuple(job.repo.commit_files(job.files_sha))
+            if job.files_stash is not None:
+                commit_files = tuple(job.repo.stash_files(job.files_stash))
+            else:
+                commit_files = tuple(job.repo.commit_files(job.files_sha))
         except Exception as exc:
             return _JobResult(job.generation, tuple(values), complete,
                               _error(exc, "the commit's files"), **diff, files_read=True)
@@ -686,6 +727,8 @@ def _load(repo: Repo, part: Refresh) -> object:
         return tuple(repo.branches())
     if part is Refresh.STATUS:
         return tuple(repo.status())
+    if part is Refresh.STASHES:
+        return tuple(repo.stashes())
     if part is Refresh.COUNT:
         return repo.commit_count()
     if part is Refresh.LAST_COMMIT:

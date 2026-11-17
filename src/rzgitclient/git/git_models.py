@@ -20,6 +20,21 @@ class Commit:
 
 
 @dataclass(frozen=True)
+class Stash(Commit):
+    """A stash (spec §4.1). A Commit, so ``selection.commit`` can hold one; it never
+    equals a Commit of the same sha (dataclass equality compares the class)."""
+
+    index: int  # its place in the list: stash@{index}
+    branch: str  # the branch it was made on; "(no branch)" when HEAD was detached
+    message: str  # what follows "On <branch>: " (or "WIP on <branch>: ")
+    untracked: bool  # it has an untracked part (a third parent)
+
+    @property
+    def ref(self) -> str:
+        return f"stash@{{{self.index}}}"
+
+
+@dataclass(frozen=True)
 class LastCommit:
     """HEAD's commit, for amending it (spec §4.1)."""
 

@@ -14,6 +14,7 @@ from rzgitclient.ui.layout.layout_model import to_dict
 from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT, matching_preset, restore_layout
 from rzgitclient.ui.layout.panels_menu import PanelsMenu
 from rzgitclient.ui.panels.panel import PanelContext
+from rzgitclient.ui.stash_dialogs import StashDialogs
 
 
 class MainWindow(QMainWindow):
@@ -40,6 +41,7 @@ class MainWindow(QMainWindow):
                        session.commit_count_changed):
             signal.connect(self._update_status_bar)
         session.error_occurred.connect(self._show_error)
+        session.notice_occurred.connect(self._show_notice)
         session.busy_changed.connect(self._busy_label.setVisible)
 
     # ---- construction -------------------------------------------------
@@ -63,6 +65,9 @@ class MainWindow(QMainWindow):
         repo_menu.addActions([actions.stage_all, actions.unstage_all])
         repo_menu.addSeparator()
         repo_menu.addActions([actions.commit, actions.amend])
+        repo_menu.addSeparator()
+        repo_menu.addAction(actions.stash_changes)
+        self.stash_dialogs = StashDialogs(self, self.session, actions)
         actions.set_amend_confirmer(self.confirm_amend)
 
         actions.reset_layout.triggered.connect(self.reset_layout)
@@ -188,6 +193,9 @@ class MainWindow(QMainWindow):
 
     def _show_error(self, message: str) -> None:
         QMessageBox.warning(self, "Git error", message)
+
+    def _show_notice(self, message: str) -> None:
+        QMessageBox.information(self, "RZGitClient", message)
 
     def _update_status_bar(self, _value: object = None) -> None:
         s = self.session

@@ -31,7 +31,7 @@ class PanelsMenuTests(unittest.TestCase):
     def test_an_entry_per_panel_checked_when_shown(self):
         self.assertEqual([a.text() for a in self.menu.actions()], [t.title for t in PANEL_TYPES])
         self.assertTrue(all(a.isCheckable() for a in self.menu.actions()))
-        self.assertEqual(self.checked(), {"controls", "branches", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files"})
+        self.assertEqual(self.checked(), {"controls", "branches", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
 
     def test_controls_is_checked_and_can_not_be_unchecked(self):
         self.assertTrue(self.actions["controls"].isChecked())
@@ -40,17 +40,18 @@ class PanelsMenuTests(unittest.TestCase):
     def test_unchecking_hides_and_checking_shows(self):
         self.actions["branches"].trigger()
         self.assertNotIn("branches", self.host.panels)
-        self.assertEqual(self.checked(), {"controls", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files"})
+        self.assertEqual(self.checked(), {"controls", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
         self.actions["branches"].trigger()
         self.assertIn("branches", self.host.panels)
-        self.assertEqual(self.checked(), {"controls", "branches", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files"})
+        self.assertEqual(self.checked(), {"controls", "branches", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
 
     def test_follows_layout_changes_made_elsewhere(self):
         self.host.apply(SplitNode(Orientation.HORIZONTAL, (PanelNode("files"), PanelNode("history"))))
         self.assertEqual(self.checked(), {"controls", "files", "history"})
 
     def test_the_last_visible_panel_can_not_be_unchecked(self):
-        for pid in ("branches", "files", "diff", "staged", "commit", "commit_details", "commit_files"):
+        for pid in ("branches", "files", "diff", "staged", "commit", "commit_details", "commit_files",
+                    "stash"):
             self.actions[pid].trigger()
         self.assertFalse(self.actions["history"].isEnabled())
         self.assertTrue(self.actions["files"].isEnabled())  # hidden ones can be shown

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Signal
 
-from rzgitclient.git.git_models import Commit, FileStatus
+from rzgitclient.git.git_models import Commit, FileStatus, Stash
 
 if TYPE_CHECKING:  # repo_session imports FileSelection from here
     from rzgitclient.core.repo_session import RepoSession
@@ -72,6 +72,7 @@ class Selection(QObject):
         # Before any panel connects: they render what this decides.
         session.status_changed.connect(self._on_status)
         session.history_changed.connect(self._on_history)
+        session.stashes_changed.connect(self._on_stashes)
 
     @property
     def commit(self) -> Commit | None:
@@ -79,7 +80,8 @@ class Selection(QObject):
 
     @commit.setter
     def commit(self, commit: Commit | None) -> None:
-        """The commit selected in History; None for Uncommitted changes (§4.2).
+        """The commit selected in History, or the Stash selected in the Stash
+        panel; None for Uncommitted changes (§4.2).
         Only the selected files that belong to it are kept: its own, or the
         worktree and index rows for Uncommitted changes."""
         if commit == self._commit:
@@ -142,9 +144,18 @@ class Selection(QObject):
 
     def _on_history(self, history: tuple[Commit, ...]) -> None:
         """A selected commit the history no longer has is gone (amend, reset,
-        rebase): back to Uncommitted changes."""
-        if self._commit is not None and all(c.sha != self._commit.sha for c in history):
+        rebase): back to Uncommitted changes. A stash isn't in the history."""
+        commit = self._commit
+        if (commit is not None and not isinstance(commit, Stash)
+                and all(c.sha != commit.sha for c in history)):
             self.commit = None
+
+    def _on_stashes(self, stashes: tuple[Stash, ...]) -> None:
+        """The selected stash, as the new list has it (its stash@{n} may have
+        moved); back to Uncommitted changes if it's gone (popped, dropped)."""
+        if isinstance(self._commit, Stash):
+            sha = self._commit.sha
+            self.commit = next((s for s in stashes if s.sha == sha), None)
 
     def _on_status(self, status: tuple[FileStatus, ...]) -> None:
         """Each selected file stays, moves where it was sent, moves to the same

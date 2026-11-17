@@ -66,7 +66,7 @@ into each other.
 src/rzgitclient/
   app.py                        composition root
   git/
-    git_models.py               Commit, Branch, FileStatus, FileDiff, Hunk, DiffLine
+    git_models.py               Commit, Stash, Branch, FileStatus, FileDiff, Hunk, DiffLine
     repo.py                     Repo: runs git, returns models; canonical_path
   core/
     repo_session.py             RepoSession: the open repo, its data, git commands
@@ -80,8 +80,9 @@ src/rzgitclient/
     app_settings.py             AppSettings: typed wrapper over QSettings (last_repo, layout, …)
   ui/
     main_window.py              MainWindow: thin shell (menus, status bar, LayoutHost)
-    app_actions.py              AppActions: every QAction, defined once; BranchOp
+    app_actions.py              AppActions: every QAction, defined once; BranchOp, StashOp
     branch_dialogs.py           BranchDialogs: the confirmations and name boxes of branch operations
+    stash_dialogs.py            StashDialogs: Stash Changes… and the Drop confirmation
     theme/
       app_theme.py              AppTheme, ThemeColors, StatusColors, ThemeFonts, ThemeMetrics, LIGHT_THEME
       theme_stylesheet.py       build_stylesheet(theme) -> str
@@ -95,6 +96,7 @@ src/rzgitclient/
       panel_registry.py         PANEL_TYPES, panel_type(id)
       controls_panel.py         ControlsPanel: Open, Refresh, current branch (replaces the toolbar)
       branches_panel.py         BranchesPanel
+      stash_panel.py            StashPanel: the stashes; apply, pop and drop them
       history_panel.py          HistoryPanel
       history_model.py          HistoryModel: the commit table's Qt model, paged
       files_panel.py            FilesPanel: "Unstaged Files"
@@ -145,6 +147,7 @@ class RepoSession(QObject):
     branches_changed = Signal(object)  # tuple[Branch, ...]
     history_changed  = Signal(object)  # tuple[Commit, ...]
     status_changed   = Signal(object)  # tuple[FileStatus, ...]
+    stashes_changed  = Signal(object)  # tuple[Stash, ...], newest first
     commit_count_changed = Signal(object)  # int | None  (commits reachable from HEAD)
     diff_changed     = Signal(object, object)  # FileSelection | None, FileDiff | None
     commit_files_changed = Signal(object, object)  # sha | None, tuple[FileStatus, ...] | None
@@ -152,11 +155,12 @@ class RepoSession(QObject):
     commit_details_changed = Signal(object, object)  # sha | None, CommitDetails | None
     command_finished = Signal(object, bool)    # GitCommand, whether it ran without error
     error_occurred   = Signal(str)
+    notice_occurred  = Signal(str)   # a command worked, but not quite as asked
     busy_changed     = Signal(bool)  # True while git work is queued or running
 
     def open(self, path) -> bool
     def close(self) -> None
-    def refresh(self, parts: Refresh = Refresh.ALL) -> None   # Flag: HEAD|BRANCHES|HISTORY|STATUS|COUNT
+    def refresh(self, parts: Refresh = Refresh.ALL) -> None   # Flag: HEAD|BRANCHES|HISTORY|STATUS|STASHES|COUNT
     def load_more_history(self) -> None   # the next page of history, in the background
     def request_diff(self, file: FileSelection | None, full: bool = False) -> None
     def request_commit_files(self, sha: str | None) -> None   # the files a commit changed
@@ -179,10 +183,13 @@ class RepoSession(QObject):
     def delete_branch(self, name, force=False) -> GitCommand | None   # -d, or -D with force
     def merge(self, name) -> GitCommand | None       # name into the current branch
     def rebase(self, onto) -> GitCommand | None      # the current branch onto `onto`
+    def stash_changes(self, message, untracked=True) -> GitCommand | None   # git stash push
+    def apply_stash(self, sha, pop=False) -> GitCommand | None   # rolled back on a conflict
+    def drop_stash(self, sha) -> GitCommand | None
     commands_in_flight: tuple[GitCommand, ...]   # queued or running, until command_finished
 
     # Latest values, so a panel created later renders at once (read-only properties):
-    repo, head, branches, history, status, commit_count, history_complete, diff_file, diff,
+    repo, head, branches, history, status, stashes, commit_count, history_complete, diff_file, diff,
     commit_files_sha, commit_files, commit_details_sha, commit_details, last_commit
 ```
 
@@ -198,7 +205,7 @@ class RepoSession(QObject):
 - **Opening and closing.** A failed `open()` leaves the current repo open and returns False.
   A successful one forgets the stored values first, so every signal fires for the new repo
   even when its data equals the old repo's. Signals go out in a fixed order: `repo_changed`
-  (panels reset), then `head`, `branches`, `history`, `status`, `commit_count`. `close()` sends
+  (panels reset), then `head`, `branches`, `history`, `status`, `stashes`, `commit_count`. `close()` sends
   `repo_changed(None)` and then empty data.
 - **Errors go through `error_occurred`.** MainWindow shows them. Panels never pop up dialogs
   for git failures, so errors look the same wherever they come from. `refresh()` stops at the
@@ -235,6 +242,20 @@ class RepoSession(QObject):
     everything down to the oldest commit loaded before, so the user's scroll position and
     selection survive new commits on top. If that commit is gone (another branch), it keeps
     as many whole pages as were loaded. A page requested at the same time is added on.
+- **Stashes** (RZG-36) are a part like the others, `Refresh.STASHES`, in `Refresh.ALL`:
+  `Repo.stashes()` reads `git stash list -z` (sha, parents, author, date, reflog subject)
+  and returns a tuple of `Stash` (`git_models.py`), newest first. A `Stash` is a `Commit`
+  (so `selection.commit` can hold one, §4.2) with `index` (its `stash@{n}`, as `ref`),
+  `branch` (the one it was made on, from "On *X*:" or "WIP on *X*:"; "(no branch)" when
+  detached), `message` (what follows) and `untracked` (whether it has an untracked part,
+  a third parent). Its `subject` is its message, its `date` when it was made. A `Stash`
+  never equals a `Commit` with the same sha (dataclass equality compares the class).
+  - **A stash's files** come from the commit files target like a commit's: when the
+    target is the sha of a stash in `stashes`, the job reads `Repo.stash_files(stash)`:
+    its tracked changes against its base commit (its first parent, as for a commit), then
+    the files of its untracked part (`git ls-tree -r <sha>^3`), each a `FileStatus` with
+    `index` `"?"`. A stash's untracked file is diffed from that part (`<sha>^3`, a commit
+    with no parent, so the file shows as new).
 - **The commit count** (`git rev-list --count HEAD`, 0 before the first commit) is exact
   however little history is loaded. It never runs in the same job as `HISTORY`: when both
   are due, the count waits for the next job, so the first page isn't delayed by it (0.1 s
@@ -376,6 +397,30 @@ class RepoSession(QObject):
   - **Amend** (`git commit -q --amend --cleanup=whitespace -F -`, the message on stdin)
     replaces HEAD's commit with the staged changes, if any, and the message, and reloads
     what Commit does. Git keeps the author and author date, and a merge's parents.
+  - **Stash commands** (RZG-36). Apply, Pop and Drop carry the stash's sha (`sha`), not
+    its `stash@{n}`, which moves when a stash is made: the worker finds the stash's
+    current ref in `git stash list` itself, and a stash that is gone is an error.
+    - **Stash Changes** (`git stash push -q -m <message>`, with `--include-untracked`
+      when `untracked`) reloads `STATUS | STASHES`. An empty message gives git's own
+      ("WIP on *X*: …"). Nothing to stash (only untracked files, without `untracked`) is
+      a notice, not an error.
+    - **Apply** and **Pop** reload `STATUS | STASHES`. They need a clean working tree
+      (no staged, unstaged or untracked changes; the worker checks the status itself),
+      so there is always a state to go back to. Then `git stash apply --index <sha>`,
+      which restores staged changes as staged and untracked files too (not `-q`: that
+      hides the `CONFLICT` lines; the error keeps those and git's `error:` lines, not the
+      status git prints after them). **Never left
+      half-applied:** if it fails, the worker rolls back (`git reset --hard -q`, and
+      `git clean -f -q` of only those files of the stash's untracked part that are
+      untracked now) and tries again without `--index`. If that works, the staged changes
+      came back unstaged, and a notice says so; if it fails too, it rolls back again and
+      the error is git's, saying the stash is kept. Pop then drops the stash (by its
+      ref, found again), only when it applied.
+    - **Drop** (`git stash drop -q stash@{n}`) reloads `STASHES`. No undo: the
+      confirmation is the window's (§8).
+    - **Notices:** `run_command` returns a message when a command worked, but not quite
+      as asked. The session sends each through `notice_occurred`, after the parts and
+      before `command_finished`, and MainWindow shows it in an information box.
   - **No editor or prompt, ever:** git runs with `GIT_EDITOR=false` and
     `GIT_TERMINAL_PROMPT=0`, and with stdin closed unless a command passes input. A
     command that would open an editor fails instead of waiting for it.
@@ -419,7 +464,7 @@ class RepoWatcher(QObject):
   | Changed | Parts |
   |---|---|
   | `index` (git dir) | `STATUS` |
-  | `HEAD`, `packed-refs`, anything under `refs/` | `HEAD \| BRANCHES \| HISTORY \| COUNT` |
+  | `HEAD`, `packed-refs`, anything under `refs/` | `HEAD \| BRANCHES \| HISTORY \| STASHES \| COUNT` |
   | a working tree file or folder git doesn't ignore | `STATUS` |
   | `*.lock`, `objects/`, logs, anything else in `.git` | nothing |
 
@@ -428,6 +473,8 @@ class RepoWatcher(QObject):
   folder that isn't ignored is walked (pruning ignored subfolders) and watched. A folder
   moved or deleted stops being watched. A changed `.gitignore` rebuilds the watch set.
   `HISTORY` after a ref change is cheap: with HEAD unchanged it runs no `git log` (§4.1).
+  Every stash change rewrites `refs/stash`, dropping an older stash too (git rewrites the
+  ref with its reflog), so the reflog in `logs/` needn't be watched.
 - **Merged:** changes are collected until 300 ms pass without one, at most 2 s after the
   first, then sent as one `refresh(parts)`. A burst (a checkout, a build) is one refresh,
   or one every 2 s while it lasts. The session merges it into a waiting job too.
@@ -502,6 +549,13 @@ Files row is `FileSelection(path, COMMIT, sha)`.
   belong to it: a commit's files for a commit, worktree and index rows for Uncommitted
   changes. The panels that show the others are collapsed then (§5.4), so neither the
   Diff panel nor the stage actions act on rows the user can't see.
+- **A stash is selected the same way** (RZG-36): the Stash panel sets `selection.commit`
+  to a `Stash`, so Commit Details, Commit Files and Diff show it as they show a commit,
+  and the working tree's panels collapse. History shows no row selected meanwhile. A
+  selected stash isn't in the history, so `history_changed` leaves it alone; instead
+  Selection listens to `stashes_changed` (before any panel): the selected stash is
+  replaced by the new list's stash with the same sha (its `stash@{n}` may have moved), or,
+  if there is none (popped, dropped), `commit` is set to None.
 - **A selected commit that disappears** (amend, reset, rebase): Selection listens to
   `history_changed` (before any panel) and sets `commit` to None when the new history
   doesn't have it, which is back to Uncommitted changes. Loaded history always reaches
@@ -625,8 +679,8 @@ areas.
 ### 5.3 Registry
 
 `panels/panel_registry.py` has an explicit `PANEL_TYPES = (ControlsPanel, BranchesPanel,
-HistoryPanel, FilesPanel, StagedPanel, DiffPanel, CommitPanel, CommitFilesPanel,
-CommitDetailsPanel)` and a `panel_type(panel_id)` lookup that raises `KeyError` for an unknown id.
+HistoryPanel, FilesPanel, StagedPanel, DiffPanel, CommitPanel, CommitDetailsPanel,
+CommitFilesPanel, StashPanel)` and a `panel_type(panel_id)` lookup that raises `KeyError` for an unknown id.
 **Why explicit:** no import-time side effects or decorator magic, and one place to see
 every panel. The lookup table is built at import by `index_panel_types()`, which raises
 `ValueError` on a duplicate id, so a clash fails at startup and in every test run.
@@ -640,7 +694,8 @@ The first three are extracted from the original `main_window.py` with the same b
 |---|---|---|---|---|
 | ControlsPanel | `controls` | chrome | Open, Refresh (`ctx.actions`), current branch | (later: fetch/pull/push, switch branch) |
 | BranchesPanel | `branches` | sidebar | branches, current in bold | branch operations, through `actions.request_branch` |
-| HistoryPanel | `history` | content | Uncommitted changes, then the commit table | `selection.commit` |
+| StashPanel | `stash` | sidebar | "Stashes": message, branch and age of each, newest first | `selection.commit` (a `Stash`); stash operations, through `actions.request_stash` |
+| HistoryPanel | `history` | content | Uncommitted changes, then the commit table; no row while a stash is selected | `selection.commit` |
 | CommitDetailsPanel | `commit_details` | sidebar | "Commit Details": the selected commit's message, author, committer, SHA, parents and refs; collapsed for Uncommitted changes | `selection.commit` (a parent link) |
 | CommitFilesPanel | `commit_files` | sidebar | "Commit Files": the selected commit's changed files, in place of Unstaged Files, Staged Files and Commit; collapsed for Uncommitted changes | `selection.select()` |
 | FilesPanel | `files` | sidebar | "Unstaged Files": unstaged and untracked files, status colours | `selection.select()`; stages |
@@ -661,6 +716,22 @@ follows the session.
   and Rebase are disabled and say why: "(current branch)". The "(no commits)" row and
   the empty space below the list have no menu.
 
+**Stashes** (StashPanel, RZG-36) lists `session.stashes`, newest first, in three
+columns: **Message**, **Branch** and **Age** ("now", "5 min", "3 h", "2 days", "3 weeks",
+"4 months", "2 years"; redrawn every minute). Like the other sidebar lists it has no
+column header; branch and age are muted (`text_muted`), as in History. A row's tooltip has the whole message, the
+date and its `stash@{n}`. The header counts them ("Stashes (2)"); with none, the list
+says "No stashes". Like Branches, it never runs git or shows a dialog.
+- **Selecting** a stash sets `selection.commit` to it (§4.2): Commit Details and Commit
+  Files show it in place of the working tree's panels, and its files' diffs show in Diff.
+  When `selection.commit` becomes anything else (History, Uncommitted changes), the
+  panel's selection is cleared.
+- **Right-click** a stash for **Apply**, **Pop** and **Drop…**, asked of
+  `actions.request_stash(op, stash)` (§8). Apply and Pop need a clean working tree
+  (§4.1): while `session.status` isn't empty they are disabled and say why: "(commit or
+  stash your changes first)".
+- **Stash Changes…** (`actions.stash_changes`, §8) is a button above the list.
+
 **Unstaged Files** (FilesPanel) and **Staged Files** (StagedPanel, `staged_panel.py`)
 are one list each, as in GitKraken. Both are a thin panel around a `FileList`
 (`file_list.py`, a widget for one source), since a panel never imports another. A file
@@ -670,7 +741,8 @@ Unstaged Files and Commit and collapses (§5.1) when nothing is staged. Like Com
 builds its list the first time something is staged (6 ms of startup otherwise).
 **Commit Files** (CommitFilesPanel) is the third `FileList`, in commit mode: it lists
 `session.commit_files` with one status column, its header names the commit ("Files in
-a1b2c3d4 (12)"), and it has no staging menu or double-click. It asks
+a1b2c3d4 (12)", or "Files in stash@{0} (3)" for a stash; its untracked files have
+status "?"), and it has no staging menu or double-click. It asks
 `session.request_commit_files` when `selection.commit` changes. **It takes the place of
 the working tree's panels**, as in GitKraken: while a commit is selected, Unstaged
 Files, Staged Files and Commit collapse and Commit Files is shown; on Uncommitted changes
@@ -694,7 +766,9 @@ can't collapse), it shows the placeholder "No commit selected".
   writes them; the row is left out when there are none), **Author** (name, email and
   date) and **Committer** (only when name, email or date differ from the author's).
   Dates are local time as `2026-11-16 21:50`; the tooltip has the full time and offset.
-  Until the details arrive, the summary and sha of the `Commit` are shown. The content
+  Until the details arrive, the summary and sha of the `Commit` are shown. **A stash**
+  (RZG-36) is shown the same way, except that instead of Parents (its base commit, its
+  index and its untracked part) it has **Based on**: the first parent only. The content
   never scrolls sideways: a value too long for the panel (the SHA in a narrow sidebar)
   is cut off, and the SHA's tooltip and Copy still give it whole.
 - **Copying:** every text is selectable with the mouse and copied with Ctrl+C. Copy puts
@@ -959,15 +1033,16 @@ has the Controls panel across the top, above the arrangement described. In every
 History and Diff are tabs of one group, with History current, and Staged Files, Commit,
 Commit Details and Commit Files are directly below Unstaged Files (`files`), in that order:
 - **Standard** (`DEFAULT_LAYOUT`): Branches, Unstaged Files, Staged Files, Commit,
-  Commit Details and Commit Files stacked in a left sidebar, History and Diff on the
-  right: `Split(V, [controls, Split(H, [Split(V, [branches, files, staged, commit,
-  commit_details, commit_files], sizes=(200, 220, 120, 160, 0, 0)), Tabs([history,
-  diff])], sizes=(220, 880))])`. Commit Details' and Commit Files' sizes are 0 in every
+  Commit Details, Commit Files and Stashes stacked in a left sidebar, History and Diff on
+  the right: `Split(V, [controls, Split(H, [Split(V, [branches, files, staged, commit,
+  commit_details, commit_files, stash], sizes=(180, 220, 120, 160, 0, 0, 170)),
+  Tabs([history, diff])], sizes=(220, 880))])`. Commit Details' and Commit Files' sizes are 0 in every
   preset: they have no space of their own (§6.2, swaps).
-- **Sidebar Tabs:** Branches and Unstaged Files as tabs on the left, Staged Files and
-  Commit below the tabs; History and Diff on the right.
-- **Stacked:** History and Diff across the top; below, Branches beside Unstaged Files,
-  with Staged Files, Commit, Commit Details and Commit Files below it.
+- **Sidebar Tabs:** Branches, Unstaged Files and Stashes as tabs on the left, Staged
+  Files and Commit below the tabs; History and Diff on the right.
+- **Stacked:** History and Diff across the top; below, Branches with Stashes below it,
+  beside Unstaged Files, with Staged Files, Commit, Commit Details and Commit Files below
+  it.
 
 ### 6.2 LayoutHost
 
@@ -1320,8 +1395,7 @@ Per-widget sheets are slow to apply and scatter the rules.
   - **Switch:** "Switch to *X*?". With changes in the status (staged, unstaged or
     untracked), it says so and offers **Stash and Switch** (the default), **Bring
     Changes** (git carries them over, or refuses) and **Cancel**, and names the stash. A
-    stash isn't reapplied: the Stash panel (RZG-36) will show it; until then, `git stash
-    pop`.
+    stash isn't reapplied: it is in the Stashes panel, to apply or pop.
   - **New Branch…:** a name box, "New branch from *X*", with **Switch to it** (checked).
   - **Rename…:** a name box filled with the old name. Unchanged or empty does nothing.
   - **Delete…:** "Delete branch *X*?" (Cancel default). If *X* isn't merged into HEAD
@@ -1330,6 +1404,17 @@ Per-widget sheets are slow to apply and scatter the rules.
   - **Merge:** "Merge *X* into *current*?", saying a conflict aborts it and changes
     nothing. **Rebase:** "Rebase *current* onto *X*?", a warning that it rewrites the
     commits of *current* not in *X* (Cancel default), and that a conflict aborts it.
+- **Stash operations** (RZG-36): the Stashes panel calls `actions.request_stash(op,
+  stash)`, with a `StashOp` (`APPLY`, `POP`, `DROP`), which sends `stash_requested`.
+  **`StashDialogs`** (`ui/stash_dialogs.py`, made by MainWindow) runs Apply and Pop
+  straight away (they need a clean tree and roll back on a conflict, so nothing can be
+  lost), and asks before Drop: "Drop stash *message*?", saying it can't be undone, with
+  Cancel the default.
+  - **Stash Changes…** (`actions.stash_changes`, in the Repository menu after Amend, and
+    on the Stashes panel) is enabled when a repository is open and the status isn't
+    empty. StashDialogs asks for a message (optional) and **Include untracked files**
+    (checked), then calls `session.stash_changes`.
+  - **Notices** (`notice_occurred`, §4.1) are shown by MainWindow in an information box.
 - **Amend Last Commit** (in the Repository menu, after Commit; RZG-27) is checkable. It
   is enabled when the repository has commits (`session.history`), and unchecks itself when
   it is disabled or HEAD moves to another commit (the first commit of `history` isn't the

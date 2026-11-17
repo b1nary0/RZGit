@@ -15,11 +15,12 @@ from rzgitclient.ui.panels.files_panel import FilesPanel
 from rzgitclient.ui.panels.history_panel import HistoryPanel
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.panels.staged_panel import StagedPanel
+from rzgitclient.ui.panels.stash_panel import StashPanel
 
 # Explicit on purpose: one place to see every panel, no import-time magic.
 PANEL_TYPES: tuple[type[Panel], ...] = (
     ControlsPanel, BranchesPanel, HistoryPanel, FilesPanel, StagedPanel, DiffPanel, CommitPanel,
-    CommitDetailsPanel, CommitFilesPanel,
+    CommitDetailsPanel, CommitFilesPanel, StashPanel,
 )
 
 

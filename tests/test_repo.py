@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rzgitclient.git.git_models import DiffLine, DiffSource, FileStatus, LineKind
+from rzgitclient.git.git_models import Commit, DiffLine, DiffSource, FileStatus, LineKind
 from rzgitclient.git.repo import GitError, Repo, canonical_path, parse_diff
 from tests.support import commit_file, git, make_repo
 
@@ -688,6 +688,59 @@ class RepoBranchTests(unittest.TestCase):
 
     def test_stash_push_with_nothing_to_stash_says_so(self):
         self.assertFalse(self.repo.stash_push("msg"))
+
+    def test_stash_push_without_untracked_files_and_with_git_s_message(self):
+        (self.path / "a.txt").write_text("changed\n")
+        (self.path / "new.txt").write_text("new")
+        self.assertTrue(self.repo.stash_push("", untracked=False))
+        self.assertEqual([f.path for f in self.repo.status()], ["new.txt"])  # left behind
+        [stash] = self.repo.stashes()
+        self.assertTrue(stash.message.endswith(" first"))  # "<sha> first": git's own
+        self.assertEqual(stash.branch, "main")
+        self.assertFalse(stash.untracked)
+
+    def test_stashes_newest_first_with_their_branch_message_and_parts(self):
+        (self.path / "a.txt").write_text("one\n")
+        (self.path / "new.txt").write_text("new")
+        self.repo.stash_push("first: with a colon")
+        git(self.path, "switch", "-q", "-c", "side")
+        (self.path / "a.txt").write_text("two\n")
+        self.repo.stash_push("second", untracked=False)
+        newest, older = self.repo.stashes()
+        self.assertEqual((newest.index, newest.ref, newest.branch, newest.message),
+                         (0, "stash@{0}", "side", "second"))
+        self.assertEqual((older.ref, older.branch, older.message, older.subject),
+                         ("stash@{1}", "main", "first: with a colon", "first: with a colon"))
+        self.assertEqual(older.sha, git(self.path, "rev-parse", "stash@{1}").strip())
+        self.assertTrue(older.untracked)
+        self.assertFalse(newest.untracked)
+        self.assertEqual(newest.author, "Test User")
+        self.assertIsNotNone(newest.date.tzinfo)
+        self.assertNotEqual(newest, Commit(newest.sha, newest.author, newest.date, newest.subject))
+
+    def test_no_stashes(self):
+        self.assertEqual(self.repo.stashes(), [])
+
+    def test_stash_files_are_its_changes_then_its_untracked_files(self):
+        (self.path / "a.txt").write_text("changed\n")
+        (self.path / "new.txt").write_text("new")
+        self.repo.stash_push("msg")
+        [stash] = self.repo.stashes()
+        self.assertEqual(self.repo.stash_files(stash),
+                         [FileStatus("M", " ", "a.txt"), FileStatus("?", "?", "new.txt")])
+        diff = self.repo.diff("new.txt", DiffSource.COMMIT, commit=f"{stash.sha}^3")
+        self.assertEqual([line.text for h in diff.hunks for line in h.lines], ["new"])
+
+    def test_stash_apply_and_drop(self):
+        (self.path / "a.txt").write_text("staged\n")
+        git(self.path, "add", "a.txt")
+        self.repo.stash_push("msg")
+        [stash] = self.repo.stashes()
+        self.repo.stash_apply(stash.sha)
+        self.assertEqual({f.path: f.index + f.worktree for f in self.repo.status()},
+                         {"a.txt": "M "})
+        self.repo.stash_drop(stash.ref)
+        self.assertEqual(self.repo.stashes(), [])
 
 
 class RepoAmendTests(unittest.TestCase):

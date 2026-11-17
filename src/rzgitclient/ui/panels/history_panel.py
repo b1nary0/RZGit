@@ -1,5 +1,6 @@
 """Uncommitted changes and the commit table; the selected row is
-``selection.commit``, None for Uncommitted changes (spec §5.4)."""
+``selection.commit``, None for Uncommitted changes (spec §5.4). No row is
+selected while a stash is (the Stash panel's)."""
 
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from rzgitclient.core.repo_session import HISTORY_PAGE
-from rzgitclient.git.git_models import Commit
+from rzgitclient.git.git_models import Commit, Stash
 from rzgitclient.ui.panels.history_model import MUTED_COLUMNS, HistoryModel
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
@@ -69,6 +70,8 @@ class HistoryPanel(Panel):
         self._sync_selection()
 
     def _select_uncommitted_if_none(self) -> None:
+        if isinstance(self.ctx.selection.commit, Stash):
+            return  # none, on purpose
         if not self._view.currentIndex().isValid() and self._model.has_uncommitted:
             self._select_row(0)
 
@@ -140,15 +143,23 @@ class HistoryPanel(Panel):
 
     def _sync_selection(self, *_args: object) -> None:
         # Selection emits only on change, so a reset that keeps the same
-        # commit selected is silent.
-        if not self._quiet:
+        # commit selected is silent. With no row (a stash is selected) History says nothing.
+        if not self._quiet and self._view.currentIndex().isValid():
             self.ctx.selection.commit = self._current_commit()
 
     def _follow_selection(self, commit: Commit | None) -> None:
         """``selection.commit`` changed elsewhere (a parent link in Commit Details):
         select its row, and scroll to it if it's off screen. A commit that isn't
         loaded leaves the view as it is."""
-        if commit == self._current_commit():
+        if isinstance(commit, Stash):
+            self._quiet = True
+            try:
+                self._view.setCurrentIndex(QModelIndex())
+                self._view.clearSelection()
+            finally:
+                self._quiet = False
+            return
+        if commit == self._current_commit() and self._view.currentIndex().isValid():
             return
         if commit is None:
             row = 0 if self._model.has_uncommitted else -1

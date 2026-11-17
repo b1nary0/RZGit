@@ -168,6 +168,18 @@ class RepoWatcherTests(unittest.TestCase):
         self.assertTrue(all(part in REF_PARTS | Refresh.STATUS for part in self.calls))
         self.assertLessEqual(len(self.calls), 2)
 
+    def test_stashes_made_and_dropped_outside_the_app(self):
+        """RZG-36: refs/stash changes, dropping an older stash too."""
+        (self.path / "a.txt").write_text("older")
+        git(self.path, "stash", "push", "-q", "-m", "older")
+        (self.path / "a.txt").write_text("newer")
+        git(self.path, "stash", "push", "-q", "-m", "newer")
+        self.settle()
+        self.assertEqual([s.message for s in self.session.stashes], ["newer", "older"])
+        git(self.path, "stash", "drop", "-q", "stash@{1}")
+        self.settle()
+        self.assertEqual([s.message for s in self.session.stashes], ["newer"])
+
     def test_branches_and_checkout_outside_the_app(self):
         git(self.path, "branch", "feature/x")
         self.settle()

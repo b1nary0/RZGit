@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from rzgitclient.git.git_models import Commit, CommitDetails
+from rzgitclient.git.git_models import Commit, CommitDetails, Stash
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.theme.style_roles import Role, Surface, set_role
@@ -32,6 +32,7 @@ from rzgitclient.ui.widgets.panel_segment import PanelSegment, PanelSegments
 
 NO_COMMIT = "No commit selected"
 DETAILS = "Details"
+PARENTS, BASED_ON = "Parents", "Based on"  # a stash's other parents are its own parts
 COPY = "Copy"
 COPY_SHA = "Copy SHA"
 _SELECTABLE = (Qt.TextInteractionFlag.TextSelectableByMouse
@@ -68,6 +69,7 @@ class CommitDetailsPanel(Panel):
     _sha: QLabel
     _copy: QToolButton
     _parents_box: QHBoxLayout
+    _parents_name: QLabel
     _parents: list[QLabel]
     _refs_name: QLabel
     _refs: QLabel
@@ -144,7 +146,7 @@ class CommitDetailsPanel(Panel):
         self._parents_box = QHBoxLayout()
         self._parents_box.setSpacing(8)
         self._parents_box.addStretch(1)
-        self._add_row(grid, "Parents", self._parents_box)
+        self._parents_name = self._add_row(grid, PARENTS, self._parents_box)
         self._refs = self._label()
         set_role(self._refs, Role.HINT)
         self._refs_name = self._add_row(grid, "Refs", self._refs)
@@ -193,6 +195,8 @@ class CommitDetailsPanel(Panel):
         self._placeholder.setVisible(commit is None)
         if commit is None:
             return
+        stash = isinstance(commit, Stash)
+        self._parents_name.setText(BASED_ON if stash else PARENTS)
         details = self.details()
         if details is None:  # on its way: what History already knows
             self._summary.setText(commit.subject)
@@ -211,7 +215,7 @@ class CommitDetailsPanel(Panel):
         self._body_segment.setVisible(bool(details.body))
         self._sha.setText(details.sha)
         self._sha.setToolTip(details.sha)
-        self._set_parents(details.parents)
+        self._set_parents(details.parents[:1] if stash else details.parents)
         self._set_row(self._refs_name, self._refs, ", ".join(details.refs))
         self._author.setText(person(details.author, details.author_email, details.author_date))
         self._author.setToolTip(full_date(details.author_date))

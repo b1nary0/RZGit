@@ -70,7 +70,7 @@ class LayoutHostTests(unittest.TestCase):
 
     def test_builds_the_default_layout(self):
         self.host.apply(DEFAULT_LAYOUT)
-        self.assertEqual(set(self.host.panels), {"controls", "branches", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files"})
+        self.assertEqual(set(self.host.panels), {"controls", "branches", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
 
         top = self.root()
         self.assertEqual(top.orientation(), Qt.Orientation.Vertical)
@@ -174,7 +174,7 @@ class LayoutHostTests(unittest.TestCase):
         self.show()
         self.host.hide_panel("files")
         flush_deletes()
-        self.assertEqual(set(self.host.panels), {"controls", "branches", "history", "diff", "staged", "commit", "commit_details", "commit_files"})
+        self.assertEqual(set(self.host.panels), {"controls", "branches", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
         self.assertEqual(set(self.host.hidden), {"files"})
         self.assertEqual(self.host.state().hidden, self.host.hidden)
 

@@ -20,6 +20,7 @@ from rzgitclient.ui.layout.layout_model import (
     to_dict,
 )
 from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
+from rzgitclient.ui.app_actions import StashOp
 from rzgitclient.ui.main_window import MainWindow, commit_summary
 from rzgitclient.ui.theme.app_theme import DARK_CB_THEME, DARK_THEME, LIGHT_THEME
 from rzgitclient.ui.theme.theme_manager import ThemeManager, ThemeMode
@@ -159,7 +160,7 @@ class MainWindowTests(unittest.TestCase):
         self.quit(window)
 
         again = self.start()
-        self.assertEqual(set(again.layout_host.panels), {"controls", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files"})
+        self.assertEqual(set(again.layout_host.panels), {"controls", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
         again.layout_host.show_panel("branches")  # and comes back where it was
         self.assertEqual(strip_sizes(again.layout_host.current_layout()), strip_sizes(DEFAULT_LAYOUT))
 
@@ -276,7 +277,7 @@ class MainWindowTests(unittest.TestCase):
         self.assertTrue(panels["commit_details"].isVisible())
         details, files = (sidebar.sizes()[sidebar.indexOf(panels[p].parentWidget())]
                           for p in ("commit_details", "commit_files"))
-        self.assertLessEqual(abs(details - files), 1)
+        self.assertLessEqual(abs(details - files), 2)  # a later resize may move a pixel
         self.assertEqual(panels["commit_details"]._summary.text(), "first")
         self.assertFalse(panels["files"].isVisible())
         self.assertEqual(sidebar.sizes()[0], branches_height)
@@ -293,6 +294,70 @@ class MainWindowTests(unittest.TestCase):
         self.assertTrue(panels["files"].isVisible())
         self.assertEqual(sidebar.sizes()[0], branches_height)
         self.assertIsNone(window.ctx.selection.file)
+
+    def test_a_stash_shows_like_a_commit_and_history_lets_it_be(self):
+        """RZG-36: selected in Stashes, it fills Commit Details, Commit Files and Diff;
+        History has no row meanwhile, even when the status changes."""
+        repo = make_repo(self.tmp / "repo")
+        commit_file(repo, "a.txt", "1\n", "first")
+        commit_file(repo, "a.txt", "2\n", "second")
+        (repo / "a.txt").write_text("3\n")
+        (repo / "new.txt").write_text("new\n")
+        window = self.start()
+        window.session.open(repo)
+        wait_idle(window.session)
+        window.session.stash_changes("saved")
+        wait_idle(window.session)
+        panels = window.layout_host.panels
+        stashes, history = panels["stash"], panels["history"]
+        stashes._tree.setCurrentItem(stashes._tree.topLevelItem(0))
+        wait_idle(window.session)
+        self.app.processEvents()
+        [stash] = window.session.stashes
+        self.assertEqual(window.ctx.selection.commit, stash)
+        self.assertFalse(history._view.currentIndex().isValid())
+        self.assertTrue(panels["files"].collapsed)
+        self.assertEqual(panels["commit_files"].header, "Files in stash@{0} (2)")
+        details = panels["commit_details"]
+        self.assertEqual(details._parents_name.text(), "Based on")
+        self.assertEqual([lbl.property("sha") for lbl in details._parents],
+                         [window.session.history[0].sha])
+        (repo / "other.txt").write_text("x")  # the status changes: History stays as it is
+        window.session.refresh()
+        wait_idle(window.session)
+        self.assertEqual(window.ctx.selection.commit, stash)
+        self.assertFalse(history._view.currentIndex().isValid())
+        history._view.setCurrentIndex(history._model.index(1, 0))  # "second"
+        self.assertEqual(window.ctx.selection.commit.subject, "second")
+        self.assertEqual(stashes._tree.selectedItems(), [])
+        self.assertEqual(panels["commit_files"].header, "Files in "
+                         f"{window.session.history[0].short_sha}")
+        self.assertEqual(details._parents_name.text(), "Parents")
+
+    def test_a_popped_stash_goes_back_to_uncommitted_changes_with_a_notice(self):
+        repo = make_repo(self.tmp / "repo")
+        commit_file(repo, "a.txt", "1\n2\n3\n4\n5\n6\n", "first")
+        (repo / "a.txt").write_text("ONE\n2\n3\n4\n5\n6\n")
+        Repo(repo).stage(["a.txt"])
+        window = self.start()
+        window.session.open(repo)
+        wait_idle(window.session)
+        window.session.stash_changes("saved")
+        wait_idle(window.session)
+        commit_file(repo, "a.txt", "1\n2\nTHREE\n4\n5\n6\n", "three")
+        window.session.refresh()
+        wait_idle(window.session)
+        stashes = window.layout_host.panels["stash"]
+        stashes._tree.setCurrentItem(stashes._tree.topLevelItem(0))
+        with mock.patch("rzgitclient.ui.main_window.QMessageBox.information") as info:
+            window.ctx.actions.request_stash(StashOp.POP, window.session.stashes[0])
+            wait_idle(window.session)
+        info.assert_called_once()
+        self.assertIn("unstaged", info.call_args.args[2])
+        self.assertIsNone(window.ctx.selection.commit)
+        history = window.layout_host.panels["history"]
+        self.assertEqual(history._view.currentIndex().row(), 0)  # Uncommitted changes
+        self.assertEqual(window.session.stashes, ())
 
     def test_a_layout_saved_while_a_commit_is_selected_is_the_working_tree_s(self):
         repo = make_repo(self.tmp / "repo")
@@ -382,7 +447,8 @@ class MainWindowTests(unittest.TestCase):
         actions = window.ctx.actions
         self.assertEqual([a for a in menu.actions() if not a.isSeparator()],
                          [actions.stage, actions.unstage, actions.discard,
-                          actions.stage_all, actions.unstage_all, actions.commit, actions.amend])
+                          actions.stage_all, actions.unstage_all, actions.commit, actions.amend,
+                      actions.stash_changes])
 
     def test_discard_asks_first_and_acts_only_on_unstaged_rows(self):
         window = self.start()
@@ -465,7 +531,7 @@ class MainWindowTests(unittest.TestCase):
         window = self.start()
         window.layout_host.hide_panel("files")
         window.ctx.actions.reset_layout.trigger()
-        self.assertEqual(set(window.layout_host.panels), {"controls", "branches", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files"})
+        self.assertEqual(set(window.layout_host.panels), {"controls", "branches", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
         self.assertEqual(window.layout_host.hidden, {})
 
     def test_status_bar_counts_every_commit_not_just_the_loaded_page(self):

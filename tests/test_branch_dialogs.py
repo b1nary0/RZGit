@@ -64,7 +64,7 @@ class BranchDialogsTests(unittest.TestCase):
         self.assertEqual((labels, default), ([STASH, BRING], STASH))
         self.assertIn("2 changed files", info)
         self.assertIn("RZGitClient: before switching to done", info)
-        self.assertIn("git stash pop", info)
+        self.assertIn("Stashes panel", info)
 
         self.session.reset_mock()
         self.request(BranchOp.SWITCH, "done", BRING)

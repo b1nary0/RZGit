@@ -14,7 +14,7 @@ from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import FileSource, Selection
-from rzgitclient.git.git_models import FileDiff, LastCommit
+from rzgitclient.git.git_models import FileDiff, LastCommit, Stash
 from rzgitclient.ui.theme.theme_manager import ThemeMode
 
 
@@ -29,6 +29,14 @@ class BranchOp(StrEnum):
     REBASE = "rebase"  # the current branch onto it
 
 
+class StashOp(StrEnum):
+    """A stash operation the Stash panel asks for (spec §8)."""
+
+    APPLY = "apply"
+    POP = "pop"
+    DROP = "drop"
+
+
 class AppActions(QObject):
     """Holds the actions and their enabled state. Window-level handlers (the
     Open dialog, closing the window, resetting the layout, confirming a
@@ -39,6 +47,8 @@ class AppActions(QObject):
     discard_lines_requested = Signal(object, object)  # FileDiff, frozenset[(hunk, line)]
     # The Branches panel asks for a branch operation; BranchDialogs asks, then runs it.
     branch_requested = Signal(object, str)  # BranchOp, branch name
+    # The Stash panel asks for a stash operation; StashDialogs asks if need be, then runs it.
+    stash_requested = Signal(object, object)  # StashOp, Stash
 
     def __init__(self, session: RepoSession, selection: Selection,
                  parent: QObject | None = None):
@@ -86,6 +96,8 @@ class AppActions(QObject):
         self.amend.toggled.connect(self._on_amend_toggled)
         self._amend_sha: str | None = None
         self._confirm_amend: Callable[[LastCommit], bool] = lambda _last: True
+        # Stash Changes… (spec §8): connected by StashDialogs, which asks for the message.
+        self.stash_changes = self._action("document-save", "Stas&h Changes…")
 
         # triggered(bool) would land in refresh's `parts` argument.
         self.refresh.triggered.connect(lambda: session.refresh())
@@ -147,6 +159,10 @@ class AppActions(QObject):
         """Ask for ``op`` on branch ``name``, once confirmed (spec §8)."""
         self.branch_requested.emit(op, name)
 
+    def request_stash(self, op: StashOp, stash: Stash) -> None:
+        """Ask for ``op`` on ``stash``, once confirmed where it loses work (spec §8)."""
+        self.stash_requested.emit(op, stash)
+
     def selected(self, source: FileSource) -> tuple[str, ...]:
         """Paths of the selected rows from ``source`` (Stage, Unstage, Discard)."""
         return tuple(f.path for f in self._selection.files if f.source is source)
@@ -171,6 +187,7 @@ class AppActions(QObject):
         self.stage_all.setEnabled(any(f.has_unstaged or f.is_untracked for f in session.status))
         staged = any(f.is_staged for f in session.status)
         self.unstage_all.setEnabled(staged)
+        self.stash_changes.setEnabled(session.repo is not None and bool(session.status))
         history = session.history
         self.amend.setEnabled(session.repo is not None and bool(history))
         if self.amend.isChecked() and (not self.amend.isEnabled()

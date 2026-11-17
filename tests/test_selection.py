@@ -5,7 +5,7 @@ from pathlib import Path
 
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import FileSelection, FileSource, Selection, file_rows
-from rzgitclient.git.git_models import Commit, FileStatus
+from rzgitclient.git.git_models import Commit, FileStatus, Stash
 from tests.support import SignalRecorder, commit_file, git, make_repo, qt_app, wait_idle
 
 COMMIT = Commit("a" * 40, "Test User", datetime(2026, 1, 1, tzinfo=timezone.utc), "first")
@@ -74,6 +74,34 @@ class SelectionTests(unittest.TestCase):
         self.session.refresh()
         wait_idle(self.session)
         self.assertIsNone(self.selection.commit)
+
+    def test_a_selected_stash_follows_the_stashes(self):
+        """RZG-36: kept through history reloads, moved to its new stash@{n}, and back
+        to Uncommitted changes once it's gone."""
+        repo = make_repo(self.tmp / "s")
+        commit_file(repo, "a.txt", "1", "first")
+        (repo / "a.txt").write_text("older")
+        git(repo, "stash", "push", "-q", "-m", "older")
+        self.assertTrue(self.session.open(repo))
+        wait_idle(self.session)
+        [older] = self.session.stashes
+        mine = FileSelection("a.txt", FileSource.COMMIT, older.sha)
+        self.selection.commit = older
+        self.selection.select([mine], mine)
+        commit_file(repo, "b.txt", "2", "second")  # history changes; the stash isn't in it
+        (repo / "a.txt").write_text("newer")
+        git(repo, "stash", "push", "-q", "-m", "newer")
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertIsInstance(self.selection.commit, Stash)
+        self.assertEqual((self.selection.commit.sha, self.selection.commit.ref),
+                         (older.sha, "stash@{1}"))
+        self.assertEqual(self.selection.file, mine)  # its files stay selected
+        git(repo, "stash", "drop", "-q", "stash@{1}")
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertIsNone(self.selection.commit)
+        self.assertIsNone(self.selection.file)
 
     def test_cleared_when_repo_changes(self):
         self.assertTrue(self.session.open(make_repo(self.tmp / "a")))

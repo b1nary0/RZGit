@@ -58,7 +58,7 @@ class BranchDialogs(QObject):
             "Switch Branch", f"Switch to {name}?",
             f"You have uncommitted changes ({files}, counting new ones).\n\n"
             f"{STASH} puts all of them in a stash named “{stash_message(name)}”; "
-            f"get them back later with git stash pop. {BRING} takes them to {name}, "
+            f"get them back later from the Stashes panel. {BRING} takes them to {name}, "
             "if git can do that without losing any.",
             [(STASH, _Role.AcceptRole), (BRING, _Role.AcceptRole)], default=STASH)
         if choice in (STASH, BRING):

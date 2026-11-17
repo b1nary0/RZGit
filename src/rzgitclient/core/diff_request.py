@@ -36,6 +36,7 @@ def load_diff(repo: Repo, request: DiffRequest, status: tuple[FileStatus, ...],
     changes = commit_files if file.source is FileSource.COMMIT else status
     entry = next((f for f in changes if f.path == file.path), None)
     old_path = None
+    commit = file.commit
     match file.source:
         case FileSource.WORKTREE:
             untracked = entry is not None and entry.is_untracked
@@ -48,7 +49,9 @@ def load_diff(repo: Repo, request: DiffRequest, status: tuple[FileStatus, ...],
             source = DiffSource.COMMIT
             if entry is not None and entry.index in "RC":
                 old_path = entry.orig_path
+            elif entry is not None and entry.is_untracked:
+                commit = f"{file.commit}^3"  # a stash's untracked part (spec §4.1)
         case _:
             raise ValueError(f"not a file source: {file.source!r}")
     limit = {} if request.full else {"max_bytes": DIFF_MAX_BYTES, "max_lines": DIFF_MAX_LINES}
-    return repo.diff(file.path, source, commit=file.commit, old_path=old_path, **limit)
+    return repo.diff(file.path, source, commit=commit, old_path=old_path, **limit)

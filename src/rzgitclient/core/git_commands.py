@@ -3,6 +3,7 @@
 RepoSession queues a GitCommand; ``run_command`` is the worker side. Where a
 command depends on the status it reads it itself, so a stale status in the
 window can't make it act on the wrong file. No Qt objects besides QFile.
+A command that worked, but not quite as asked, returns a notice.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from enum import StrEnum
 from PySide6.QtCore import QFile
 
 from rzgitclient.core.diff_patch import Line, build_patch
-from rzgitclient.git.git_models import FileDiff, FileStatus
+from rzgitclient.git.git_models import FileDiff, FileStatus, Stash
 from rzgitclient.git.repo import GitError, Repo
 
 
@@ -37,6 +38,10 @@ class CommandKind(StrEnum):
     DELETE_BRANCH = "delete_branch"  # ``force``: even if unmerged
     MERGE = "merge"  # ``branch`` into the current branch
     REBASE = "rebase"  # the current branch onto ``branch``
+    # Stashes (``sha`` is the stash acted on):
+    STASH_PUSH = "stash_push"  # with ``message``; ``untracked`` files too
+    STASH_APPLY = "stash_apply"  # rolled back if it fails; ``pop``: dropped if it worked
+    STASH_DROP = "stash_drop"
 
 
 @dataclass(frozen=True, eq=False)
@@ -54,10 +59,14 @@ class GitCommand:
     stash: bool = False  # SWITCH's
     switch: bool = False  # CREATE_BRANCH's
     force: bool = False  # DELETE_BRANCH's
+    sha: str = ""  # the stash commands'
+    untracked: bool = False  # STASH_PUSH's
+    pop: bool = False  # STASH_APPLY's
 
 
-def run_command(repo: Repo, command: GitCommand) -> None:
-    """Run ``command``. Raises GitError if git (or the trash) fails."""
+def run_command(repo: Repo, command: GitCommand) -> str | None:
+    """Run ``command``; a notice if it worked, but not quite as asked. Raises
+    GitError if git (or the trash) fails."""
     paths = command.paths
     match command.kind:
         case CommandKind.STAGE:
@@ -88,8 +97,64 @@ def run_command(repo: Repo, command: GitCommand) -> None:
             repo.merge(command.branch)
         case CommandKind.REBASE:
             repo.rebase(command.branch)
+        case CommandKind.STASH_PUSH:
+            if not repo.stash_push(command.message, untracked=command.untracked):
+                return NOTHING_TO_STASH
+        case CommandKind.STASH_APPLY:
+            return _apply_stash(repo, command.sha, command.pop)
+        case CommandKind.STASH_DROP:
+            repo.stash_drop(_stash(repo, command.sha).ref)
         case _:
             raise ValueError(f"not a command: {command.kind!r}")
+    return None
+
+
+NOTHING_TO_STASH = "There was nothing to stash: the only changes are untracked files."
+UNSTAGED = ("The stash was applied, but its staged changes couldn't be staged again, "
+            "so they are unstaged.")
+NOT_CLEAN = ("Commit or stash your changes first: a stash is applied only to a clean "
+             "working tree, so it can be undone if it doesn't fit.")
+
+
+def _stash(repo: Repo, sha: str) -> Stash:
+    """The stash ``sha`` as it is now: its ``stash@{n}`` moves when stashes are made."""
+    stash = next((s for s in repo.stashes() if s.sha == sha), None)
+    if stash is None:
+        raise GitError("That stash is gone: it was popped or dropped meanwhile.")
+    return stash
+
+
+def _apply_stash(repo: Repo, sha: str, pop: bool) -> str | None:
+    """Apply (and with ``pop``, drop) stash ``sha``, never leaving it half-applied:
+    on a clean working tree, so a failure is rolled back to exactly that (spec §4.1)."""
+    if repo.status():
+        raise GitError(NOT_CLEAN)
+    stash = _stash(repo, sha)
+    notice = None
+    try:
+        _apply_or_roll_back(repo, stash, index=True)
+    except GitError:
+        # Its staged changes may not fit HEAD as staged changes: try them unstaged.
+        try:
+            _apply_or_roll_back(repo, stash, index=False)
+        except GitError as exc:
+            raise GitError(f"{exc}\n\nNothing was changed, and the stash is kept.",
+                           exc.returncode) from exc
+        notice = UNSTAGED
+    if pop:
+        repo.stash_drop(_stash(repo, sha).ref)
+    return notice
+
+
+def _apply_or_roll_back(repo: Repo, stash: Stash, *, index: bool) -> None:
+    try:
+        repo.stash_apply(stash.sha, index=index)
+    except GitError:
+        repo.reset_hard()
+        if stash.untracked:
+            restored = set(repo.stash_untracked(stash.sha))
+            repo.clean([f.path for f in repo.status() if f.is_untracked and f.path in restored])
+        raise
 
 
 def stash_message(branch: str) -> str:

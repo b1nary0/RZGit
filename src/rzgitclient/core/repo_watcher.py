@@ -24,7 +24,8 @@ from rzgitclient.git.repo import GitError, Repo
 
 log = logging.getLogger(__name__)
 
-REF_PARTS = Refresh.HEAD | Refresh.BRANCHES | Refresh.HISTORY | Refresh.COUNT
+# refs/stash is rewritten by every stash change, dropping an older one too.
+REF_PARTS = Refresh.HEAD | Refresh.BRANCHES | Refresh.HISTORY | Refresh.STASHES | Refresh.COUNT
 _REF_FILES = frozenset({"HEAD", "packed-refs"})  # in the git dir or the common dir
 _WRITES_WORKTREE = frozenset({CommandKind.DISCARD, CommandKind.DISCARD_LINES})
 

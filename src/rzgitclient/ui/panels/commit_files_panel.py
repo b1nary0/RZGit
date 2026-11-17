@@ -1,4 +1,5 @@
-"""Commit Files: the files the commit selected in History changed (spec §5.4).
+"""Commit Files: the files the commit selected in History changed, or the
+stash selected in the Stash panel holds (spec §5.4).
 
 The list is a ``FileList`` in commit mode. The panel asks the session for the
 commit's files when ``selection.commit`` changes, and collapses while it is
@@ -11,7 +12,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QVBoxLayout
 
 from rzgitclient.core.selection import FileSource
-from rzgitclient.git.git_models import Commit
+from rzgitclient.git.git_models import Commit, Stash
 from rzgitclient.ui.panels.file_list import FileList
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
@@ -53,7 +54,8 @@ class CommitFilesPanel(Panel):
         files = self.ctx.session.commit_files
         loaded = self.ctx.session.commit_files_sha == commit.sha and files is not None
         count = f" ({len(files):,})" if loaded else ""
-        self.set_header(f"Files in {commit.short_sha}{count}")
+        name = commit.ref if isinstance(commit, Stash) else commit.short_sha
+        self.set_header(f"Files in {name}{count}")
 
     def apply_theme(self, theme: AppTheme) -> None:
         if self._list is not None:

@@ -5,6 +5,7 @@ from pathlib import Path
 import threading
 from unittest import mock
 
+from rzgitclient.core import git_commands
 from rzgitclient.core.diff_patch import hunk_lines
 from rzgitclient.core.git_commands import CommandKind
 from rzgitclient.core.repo_session import Refresh, RepoSession
@@ -14,7 +15,7 @@ from rzgitclient.git.repo import GitError, Repo
 from tests.support import SignalRecorder, commit_file, git, make_repo, qt_app, wait_idle
 
 DATA_SIGNALS = ("head_changed", "branches_changed", "history_changed", "status_changed",
-                "commit_count_changed")
+                "stashes_changed", "commit_count_changed")
 ALL_SIGNALS = ("repo_changed", *DATA_SIGNALS, "error_occurred")
 BUSY = "busy_changed"
 
@@ -98,7 +99,7 @@ class RepoSessionTests(unittest.TestCase):
         self.assertEqual(
             self.rec.names(),
             ["repo_changed", "head_changed", "branches_changed", "error_occurred",
-             "history_changed", "status_changed", "commit_count_changed"],
+             "history_changed", "status_changed", "stashes_changed", "commit_count_changed"],
         )
         self.assertEqual(self.session.history, ())
         self.assertEqual(self.session.status, ())
@@ -1114,3 +1115,94 @@ class RepoSessionLastCommitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RepoSessionStashTests(unittest.TestCase):
+    """Stashes: the part, their files and diffs, and the commands (RZG-36, spec §4.1)."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        commit_file(self.path, "a.txt", "1\n", "first")
+        (self.path / "a.txt").write_text("2\n")
+        (self.path / "new.txt").write_text("new\n")
+        self.session = RepoSession()
+        self.finished = []
+        self.session.command_finished.connect(lambda c, ok: self.finished.append((c.kind, ok)))
+        self.assertTrue(self.session.open(self.path))
+        wait_idle(self.session)
+
+    def tearDown(self):
+        self.session.shutdown()
+        self._tmp.cleanup()
+
+    def test_stash_changes_reloads_status_and_stashes(self):
+        rec = SignalRecorder(self.session, "stashes_changed", "status_changed")
+        self.session.stash_changes("saved")
+        wait_idle(self.session)
+        [stash] = self.session.stashes
+        self.assertEqual((stash.message, stash.branch, stash.untracked), ("saved", "main", True))
+        self.assertEqual(self.session.status, ())
+        self.assertEqual(rec.names(), ["status_changed", "stashes_changed"])
+        self.assertEqual(self.finished, [(CommandKind.STASH_PUSH, True)])
+
+    def test_a_stash_s_files_and_the_diff_of_its_untracked_file(self):
+        self.session.stash_changes("saved")
+        wait_idle(self.session)
+        [stash] = self.session.stashes
+        self.session.request_commit_files(stash.sha)
+        wait_idle(self.session)
+        self.assertEqual([(f.index, f.path) for f in self.session.commit_files],
+                         [("M", "a.txt"), ("?", "new.txt")])
+        self.session.request_diff(FileSelection("new.txt", FileSource.COMMIT, stash.sha))
+        wait_idle(self.session)
+        self.assertEqual([line.text for h in self.session.diff.hunks for line in h.lines],
+                         ["new"])
+
+    def test_apply_pop_and_drop(self):
+        self.session.stash_changes("saved")
+        wait_idle(self.session)
+        [stash] = self.session.stashes
+        self.session.apply_stash(stash.sha)
+        wait_idle(self.session)
+        self.assertEqual({f.path for f in self.session.status}, {"a.txt", "new.txt"})
+        self.assertEqual(self.session.stashes, (stash,))
+        self.session.stash_changes("again")
+        wait_idle(self.session)
+        again = self.session.stashes[0]
+        self.session.drop_stash(stash.sha)  # stash@{1} now
+        wait_idle(self.session)
+        self.assertEqual(self.session.stashes, (again,))  # still stash@{0}
+        self.session.apply_stash(again.sha, pop=True)
+        wait_idle(self.session)
+        self.assertEqual(self.session.stashes, ())
+        self.assertEqual(len(self.session.status), 2)
+
+    def test_a_notice_comes_before_its_command_finished(self):
+        (self.path / "a.txt").write_text("1\n")  # only new.txt is left: untracked
+        self.session.refresh()
+        wait_idle(self.session)
+        events = []
+        self.session.notice_occurred.connect(lambda text: events.append(text))
+        self.session.command_finished.connect(lambda c, ok: events.append(ok))
+        self.session.stash_changes("m", untracked=False)
+        wait_idle(self.session)
+        self.assertEqual(events, [git_commands.NOTHING_TO_STASH, True])
+        self.assertEqual(self.session.stashes, ())
+
+    def test_a_refused_apply_is_an_error_and_keeps_the_stash(self):
+        self.session.stash_changes("saved")
+        wait_idle(self.session)
+        (self.path / "a.txt").write_text("dirty\n")
+        self.session.refresh()
+        wait_idle(self.session)
+        rec = SignalRecorder(self.session, "error_occurred")
+        self.session.apply_stash(self.session.stashes[0].sha, pop=True)
+        wait_idle(self.session)
+        self.assertEqual(rec.values("error_occurred"), [git_commands.NOT_CLEAN])
+        self.assertEqual(len(self.session.stashes), 1)
+        self.assertEqual(self.finished[-1], (CommandKind.STASH_APPLY, False))
