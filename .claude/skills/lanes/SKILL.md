@@ -24,7 +24,7 @@ This session is the **coordinator**. It plans the lanes, starts them, starts lan
 
 Everything else is a lane. When unsure, tell the user which you'd pick and why.
 
-A small issue follows the same per-issue workflow. While lanes are running, the coordinator does it in its own worktree (`/home/JPOD/dev/RZGitClient-RZG-N`, branch `RZG-N`, with no tab), and lands it with `merge --ff-only` like a lane. Its changes must never sit in the main checkout, because a dirty main checkout makes the lanes' fast-forward landing fail.
+A small issue follows the same per-issue workflow, except that the full suite runs **2×** instead of 5×. While lanes are running, the coordinator does it in its own worktree (`/home/JPOD/dev/RZGitClient-RZG-N`, branch `RZG-N`, with no tab), and lands it with `merge --ff-only` like a lane. Its changes must never sit in the main checkout, because a dirty main checkout makes the lanes' fast-forward landing fail.
 
 ## 1. Plan (wait for the user)
 
