@@ -2,7 +2,8 @@
 
 Nothing is created per row: ``data()`` reads the commit and the current theme
 when the view asks, so 100k commits cost no more to show than 500. While a
-repo is open, row 0 is "Uncommitted changes" and commits start at row 1. Pages are
+repo is open, row 0 is "Uncommitted changes" and commits start at row 1. Every second
+commit, counted from the first, is striped (its BackgroundRole). Pages are
 asked for by the panel, not through Qt's fetchMore, which Qt also calls while
 laying out rows, so it would load pages nobody scrolled to.
 """
@@ -10,7 +11,7 @@ laying out rows, so it would load pages nobody scrolled to.
 from __future__ import annotations
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPersistentModelIndex, Qt
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QBrush, QColor, QFont
 
 from rzgitclient.git.git_models import Commit
 from rzgitclient.ui.theme.app_theme import AppTheme
@@ -20,7 +21,8 @@ MUTED_COLUMNS = (1, 2, 3)  # author, date, hash
 HASH_COLUMN = 3
 
 _Index = QModelIndex | QPersistentModelIndex
-_STYLE_ROLES = [Qt.ItemDataRole.ForegroundRole, Qt.ItemDataRole.FontRole]
+_STYLE_ROLES = [Qt.ItemDataRole.ForegroundRole, Qt.ItemDataRole.FontRole,
+                Qt.ItemDataRole.BackgroundRole]
 
 
 class HistoryModel(QAbstractTableModel):
@@ -31,6 +33,7 @@ class HistoryModel(QAbstractTableModel):
         self._italic = QFont()
         self._italic.setItalic(True)  # only italic: the rest comes from the view's font
         self._muted = QColor()
+        self._stripe = QBrush()
         self._mono = QFont()
         self.set_theme(theme)
 
@@ -103,6 +106,10 @@ class HistoryModel(QAbstractTableModel):
             return commit.date.strftime("%Y-%m-%d %H:%M")
         return commit.short_sha
 
+    def striped(self, row: int) -> bool:
+        """Whether ``row`` has the stripe: every second commit, never Uncommitted changes."""
+        return row >= self._offset and (row - self._offset) % 2 == 1
+
     def font(self, col: int) -> QFont | None:
         """The column's font, or None for the view's."""
         return self._mono if col == HASH_COLUMN else None
@@ -116,6 +123,7 @@ class HistoryModel(QAbstractTableModel):
 
     def set_theme(self, theme: AppTheme) -> None:
         self._muted = QColor(theme.colors.text_muted)
+        self._stripe = QBrush(QColor(theme.colors.row_alt_bg))
         self._mono = theme.mono_font()
         if self.rowCount():
             last = self.index(self.rowCount() - 1, len(COLUMNS) - 1)
@@ -140,6 +148,8 @@ class HistoryModel(QAbstractTableModel):
             return self.text(row, col)
         if row < self._offset:  # Uncommitted changes
             return self._italic if role == Qt.ItemDataRole.FontRole and col == 0 else None
+        if role == Qt.ItemDataRole.BackgroundRole:
+            return self._stripe if self.striped(row) else None
         if role == Qt.ItemDataRole.ForegroundRole and col in MUTED_COLUMNS:
             return self._muted
         if role == Qt.ItemDataRole.FontRole and col == HASH_COLUMN:

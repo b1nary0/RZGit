@@ -234,6 +234,19 @@ class ColourBlindThemeTests(unittest.TestCase):
                 self.assertGreaterEqual(contrast(c.text, selected), 4.5, (variant.name, selected))
 
 
+
+class RowStripeTests(unittest.TestCase):
+    """History's stripes stay visible, and clear of hover and selection (RZG-63)."""
+
+    def test_the_four_row_backgrounds_stay_apart(self):
+        for theme in ALL_THEMES:
+            c = theme.colors
+            with self.subTest(theme.name):
+                self.assertGreaterEqual(delta_e(c.row_alt_bg, c.content_bg), 1.5)
+                self.assertGreaterEqual(delta_e(c.row_alt_bg, c.content_hover), 1.5)
+                self.assertGreaterEqual(delta_e(c.row_alt_bg, c.content_selection), 5)
+
+
 if __name__ == "__main__":
     unittest.main()
 

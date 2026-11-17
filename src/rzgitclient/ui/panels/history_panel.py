@@ -1,11 +1,12 @@
 """Uncommitted changes and the commit table; the selected row is
 ``selection.commit``, None for Uncommitted changes (spec §5.4). No row is
-selected while a stash is (the Stash panel's)."""
+selected while a stash is (the Stash panel's). Commits are striped, and
+Uncommitted changes stays pinned at the top while the table scrolls."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QModelIndex, QPersistentModelIndex, QPoint, QRect, Qt
-from PySide6.QtGui import QFontMetrics
+from PySide6.QtCore import QEvent, QModelIndex, QPersistentModelIndex, QRect, Qt
+from PySide6.QtGui import QBrush, QColor, QFontMetrics, QKeyEvent, QMouseEvent, QPainter, QPaintEvent, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QStyleOptionViewItem,
     QTableView,
     QVBoxLayout,
+    QWidget,
 )
 
 from rzgitclient.core.repo_session import HISTORY_PAGE
@@ -141,6 +143,7 @@ class HistoryPanel(Panel):
     def apply_theme(self, theme: AppTheme) -> None:
         self._labels.set_theme(theme)
         self._model.set_theme(theme)
+        self._view.set_pinned_line(QColor(theme.colors.border_light))
         self._view.fit_row_height()
 
     def _sync_selection(self, *_args: object) -> None:
@@ -181,10 +184,11 @@ class HistoryPanel(Panel):
         return self._model.commit_at(self._view.currentIndex().row())
 
     def _top_commit(self) -> Commit | None:
-        """The commit at the top of the view, or None when scrolled to the top."""
+        """The commit at the top of the view (below the pinned row), or None when
+        scrolled to the top."""
         if self._view.verticalScrollBar().value() == 0:
             return None
-        return self._model.commit_at(self._view.indexAt(QPoint(0, 0)).row())
+        return self._model.commit_at(self._view.top_row())
 
 
 class _HistoryView(QTableView):
@@ -194,11 +198,15 @@ class _HistoryView(QTableView):
     insert or reset (230 ms with 100k rows); a table with fixed row heights
     doesn't. These settings give it the tree's look: no grid or row numbers,
     whole-row selection and hover. Its column labels are the panel's ColumnHeader.
+
+    While it's scrolled, row 0 (Uncommitted changes) is pinned: ``_PinnedRow``
+    draws it over the top of the rows, which pass under it (spec §5.4).
     """
 
     def __init__(self) -> None:
         super().__init__()
         self.hover_row = -1
+        self.pinned = _PinnedRow(self)
         self.setShowGrid(False)
         self.setWordWrap(False)
         self.setTabKeyNavigation(False)
@@ -211,12 +219,72 @@ class _HistoryView(QTableView):
         rows.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         rows.setMinimumSectionSize(1)
         self.setItemDelegate(_RowHoverDelegate(self))
+        bar = self.verticalScrollBar()
+        bar.valueChanged.connect(self._place_pinned)
+        bar.rangeChanged.connect(self._place_pinned)
+
+    def setModel(self, model) -> None:  # type: ignore[override]
+        super().setModel(model)
+        if model is None:
+            return
+        self.selectionModel().selectionChanged.connect(self.pinned.update)
+        for signal in (model.modelReset, model.rowsInserted, model.rowsRemoved, model.dataChanged):
+            signal.connect(self._place_pinned)
+        header = self.horizontalHeader()
+        header.sectionResized.connect(self.pinned.update)
+        header.sectionMoved.connect(self.pinned.update)
+
+    # ---- the pinned row --------------------------------------------------
+
+    def pinned_active(self) -> bool:
+        """Uncommitted changes is drawn pinned: it exists, and the table is scrolled."""
+        model = self.model()
+        return (model is not None and getattr(model, "has_uncommitted", False)
+                and self.verticalScrollBar().value() > 0)
+
+    def top_row(self) -> int:
+        """The first row in view, below the pinned row while it shows."""
+        return self.rowAt(self.pinned.height() if self.pinned_active() else 0)
+
+    def set_pinned_line(self, color: QColor) -> None:
+        self.pinned.line = color
+        self.pinned.update()
+
+    def _place_pinned(self, *_args: object) -> None:
+        active = self.pinned_active()
+        if active:
+            self.pinned.setGeometry(0, 0, self.viewport().width(), self.rowHeight(0))
+            self.pinned.raise_()
+            self.pinned.update()
+        self.pinned.setVisible(active)
+
+    def updateGeometries(self) -> None:
+        super().updateGeometries()
+        self._place_pinned()
+
+    def scrollTo(self, index: QModelIndex | QPersistentModelIndex,
+                 hint: QAbstractItemView.ScrollHint = QAbstractItemView.ScrollHint.EnsureVisible,
+                 ) -> None:
+        model = self.model()
+        pinned = model is not None and getattr(model, "has_uncommitted", False)
+        if pinned and index.isValid() and index.row() == 0:
+            return  # always in view: at the top, or pinned there
+        super().scrollTo(index, hint)
+        bar = self.verticalScrollBar()
+        if pinned and index.isValid() and 0 < bar.value() >= index.row():
+            bar.setValue(index.row() - 1)  # it would be under the pinned row
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        super().keyPressEvent(event)
+        if event.key() == Qt.Key.Key_Home and self.currentIndex().row() == 0:
+            self.scrollToTop()  # Ctrl+Home goes to the top, not only to the pinned row
 
     def fit_row_height(self) -> None:
         """Every row is as tall as the first wants (a tree's uniformRowHeights)."""
         model = self.model()
         if model is not None and model.rowCount():
             self.verticalHeader().setDefaultSectionSize(self._hint(model.index(0, 0)).height())
+        self._place_pinned()
 
     def width_hint(self, index: QModelIndex) -> int:
         """The width the view wants for one cell (as sizeHintForColumn, for one row)."""
@@ -231,7 +299,9 @@ class _HistoryView(QTableView):
     def viewportEvent(self, event: QEvent) -> bool:
         kind = event.type()
         if kind in (QEvent.Type.HoverEnter, QEvent.Type.HoverMove):
-            self._set_hover_row(self.rowAt(int(event.position().y())))
+            y = int(event.position().y())
+            under_pin = self.pinned.isVisible() and y < self.pinned.height()
+            self._set_hover_row(0 if under_pin else self.rowAt(y))
         elif kind == QEvent.Type.HoverLeave:
             self._set_hover_row(-1)
         return super().viewportEvent(event)
@@ -244,10 +314,69 @@ class _HistoryView(QTableView):
         for r in (old, row):
             if r >= 0:
                 self.viewport().update(QRect(0, self.rowViewportPosition(r), width, self.rowHeight(r)))
+        if 0 in (old, row):
+            self.pinned.update()
+
+
+class _PinnedRow(QWidget):
+    """Row 0, Uncommitted changes, drawn at the top of a scrolled ``_HistoryView``
+    with the view's own delegate, selection and hover, so it looks just like the
+    row; a line under it shows the commits passing beneath. Clicking it selects it."""
+
+    def __init__(self, view: _HistoryView):
+        super().__init__(view.viewport())
+        self._view = view
+        self.line = QColor()  # the theme's border_light, set by the panel
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setMouseTracking(True)
+        self.hide()
+
+    def paintEvent(self, _event: QPaintEvent) -> None:
+        view, model = self._view, self._view.model()
+        if model is None or not model.rowCount():
+            return
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), view.palette().color(QPalette.ColorRole.Base))
+        header = view.horizontalHeader()
+        selection = view.selectionModel()
+        for column in range(model.columnCount()):
+            if header.isSectionHidden(column):
+                continue
+            index = model.index(0, column)
+            option = QStyleOptionViewItem()
+            view.initViewItemOption(option)
+            option.rect = QRect(view.columnViewportPosition(column), 0,
+                                view.columnWidth(column), self.height())
+            if selection is not None and selection.isSelected(index):
+                option.state |= QStyle.StateFlag.State_Selected
+            view.itemDelegateForIndex(index).paint(painter, option, index)
+        if self.line.isValid():
+            painter.setPen(self.line)
+            painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
+        painter.end()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        view, model = self._view, self._view.model()
+        if model is not None and event.button() == Qt.MouseButton.LeftButton:
+            column = max(view.columnAt(int(event.position().x())), 0)
+            view.setFocus(Qt.FocusReason.MouseFocusReason)
+            view.setCurrentIndex(model.index(0, column))
+        event.accept()
+
+    def enterEvent(self, event: QEvent) -> None:
+        self._view._set_hover_row(0)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: QEvent) -> None:
+        if self._view.hover_row == 0:
+            self._view._set_hover_row(-1)
+        super().leaveEvent(event)
 
 
 class _RowHoverDelegate(QStyledItemDelegate):
-    """Marks every cell of the hovered row as hovered, as a tree view does."""
+    """Marks every cell of the hovered row as hovered, as a tree view does, and
+    paints a row's stripe (its BackgroundRole) under it: the stylesheet's item
+    rule keeps Qt from painting that brush itself."""
 
     def __init__(self, view: _HistoryView):
         super().__init__(view)
@@ -261,3 +390,10 @@ class _RowHoverDelegate(QStyledItemDelegate):
             option.state |= QStyle.StateFlag.State_MouseOver
         else:
             option.state &= ~QStyle.StateFlag.State_MouseOver
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem,
+              index: QModelIndex | QPersistentModelIndex) -> None:
+        stripe = index.data(Qt.ItemDataRole.BackgroundRole)
+        if isinstance(stripe, QBrush):
+            painter.fillRect(option.rect, stripe)  # hover and selection are drawn over it
+        super().paint(painter, option, index)

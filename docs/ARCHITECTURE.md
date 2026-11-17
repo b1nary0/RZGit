@@ -1020,8 +1020,8 @@ can't collapse), it shows the placeholder "No commit selected".
 
 HistoryPanel is a `QTableView` over `HistoryModel` (`QAbstractTableModel`), because item
 widgets for 100k commits are too slow to build. The model creates nothing per row: `data()`
-answers text, the muted colour and the monospace hash font from the current theme when Qt
-asks, so a theme change is one `dataChanged`.
+answers text, the muted colour, the monospace hash font and the stripe from the current
+theme when Qt asks, so a theme change is one `dataChanged`.
 
 - **A table, styled as a tree.** A `QTreeView` keeps a layout entry per row and redoes all
   of them on every insert or reset: a page cost 63 ms with 20k rows loaded and 232 ms with
@@ -1035,6 +1035,19 @@ asks, so a theme change is one `dataChanged`.
   selected by default, and selecting it sets `selection.commit` to None. Commits start at
   row 1: `commit_at(row)` and `row_of(sha)` account for it, and an appended page
   inserts after it. A reset that can't find the selected commit selects it.
+- **Stripes** (RZG-63): commit rows alternate between the content background and
+  `row_alt_bg` (§7.1), counted from the first commit. The model answers the stripe as
+  the cell's `BackgroundRole` (every second commit), not through Qt's alternating rows,
+  which would count the Uncommitted changes row. Hover and selection are the
+  stylesheet's and are drawn over it. Uncommitted changes is never striped.
+- **Uncommitted changes is pinned** (RZG-63). While the table is scrolled, a strip at the
+  top of the rows (`_PinnedRow`, a child of the view's viewport) draws row 0 with the
+  view's own delegate, hover and selection, with a `border_light` line under it. The
+  commits pass under it. At the top it is hidden, and row 0 is simply the first row, so
+  the two look alike. Clicking it selects Uncommitted changes. Up from the first commit
+  reaches it and Down from it reaches the first commit, as before. `scrollTo` never
+  scrolls for row 0, since it is always in view, and keeps any other row clear of the
+  strip. The commit "at the top" that a reset keeps (§ Updates) is the first one below it.
 - **Follows the selection:** when `selection.commit` is changed elsewhere (a parent link
   in Commit Details), History selects that commit's row, or Uncommitted changes for None,
   and scrolls to it if it's off screen. A commit that isn't loaded leaves History as it is.
@@ -1492,6 +1505,7 @@ back where the user had it. The default place is only the fallback.
 class ThemeColors:   menubar_bg: str; toolbar_bg: str; tab_bg: str; header_bg: str; sidebar_bg: str; content_bg: str; border: str; tree_guide: str;
                      column_header_bg, column_header_text, column_header_text_hover,
                      column_header_separator, column_header_border: str   # ColumnHeader (§5.2)
+                     row_alt_bg: str   # every second row of a striped list (History, RZG-63); at least ΔE 1.5 from content_bg and content_hover
                      text: str; text_muted: str; hover: str; selection: str; content_selection: str;
                      accent: str; button_*: str; scroll_*: str; diff_*: str (incl. diff_hunk_bg, diff_hunk_text, diff_line_button*, diff_*_selected_bg, diff_*_word); …
 @dataclass(frozen=True)

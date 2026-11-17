@@ -30,6 +30,7 @@ class ThemeColors:
     column_header_text_hover: str
     column_header_separator: str  # the inset line between two labels
     column_header_border: str  # the line under the row of labels
+    row_alt_bg: str  # every second row of a striped list (History's commits)
     # text
     text: str
     text_muted: str
@@ -223,6 +224,7 @@ LIGHT_THEME = AppTheme(
         column_header_text_hover="#000000",
         column_header_separator="#c6c6c6",
         column_header_border="#c6c6c6",
+        row_alt_bg="#f6f6f8",  # ~3% darker than content_bg; content_hover stays bluer
         text="#2b2b2b",
         text_muted="#8a8a8a",
         placeholder="#a8a8a8",
@@ -288,6 +290,7 @@ DARK_THEME = AppTheme(
         column_header_text_hover="#ffffff",
         column_header_separator="#5b5d6a",  # a step lighter than border: a 1 px line needs ~2:1
         column_header_border="#41424d",
+        row_alt_bg="#27282e",  # a step darker than content_bg: lighter would be too near content_hover
         text="#eaeaf2",
         text_muted="#aaabb1",
         placeholder="#757783",

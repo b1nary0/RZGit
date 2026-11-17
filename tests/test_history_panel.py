@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
-from PySide6.QtGui import QHoverEvent
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QPointF, Qt
+from PySide6.QtGui import QEnterEvent, QHoverEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
 
@@ -313,14 +313,14 @@ class HistoryPanelPagingTests(unittest.TestCase):
         self.view.setCurrentIndex(self.model.index(6, 0))
         selected = self.ctx.selection.commit
         self.view.scrollTo(self.model.index(5, 0), self.view.ScrollHint.PositionAtTop)
-        top = self.model.commit_at(self.view.indexAt(QPoint(0, 0)).row())
+        top = self.model.commit_at(self.view.top_row())  # the first below the pinned row
         self.assertEqual(top.subject, "c6")
 
         commit_file(self.repo, "a.txt", "11", "c11")
         self.ctx.session.refresh()
         self.settle()
         self.assertEqual(self.model.commits[0].subject, "c11")
-        self.assertEqual(self.model.commit_at(self.view.indexAt(QPoint(0, 0)).row()), top)
+        self.assertEqual(self.model.commit_at(self.view.top_row()), top)
         self.assertEqual(self.ctx.selection.commit, selected)
 
     def test_refresh_at_the_top_shows_new_commits(self):
@@ -333,3 +333,133 @@ class HistoryPanelPagingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HistoryStripesAndPinnedRowTests(unittest.TestCase):
+    """Striped commits, and Uncommitted changes pinned at the top (RZG-63, spec §5.4)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = qt_app()
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.repo = make_repo(Path(self._tmp.name) / "repo")
+        for i in range(1, 13):
+            commit_file(self.repo, "a.txt", str(i), f"c{i}")
+        (self.repo / "a.txt").write_text("changed")
+        self.ctx = make_panel_context()
+        self.addCleanup(self.ctx.session.shutdown)
+        self.panel = HistoryPanel(self.ctx)
+        self.addCleanup(self.panel.deleteLater)
+        self.view, self.model = self.panel._view, self.panel._model
+        self.pinned = self.view.pinned
+        self.panel.resize(500, 140)  # a few rows: the twelve commits overflow it
+        self.panel.show()
+        self.ctx.session.open(self.repo)
+        for _ in range(3):
+            wait_idle(self.ctx.session)
+            self.app.processEvents()
+        self.bar = self.view.verticalScrollBar()
+        self.colors = self.ctx.theme.current.colors
+
+    def scroll(self, value):
+        self.bar.setValue(value)
+        self.app.processEvents()
+
+    def pixel(self, widget, y):
+        """The colour at the right of the subject column, where no text is."""
+        x = self.view.columnWidth(0) - 3
+        return widget.grab().toImage().pixelColor(x, y).name()
+
+    def test_every_second_commit_is_striped_from_the_first_one(self):
+        background = Qt.ItemDataRole.BackgroundRole
+        brushes = [self.model.data(self.model.index(r, 1), background) for r in range(5)]
+        self.assertIsNone(brushes[0])  # Uncommitted changes: never
+        self.assertIsNone(brushes[1])  # the first commit
+        self.assertEqual(brushes[2].color().name(), self.colors.row_alt_bg)
+        self.assertIsNone(brushes[3])
+        self.assertEqual(brushes[4].color().name(), self.colors.row_alt_bg)
+        self.assertEqual([self.model.striped(r) for r in range(5)],
+                         [False, False, True, False, True])
+        self.view.clearSelection()
+        self.view.setCurrentIndex(self.model.index(1, 0))  # nothing selected on row 2 or 3
+        self.app.processEvents()
+        row = self.view.rowHeight(0)
+        self.assertEqual(self.pixel(self.view.viewport(), int(row * 2.5)), self.colors.row_alt_bg)
+        self.assertEqual(self.pixel(self.view.viewport(), int(row * 3.5)), self.colors.content_bg)
+
+    def test_at_the_top_uncommitted_changes_is_just_the_first_row(self):
+        self.assertEqual(self.bar.value(), 0)
+        self.assertFalse(self.pinned.isVisible())
+        self.assertEqual(self.view.visualRect(self.model.index(0, 0)).top(), 0)
+
+    def test_scrolled_it_stays_pinned_over_the_rows(self):
+        self.scroll(5)
+        self.assertTrue(self.pinned.isVisible())
+        self.assertEqual(self.pinned.geometry().top(), 0)
+        self.assertEqual(self.pinned.height(), self.view.rowHeight(0))
+        self.assertEqual(self.view.top_row(), 6)  # row 5 passes under it
+        # It's drawn like the row: selected (the default), with a line under it.
+        self.assertEqual(self.pixel(self.pinned, self.pinned.height() // 2),
+                         self.colors.content_selection)
+        self.assertEqual(self.pixel(self.pinned, self.pinned.height() - 1),
+                         self.colors.border_light)
+        self.scroll(0)
+        self.assertFalse(self.pinned.isVisible())
+
+    def test_clicking_it_selects_uncommitted_changes_without_scrolling(self):
+        self.scroll(5)
+        self.view.setCurrentIndex(self.model.index(7, 0))
+        self.assertIsNotNone(self.ctx.selection.commit)
+        QTest.mouseClick(self.pinned, Qt.MouseButton.LeftButton, pos=QPoint(10, 5))
+        self.assertIsNone(self.ctx.selection.commit)
+        self.assertEqual(self.view.currentIndex().row(), 0)
+        self.assertEqual(self.bar.value(), 5)
+
+    def test_hovering_it_hovers_row_zero(self):
+        self.scroll(5)
+        at = QPointF(10, 5)
+        QCoreApplication.sendEvent(self.pinned, QEnterEvent(at, at, self.pinned.mapToGlobal(at)))
+        self.assertEqual(self.view.hover_row, 0)
+        QCoreApplication.sendEvent(self.pinned, QEvent(QEvent.Type.Leave))
+        self.assertEqual(self.view.hover_row, -1)
+        # The viewport sees the pointer there too: it's the pinned row, not the row beneath.
+        y = self.pinned.height() // 2
+        self.view.viewportEvent(QHoverEvent(QEvent.Type.HoverMove, QPointF(5, y), QPointF(5, y),
+                                            QPointF(-1, -1)))
+        self.assertEqual(self.view.hover_row, 0)
+        y = self.pinned.height() + self.view.rowHeight(1) // 2
+        self.view.viewportEvent(QHoverEvent(QEvent.Type.HoverMove, QPointF(5, y), QPointF(5, y),
+                                            QPointF(-1, -1)))
+        self.assertEqual(self.view.hover_row, 6)
+
+    def test_the_keyboard_goes_through_it(self):
+        self.scroll(5)
+        self.view.setFocus()
+        self.view.setCurrentIndex(self.model.index(6, 0))  # the first row below it
+        QTest.keyClick(self.view, Qt.Key.Key_Up)  # row 5, which was under the pinned row
+        self.assertEqual(self.view.currentIndex().row(), 5)
+        self.assertEqual(self.view.top_row(), 5)  # scrolled out from under it
+        self.view.setCurrentIndex(self.model.index(1, 0))
+        QTest.keyClick(self.view, Qt.Key.Key_Up)  # the first commit: up to Uncommitted changes
+        self.assertEqual(self.view.currentIndex().row(), 0)
+        self.scroll(5)
+        QTest.keyClick(self.view, Qt.Key.Key_Down)  # from the pinned row to the first commit
+        self.assertEqual(self.view.currentIndex().row(), 1)
+        self.assertEqual(self.bar.value(), 0)
+        self.scroll(5)
+        self.view.setCurrentIndex(self.model.index(8, 0))
+        QTest.keyClick(self.view, Qt.Key.Key_Home, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(self.view.currentIndex().row(), 0)
+        self.assertEqual(self.bar.value(), 0)  # Ctrl+Home goes to the top
+
+    def test_selecting_uncommitted_changes_elsewhere_doesnt_scroll(self):
+        self.scroll(5)
+        self.view.setCurrentIndex(self.model.index(7, 0))
+        self.ctx.selection.commit = None
+        self.app.processEvents()
+        self.assertEqual(self.view.currentIndex().row(), 0)
+        self.assertEqual(self.bar.value(), 5)
+        self.assertTrue(self.pinned.isVisible())
