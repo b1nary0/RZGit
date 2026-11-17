@@ -1,6 +1,6 @@
 ---
 name: lanes
-description: Run several RZG Linear issues in parallel as "lanes" - one git worktree, one Konsole tab and one Claude session per issue, each named after its issue ID (RZG-N). Use when the user asks to work on issues in parallel, in lanes or in tabs, or to plan which issues can run side by side.
+description: Run several RZG Linear issues in parallel as "lanes" - one git worktree, one Konsole tab and one Claude session per issue, each named after its issue ID (RZG-N). This is the default way to work any RZG issue (even a single one): use it whenever the user asks to work on, start or do an issue, unless they explicitly ask to do it in the current session. Also for planning which issues can run side by side.
 ---
 
 # Lanes: parallel issues in Konsole tabs
