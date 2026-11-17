@@ -110,6 +110,11 @@ class AppActionsTests(unittest.TestCase):
 
     def test_open_and_quit_are_always_enabled(self):
         self.assertTrue(self.actions.open_repo.isEnabled())
+        self.assertTrue(self.actions.open_repo_new_window.isEnabled())
+
+    def test_open_in_new_window_is_ctrl_shift_o(self):
+        self.assertEqual(self.actions.open_repo_new_window.shortcut(),
+                         QKeySequence("Ctrl+Shift+O"))
         self.assertTrue(self.actions.quit.isEnabled())
 
     def test_shortcuts_are_the_platform_standard_keys(self):

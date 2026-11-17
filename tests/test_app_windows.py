@@ -206,6 +206,61 @@ class AppWindowsTests(unittest.TestCase):
         self.assertEqual(b.session.repo.root, self.two)
         self.assertIs(b.open_in_window(self.one), a)
 
+    # ---- File → Open Repository in New Window… (RZG-52) -------------------------
+
+    def choose_in_new_window(self, window, path):
+        with mock.patch("rzgitclient.ui.main_window.QFileDialog.getExistingDirectory",
+                        return_value=str(path)) as dialog:
+            window.ctx.actions.open_repo_new_window.trigger()
+        dialog.assert_called_once()
+        for w in self.windows.windows():
+            wait_idle(w.session)
+
+    def test_open_in_new_window_leaves_this_window_as_it_is(self):
+        a = self.open(self.one)
+        self.choose_in_new_window(a, self.two)
+        self.assertEqual(len(self.windows.windows()), 2)
+        b = self.windows.window_for(self.two)
+        self.assertIsNot(b, a)
+        self.assertTrue(b.isVisible())
+        self.assertEqual(a.session.repo.root, self.one)
+        self.assertEqual(self.settings.last_repo, str(self.two))
+
+    def test_open_in_new_window_raises_the_window_already_showing_it(self):
+        a, b = self.open(self.one), self.open(self.two)
+        with mock.patch.object(type(a), "bring_to_front") as bring:
+            self.choose_in_new_window(b, self.one)
+        bring.assert_called_once_with()
+        self.assertEqual(len(self.windows.windows()), 2)
+        self.assertEqual(b.session.repo.root, self.two)
+
+    def test_open_in_new_window_from_an_empty_window_opens_another(self):
+        empty = self.windows.new_window()
+        empty.show()
+        self.choose_in_new_window(empty, self.one)
+        self.assertEqual(len(self.windows.windows()), 2)
+        self.assertIsNone(empty.session.repo)
+        self.assertIsNotNone(self.windows.window_for(self.one))
+
+    def test_open_in_new_window_cancelled_or_not_a_repo_opens_nothing(self):
+        a = self.open(self.one)
+        self.choose_in_new_window(a, "")  # cancelled
+        self.assertEqual(len(self.windows.windows()), 1)
+        plain = self.tmp / "plain"
+        plain.mkdir()
+        with mock.patch("rzgitclient.ui.app_windows.QMessageBox.warning") as warning:
+            self.choose_in_new_window(a, plain)
+        warning.assert_called_once()
+        self.assertEqual(len(self.windows.windows()), 1)
+        self.assertEqual(a.session.repo.root, self.one)
+
+    def test_open_in_new_window_is_in_the_file_menu_after_open(self):
+        a = self.open(self.one)
+        file_menu = a.menuBar().actions()[0].menu()
+        actions = a.ctx.actions
+        self.assertEqual(file_menu.actions()[:3],
+                         [actions.open_repo, actions.open_repo_new_window, actions.refresh])
+
     # ---- closing and quitting -----------------------------------------------
 
     def test_closing_a_window_closes_only_it_and_stops_its_work(self):

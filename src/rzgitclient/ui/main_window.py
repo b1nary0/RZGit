@@ -73,10 +73,11 @@ class MainWindow(QMainWindow):
     def _build_actions(self) -> None:
         actions = self.ctx.actions
         actions.open_repo.triggered.connect(self.choose_repo)
+        actions.open_repo_new_window.triggered.connect(self.choose_repo_new_window)
         actions.quit.triggered.connect(QApplication.closeAllWindows)  # every window (§8.1)
 
         file_menu = self.menuBar().addMenu("&File")
-        file_menu.addActions([actions.open_repo, actions.refresh])
+        file_menu.addActions([actions.open_repo, actions.open_repo_new_window, actions.refresh])
         file_menu.addSeparator()
         file_menu.addAction(actions.quit)
 
@@ -243,11 +244,18 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Last repository not found: {path}")
 
     def choose_repo(self) -> None:
+        if path := self._ask_for_repo():
+            self.open_repo(path)
+
+    def choose_repo_new_window(self) -> None:
+        """Open a chosen folder in a new window, or raise the one showing it (§8)."""
+        if path := self._ask_for_repo():
+            self.open_in_window(path)
+
+    def _ask_for_repo(self) -> str:
         repo = self.session.repo
         start = str(repo.root) if repo else ""
-        path = QFileDialog.getExistingDirectory(self, "Open Git Repository", start)
-        if path:
-            self.open_repo(path)
+        return QFileDialog.getExistingDirectory(self, "Open Git Repository", start)
 
     def open_repo(self, path: str | Path) -> bool:
         """Open ``path`` here, unless another window shows that worktree: then raise

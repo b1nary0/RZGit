@@ -1975,7 +1975,13 @@ Per-widget sheets are slow to apply and scatter the rules.
   worktree, the folder's name for the main one), or `RZGitClient` with none open.
 - **File → Open Repository…** opens the folder in this window, unless another window
   already shows that worktree: then that window is raised and this one is unchanged
-  (§8.1). **File → Quit** closes every window (`QApplication.closeAllWindows`).
+  (§8.1). **File → Open Repository in New Window…** (Ctrl+Shift+O, RZG-52) asks for a folder
+  with the same dialog and opens it with `open_in_window`: the window that already shows
+  that worktree is raised, else a new window opens on it, placed beside this one (§8.1).
+  It always opens a new window, even when this one has no repository. Cancelling does
+  nothing; a folder that isn't a repository shows the error and opens no window.
+  `last_repo` follows as for any window opening a repository. **File → Quit** closes every
+  window (`QApplication.closeAllWindows`).
 - **Commit count text** (`commit_summary`): the exact `commit_count` with separators
   ("2,421 commits", "1 commit"). Until it arrives, or if it failed, the loaded count, with a
   plus while more history is unloaded ("500+ commits").

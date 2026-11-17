@@ -81,6 +81,9 @@ class AppActions(QObject):
         self.open_repo = self._action(
             "document-open", "&Open Repository…", QKeySequence.StandardKey.Open
         )
+        self.open_repo_new_window = self._action(  # RZG-52, spec §8
+            "window-new", "Open Repository in &New Window…", "Ctrl+Shift+O"
+        )
         self.refresh = self._action(
             "view-refresh", "&Refresh", QKeySequence.StandardKey.Refresh
         )
