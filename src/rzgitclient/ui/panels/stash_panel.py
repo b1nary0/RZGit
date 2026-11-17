@@ -14,7 +14,6 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QMenu,
     QToolButton,
@@ -88,10 +87,6 @@ class StashPanel(Panel):
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._tree.setTextElideMode(Qt.TextElideMode.ElideRight)
-        self._labels.setStretchLastSection(False)
-        self._labels.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column in (1, 2):
-            self._labels.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._show_menu)
         self._tree.itemSelectionChanged.connect(self._on_selected)
@@ -137,6 +132,7 @@ class StashPanel(Panel):
         finally:
             self._tree.blockSignals(blocked)
         self._follow_selection(self.ctx.selection.commit)
+        self._fit_columns()
         self._tree.setVisible(bool(stashes))
         self._placeholder.setVisible(not stashes)
         self.set_header(f"{self.title} ({len(stashes):,})" if stashes else self.title)
@@ -154,6 +150,12 @@ class StashPanel(Panel):
             item = self._tree.topLevelItem(row)
             if item is not None:
                 item.setText(_AGE_COLUMN, age(stash.date))
+        self._labels.fit(_AGE_COLUMN)
+
+    def _fit_columns(self) -> None:
+        """Branch and age fit their text; the message fills the rest (spec §5.2)."""
+        for column in _MUTED:
+            self._labels.fit(column)
 
     # ---- selection (spec §4.2) -----------------------------------------------
 

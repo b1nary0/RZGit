@@ -48,6 +48,28 @@ class ColumnPrefsTests(unittest.TestCase):
         prefs.set_hidden("files", "Status", False)
         self.assertEqual(self.settings.column_prefs, {})
 
+    def test_widths_are_kept_per_panel_and_survive_a_restart(self):
+        prefs = ColumnPrefs(self.settings)
+        prefs.set_width("stash", "Age", 60)
+        prefs.set_width("stash", "Message", 400)
+        prefs.set_hidden("stash", "Branch", True)
+        self.assertEqual(self.reopen().widths("stash"), {"Age": 60, "Message": 400})
+        self.assertEqual(self.reopen().hidden("stash"), {"Branch"})
+        prefs.set_width("stash", "Age", None)
+        self.assertEqual(self.reopen().widths("stash"), {"Message": 400})
+        prefs.reset_widths("stash")
+        self.assertEqual(self.reopen().widths("stash"), {})
+        self.assertEqual(self.reopen().hidden("stash"), {"Branch"})
+        self.assertEqual(prefs.widths("history"), {})
+
+    def test_malformed_widths_are_dropped(self):
+        self.settings.column_prefs = {"stash": {"widths": {"Age": "wide"}},
+                                      "files": {"widths": {"Status": 40}}}
+        with self.assertLogs("rzgitclient.core.column_prefs", "WARNING"):
+            prefs = ColumnPrefs(self.settings)
+        self.assertEqual(prefs.widths("stash"), {})
+        self.assertEqual(prefs.widths("files"), {"Status": 40})
+
     def test_malformed_entries_are_dropped(self):
         self.settings.column_prefs = {"stash": {"hidden": ["Age"]}, "files": {"hidden": "Status"},
                                       "history": [1]}

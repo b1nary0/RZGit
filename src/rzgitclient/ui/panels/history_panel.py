@@ -43,8 +43,6 @@ class HistoryPanel(Panel):
         self._labels = ColumnHeader(self.panel_id, self.ctx.columns, self.ctx.theme.current)
         self._view.setHorizontalHeader(self._labels)
         self._view.setModel(self._model)
-        self._labels.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self._labels.setStretchLastSection(False)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._view)
@@ -119,14 +117,14 @@ class HistoryPanel(Panel):
         only that row is measured by the view.
         """
         rows = range(min(self._model.rowCount(), _MEASURED_ROWS))
-        header = self._view.horizontalHeader()
         for col in MUTED_COLUMNS:
             width = 0  # no rows: the header's text decides
             if rows:
                 metrics = QFontMetrics(self._model.font(col) or self._view.font())
                 widest = max(rows, key=lambda r: metrics.horizontalAdvance(self._model.text(r, col)))
                 width = self._view.width_hint(self._model.index(widest, col))
-            header.resizeSection(col, max(width, header.sectionSizeHint(col)))
+            # Unless the user sized it (spec §5.2); the subject fills the rest.
+            self._labels.set_fitted(col, max(width, self._labels.sectionSizeHint(col)))
 
     def _restore(self, keep: Commit | None, top: Commit | None) -> None:
         row = self._model.row_of(keep.sha) if keep is not None else -1

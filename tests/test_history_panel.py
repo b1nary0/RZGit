@@ -7,12 +7,14 @@ from unittest import mock
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QHoverEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
 
 from rzgitclient.ui.panels.history_panel import HistoryPanel
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
 from rzgitclient.ui.widgets.column_header import ColumnHeader
-from tests.support import SignalRecorder, commit_file, make_panel_context, make_repo, qt_app, wait_idle
+from tests.support import (SignalRecorder, commit_file, drag_column_edge, make_panel_context,
+                           make_repo, qt_app, wait_idle)
 
 ROLE = Qt.ItemDataRole
 UNCOMMITTED = "Uncommitted changes (0)"  # row 0 while a repo is open; commits start at 1
@@ -87,6 +89,38 @@ class HistoryPanelTests(unittest.TestCase):
         wait_idle(self.ctx.session)
         self.assertEqual(self.subjects()[1], "third")
         self.assertTrue(self.panel._view.isColumnHidden(1))
+
+    def show(self):
+        self.panel.resize(900, 300)
+        self.panel.show()
+        QTest.qWaitForWindowExposed(self.panel)
+
+    def test_a_dragged_column_keeps_its_width_through_reloads_and_repositories(self):
+        """RZG-40: fitted until the user sizes it; then the user's width stays."""
+        self.open()
+        self.show()
+        header = self.view.horizontalHeader()
+        width, date = header.sectionSize(1) + 40, header.sectionSize(2) - 40
+        drag_column_edge(header, 1, 40)  # the Author | Date separator: only those two move
+        self.assertEqual(self.ctx.columns.widths("history"), {"Author": width, "Date": date})
+        commit_file(self.repo, "b.txt", "3", "third")
+        self.refresh()
+        self.assertEqual(self.subjects()[1], "third")
+        self.assertEqual(header.sectionSize(1), width)
+        other = make_repo(self.tmp / "other")
+        commit_file(other, "x.txt", "1", "elsewhere")
+        self.open(other)
+        self.assertEqual(self.subjects()[1], "elsewhere")
+        self.assertEqual((header.sectionSize(1), header.sectionSize(2)), (width, date))
+        self.assertEqual(sum(header.sectionSize(c) for c in range(4)), header.width())
+
+    def test_a_new_panel_gives_the_saved_widths_back(self):
+        self.ctx.columns.set_width("history", "Date", 222)
+        panel = HistoryPanel(self.ctx)
+        self.addCleanup(panel.deleteLater)
+        self.ctx.session.open(self.repo)
+        wait_idle(self.ctx.session)
+        self.assertEqual(panel._view.horizontalHeader().sectionSize(2), 222)
 
     def test_uncommitted_changes_is_row_0_selected_by_default(self):
         self.open()

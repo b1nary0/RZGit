@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent, QItemSelectionModel, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QTreeWidgetItemIterator
 
 from rzgitclient.core.selection import FileSelection, FileSource
@@ -12,7 +13,8 @@ from rzgitclient.ui.panels.files_panel import FilesPanel
 from rzgitclient.ui.panels.staged_panel import StagedPanel
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
 from rzgitclient.ui.widgets.column_header import ColumnHeader
-from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
+from tests.support import (commit_file, drag_column_edge, git, make_panel_context, make_repo,
+                           qt_app, wait_idle)
 
 W, I = FileSource.WORKTREE, FileSource.INDEX
 
@@ -131,6 +133,28 @@ class FilesPanelTests(unittest.TestCase):
         panel = FilesPanel(self.ctx)
         self.addCleanup(panel.deleteLater)
         self.assertTrue(panel._list._tree.isColumnHidden(1))
+
+    def test_the_columns_fill_the_panel_and_a_dragged_status_width_stays(self):
+        """RZG-40: Name and Status always fill the width; the separator between them
+        moves only those two, and the dragged Status width survives a refresh."""
+        (self.repo / "a_file_with_a_long_name_that_does_not_fit.txt").write_text("hi")
+        self.open()
+        self.unstaged.resize(250, 300)
+        self.unstaged.show()
+        QTest.qWaitForWindowExposed(self.unstaged)
+        tree = self.unstaged._list._tree
+        header = tree.header()
+        self.assertEqual(header.sectionSize(0) + header.sectionSize(1), header.width())
+        name, status = header.sectionSize(0), header.sectionSize(1)
+        drag_column_edge(header, 0, -30)
+        self.assertEqual((header.sectionSize(0), header.sectionSize(1)), (name - 30, status + 30))
+        QCoreApplication.processEvents()
+        self.assertEqual(tree.horizontalScrollBar().maximum(), 0)  # never wider than the panel
+        self.assertEqual(self.ctx.columns.widths("files"), {"Status": status + 30})
+        (self.repo / "other.txt").write_text("more")
+        self.refresh()
+        self.assertEqual(header.sectionSize(1), status + 30)
+        self.assertEqual(header.sectionSize(0) + header.sectionSize(1), header.width())
 
     def test_each_panel_lists_its_side(self):
         (self.repo / "a.txt").write_text("staged")

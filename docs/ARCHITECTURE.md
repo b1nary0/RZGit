@@ -74,7 +74,7 @@ src/rzgitclient/
     diff_patch.py               build_patch: a patch of chosen lines of a FileDiff (plain Python)
     git_commands.py             GitCommand, run_command (the worker side of commands: stage, commit, …)
     commit_drafts.py            CommitDrafts: the unfinished commit message of each repository
-    column_prefs.py             ColumnPrefs: each panel's column choices (the columns it hides)
+    column_prefs.py             ColumnPrefs: each panel's column choices (hidden columns, widths)
     selection.py                Selection: what the user has selected (commit, file)
     repo_watcher.py             RepoWatcher: refreshes the session when the repository changes on disk
     inotify_watcher.py          InotifyWatcher: Linux inotify on a QSocketNotifier (folders → named events)
@@ -699,7 +699,34 @@ theme's `column_header_*` tokens (§7.1); the owning panel passes the theme on i
 - **Showing and hiding columns:** right-clicking the labels gives a checkable list of the
   columns. The first column (the main one: Subject, Message, Name) is always shown, so
   its entry is disabled. The choice is saved per panel in `ctx.columns` (`ColumnPrefs`,
-  §6.3) and applied whenever the list's columns are (re)created.
+  §6.3) and applied whenever the list's columns or labels are (re)created.
+
+**Column widths** (RZG-40), the same in every panel with labels, kept by `ColumnHeader`:
+- **Always the full width.** The columns fill the list's width exactly: the first
+  column's left edge and the last column's right edge are pinned, and the list never
+  scrolls sideways. The main column (Subject, Message, Name) takes what the other columns
+  leave. When even its minimum doesn't fit, the others shrink for now, in proportion;
+  their widths come back when there is room.
+- **Fitted until the user sizes it.** On each render the panel fits its other columns to
+  their contents: `fit(column)` (the view's size hint and the whole label) or, where
+  that is slow, `set_fitted(column, width)` (History, §5.4). A column the user has
+  resized keeps the user's width: fitting no longer changes it, through refreshes,
+  reloads and switching repository.
+- **Dragging a separator** moves only the two columns beside it: the left one grows as
+  the right one shrinks, so no other separator moves and the separator follows the
+  pointer. No column can be narrower than its short label (`minimumSectionSize`). The
+  pinned outer edges can't be dragged. Qt's own resizing is off (every column is
+  `Fixed`): `ColumnHeader` does the dragging, the split cursor and the layout.
+- **Saved:** the dragged widths of the other columns are saved per panel and column label
+  in `ctx.columns` when the button is released, and given back when the columns are
+  created (between runs). The main column has no width of its own to save.
+- **Getting back:** double-clicking a separator fits the column beside it again (the
+  left one, or the right one after the main column); its other neighbour gives or takes
+  the difference, so again no other separator moves. **Reset Column Widths**, after the
+  columns in the labels' right-click menu, fits every column and forgets the saved
+  widths.
+- A cut-off name is still readable from its row's tooltip: file rows show their path,
+  folder rows theirs, a stash its whole message.
 
 ### 5.3 Registry
 
@@ -861,9 +888,10 @@ asks, so a theme change is one `dataChanged`.
   then re-selects the same commit and keeps the same commit at the top of the view (or
   stays at the top, so new commits show).
 - **Column widths:** the author, date and hash columns fit their widest text in the first
-  page, as `resizeColumnToContents` would. That asks the model for every cell (45 ms for
-  500 commits), so the panel finds the widest text with font metrics and has the view
-  measure only that row. Every row is as tall as the first wants.
+  page (`set_fitted`, §5.2: unless the user sized them), as `resizeColumnToContents`
+  would. That asks the model for every cell (45 ms for 500 commits), so the panel finds
+  the widest text with font metrics and has the view measure only that row. Every row is
+  as tall as the first wants.
 
 **Selection survives a refresh.** A list panel rebuilds with its signals blocked, then
 re-selects the same item (a commit by sha; a file as `selection.files` now says, §4.2).
@@ -1136,10 +1164,11 @@ typed accessors (`last_repo`, `layout`, `layout_preset`, `window_geometry`,
 `ctx` that holds only that: the commit draft through `CommitDrafts` (§5.4), column
 choices through `ColumnPrefs`.
 
-**Column choices** (`ColumnPrefs`, `core/column_prefs.py`, RZG-41) are app-wide, the
-same in every layout and repository, keyed by panel id and then by column label:
-`column_prefs` is JSON, `{"stash": {"hidden": ["Branch"]}}`. Unknown or malformed
-entries are dropped (logged). Each change is written at once.
+**Column choices** (`ColumnPrefs`, `core/column_prefs.py`, RZG-41, RZG-40) are
+app-wide, the same in every layout and repository, keyed by panel id and then by column
+label: `column_prefs` is JSON, `{"stash": {"hidden": ["Branch"], "widths": {"Age":
+60}}}`: the hidden columns and the widths the user dragged. Malformed entries are
+dropped (logged). Each change is written at once.
 
 **Stored folder paths** (RZG-29) are canonical: `canonical_path(path)` (`git/repo.py`)
 expands `~` and resolves symlinks. `Repo.root` is git's `--show-toplevel` made canonical,

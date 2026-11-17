@@ -3,7 +3,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtCore import QCoreApplication, QEvent, Qt
+from PySide6.QtTest import QTest
 
 from rzgitclient.git.git_models import Stash
 from rzgitclient.ui.app_actions import StashOp
@@ -89,6 +90,16 @@ class StashPanelTests(unittest.TestCase):
         self.ctx.session.refresh()
         wait_idle(self.ctx.session)
         self.assertTrue(self.tree.isColumnHidden(1))
+
+    def test_branch_and_age_fit_and_the_message_fills(self):
+        """RZG-40: the columns always fill the width; the list never scrolls sideways."""
+        self.panel.resize(300, 300)
+        self.panel.show()
+        QTest.qWaitForWindowExposed(self.panel)
+        header = self.tree.header()
+        self.assertEqual(sum(header.sectionSize(c) for c in range(3)), header.width())
+        self.assertGreaterEqual(header.sectionSize(1), header.sectionSizeHint(1))
+        self.assertEqual(self.tree.horizontalScrollBarPolicy(), Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
     def test_no_stashes(self):
         git(self.repo, "stash", "clear")

@@ -18,7 +18,6 @@ from PySide6.QtCore import QItemSelectionModel, QModelIndex, QPoint, QRect, Qt, 
 from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QHeaderView,
     QMenu,
     QTreeWidget,
     QTreeWidgetItem,
@@ -115,8 +114,6 @@ class FileList(QWidget):
         self._tree.setHeaderLabels(COLUMNS)
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.labels.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.labels.setStretchLastSection(False)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._tree)
@@ -192,7 +189,7 @@ class FileList(QWidget):
                         item.setExpanded(False)
         finally:
             self._tree.blockSignals(blocked)
-        self._tree.resizeColumnToContents(_STATUS_COLUMN)
+        self.labels.fit(_STATUS_COLUMN)  # unless the user sized it; the name fills the rest
         self._show_selection()
         self.count = len(changes)
         self.count_changed.emit(len(changes))
