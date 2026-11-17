@@ -12,7 +12,7 @@ SRC = Path(__file__).resolve().parent.parent / "src" / PACKAGE
 
 # Lower layers first; a module may import only its own layer or lower ones.
 TOP_LAYERS = ("git", "core", "ui", "app")
-UI_LAYERS = ("theme", "widgets", "app_actions", "panels", "layout", "branch_dialogs",
+UI_LAYERS = ("theme", "app_icon", "widgets", "app_actions", "panels", "layout", "branch_dialogs",
              "main_window", "app_windows")
 
 

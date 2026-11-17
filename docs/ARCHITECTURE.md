@@ -37,7 +37,7 @@ one names the sections below that it covers.
   ↑
  core/  application state. QtCore only (QObject, Signal). No widgets.
   ↑
- ui/    widgets. theme/ → widgets/ → app_actions → panels/ → layout/ → branch_dialogs → main_window → app_windows
+ ui/    widgets. theme/ → app_icon → widgets/ → app_actions → panels/ → layout/ → branch_dialogs → main_window → app_windows
   ↑
  app.py composition root. The only place concrete objects are created and wired together,
         with AppWindows (§8.1), which app.py makes to build each main window's own objects.
@@ -86,6 +86,11 @@ src/rzgitclient/
     app_actions.py              AppActions: every QAction, defined once; BranchOp, StashOp
     branch_dialogs.py           BranchDialogs: the confirmations and name boxes of branch operations
     stash_dialogs.py            StashDialogs: Stash Changes… and the Drop confirmation
+    app_icon.py                 app_icon(): the app's QIcon, built from assets/icon (app.py sets it)
+    assets/                     image files shipped as package data (no modules)
+      icon/                     the app icon: its SVG source and PNGs at 16–512 px
+      logo/                     mark + "RZGit"; _dark (for dark backgrounds) and _light files
+      splash/                   splash images, solid and transparent; _dark and _light
     theme/
       app_theme.py              AppTheme, ThemeColors, StatusColors, ThemeFonts, ThemeMetrics, LIGHT_THEME
       theme_stylesheet.py       build_stylesheet(theme) -> str

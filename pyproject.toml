@@ -15,3 +15,7 @@ rzgit = "rzgitclient.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# The app icon, logo and splash images (spec §3).
+[tool.setuptools.package-data]
+"rzgitclient.ui" = ["assets/*/*"]

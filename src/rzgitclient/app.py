@@ -8,6 +8,7 @@ from rzgitclient import __version__
 from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.column_prefs import ColumnPrefs
 from rzgitclient.core.commit_drafts import CommitDrafts, drafts_folder
+from rzgitclient.ui.app_icon import app_icon
 from rzgitclient.ui.app_windows import AppWindows
 from rzgitclient.ui.theme.theme_manager import ThemeManager, ThemeMode
 
@@ -19,6 +20,7 @@ def main(argv: list[str] | None = None) -> int:
     app.setOrganizationName("RZGitClient")
     app.setApplicationVersion(__version__)
     app.setDesktopFileName("rzgitclient")
+    app.setWindowIcon(app_icon())  # every window and dialog
     settings = AppSettings()
     # The saved theme, before any widget exists: the window never shows another first.
     theme = ThemeManager(app, mode=ThemeMode(settings.theme_mode),

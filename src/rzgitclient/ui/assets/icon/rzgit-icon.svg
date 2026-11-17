@@ -1,0 +1,25 @@
+<!-- RZGitClient's app icon: a git history graph in RZE's hexagon, using RZE's colours.
+     A blue main line runs from a root commit up to the white head commit. A green branch
+     leaves the root and merges back into the head. A red branch leaves the middle commit
+     and stays open. Each ring has a dark gap around it, so the lines stop short of it.
+     Branch lines are 26 wide. This one drawing is used at every size, 16 px to 512 px.
+     The PNGs are it rendered at 8x with QtSvg and averaged down in premultiplied alpha,
+     by rzgit_brand_assets.py, kept beside the repository. At 32 px and below each pixel
+     is made fully opaque or fully transparent: KDE's title bar draws semi-transparent
+     edge pixels with colour fringes. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="32 42 448 448" width="256" height="256">
+<polygon points="256.0,52.0 441.3,159.0 441.3,373.0 256.0,480.0 70.7,373.0 70.7,159.0" fill="#1c2129" stroke="#5d6b80" stroke-width="20" stroke-linejoin="round"/>
+<!-- main line -->
+<path d="M256,404 L256,128" fill="none" stroke="#4796ff" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+<!-- green branch: leaves the root, merges into the head -->
+<path d="M256,404 C256,354 362,354 362,294 L362,248 C362,188 256,178 256,128" fill="none" stroke="#53d36f" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="362" cy="262" r="38.5" fill="#1c2129"/><circle cx="362" cy="262" r="24" fill="#1c2129" stroke="#53d36f" stroke-width="11"/>
+<!-- red branch: leaves the middle commit, stays open -->
+<path d="M256,290 C256,240 150,250 150,190" fill="none" stroke="#f0505a" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="150" cy="190" r="38.5" fill="#1c2129"/><circle cx="150" cy="190" r="24" fill="#1c2129" stroke="#f0505a" stroke-width="11"/>
+<!-- main line commits -->
+<circle cx="256" cy="290" r="38.5" fill="#1c2129"/><circle cx="256" cy="290" r="24" fill="#1c2129" stroke="#4796ff" stroke-width="11"/>
+<circle cx="256" cy="404" r="38.5" fill="#1c2129"/><circle cx="256" cy="404" r="24" fill="#1c2129" stroke="#4796ff" stroke-width="11"/>
+<!-- head commit -->
+<circle cx="256" cy="128" r="32" fill="#f2f5fa"/>
+</svg>
