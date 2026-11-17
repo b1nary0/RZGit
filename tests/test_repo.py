@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from rzgitclient.git.git_models import (Commit, DiffLine, DiffSource, FileStatus, HistoryOrder,
-                                        LineKind)
+                                        LineKind, Ref)
 from rzgitclient.git.git_models import Worktree, WorktreeState
 from rzgitclient.git.repo import (GitError, Repo, canonical_path, parse_diff, parse_worktree_status,
                                   parse_worktrees, worktree_state)
@@ -496,6 +496,51 @@ def add_hook(repo: Path, name: str, script: str) -> None:
     hook.chmod(0o755)
 
 
+class RepoRefsTests(unittest.TestCase):
+    """The branches and tags, for History's labels (RZG-77, spec §4.1)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        self.repo = Repo(self.path)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def sha(self, rev="HEAD"):
+        return git(self.path, "rev-parse", rev).strip()
+
+    def test_no_commits_no_refs(self):
+        self.assertEqual(self.repo.refs(), [])
+
+    def test_branches_remotes_and_tags_with_their_commits(self):
+        commit_file(self.path, "a.txt", "1", "one")
+        first = self.sha()
+        git(self.path, "tag", "light")
+        git(self.path, "tag", "-a", "annotated", "-m", "a tag object")
+        git(self.path, "update-ref", "refs/remotes/origin/main", first)
+        git(self.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+        commit_file(self.path, "a.txt", "2", "two")
+        git(self.path, "branch", "side", first)
+        git(self.path, "stash", "list")  # no stash: refs/stash is never read anyway
+        refs = {r.name: r.sha for r in self.repo.refs()}
+        self.assertEqual(refs, {
+            "refs/heads/main": self.sha(),
+            "refs/heads/side": first,
+            "refs/remotes/origin/HEAD": first,  # left for the labels to drop
+            "refs/remotes/origin/main": first,
+            "refs/tags/annotated": first,  # peeled: the commit, not the tag object
+            "refs/tags/light": first,
+        })
+        self.assertNotEqual(self.sha("annotated"), first)  # a tag object of its own
+
+    def test_a_stash_is_not_a_ref_here(self):
+        commit_file(self.path, "a.txt", "1", "one")
+        (self.path / "a.txt").write_text("changed")
+        git(self.path, "stash")
+        self.assertEqual(self.repo.refs(), [Ref("refs/heads/main", self.sha())])
+
+
 class RepoCommitTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -884,6 +929,10 @@ class RepoBranchTests(unittest.TestCase):
         self.assertEqual(older.sha, git(self.path, "rev-parse", "stash@{1}").strip())
         self.assertTrue(older.untracked)
         self.assertFalse(newest.untracked)
+        # Its parents, base commit first (History's labels, RZG-77).
+        self.assertEqual(older.parents[0], git(self.path, "rev-parse", "main").strip())
+        self.assertEqual(len(older.parents), 3)  # base, index, untracked
+        self.assertEqual(len(newest.parents), 2)
         self.assertEqual(newest.author, "Test User")
         self.assertIsNotNone(newest.date.tzinfo)
         self.assertNotEqual(newest, Commit(newest.sha, newest.author, newest.date, newest.subject))

@@ -35,6 +35,7 @@ from rzgitclient.git.git_models import (
     FileStatus,
     HistoryOrder,
     LastCommit,
+    Ref,
     Stash,
 )
 from rzgitclient.git.repo import GitError, Repo
@@ -49,12 +50,13 @@ class Refresh(Flag):
 
     HEAD = auto()
     BRANCHES = auto()
+    REFS = auto()  # branches and tags with their commits (History's labels); with BRANCHES or HISTORY
     HISTORY = auto()
     STATUS = auto()
     COUNT = auto()  # commits reachable from HEAD; never in the same job as HISTORY
     STASHES = auto()
     REMOTES = auto()  # the remotes' names (spec §4.1)
-    ALL = HEAD | BRANCHES | HISTORY | STATUS | STASHES | COUNT | REMOTES
+    ALL = HEAD | BRANCHES | REFS | HISTORY | STATUS | STASHES | COUNT | REMOTES
     LAST_COMMIT = auto()  # HEAD's message, for amending: only when asked for, not in ALL
 
 
@@ -63,11 +65,12 @@ _RESET = Refresh.ALL | Refresh.LAST_COMMIT
 
 
 # The order parts load and emit in (spec §4.1), and their value with no repo.
-_PARTS = (Refresh.HEAD, Refresh.BRANCHES, Refresh.HISTORY, Refresh.STATUS, Refresh.STASHES,
+_PARTS = (Refresh.HEAD, Refresh.BRANCHES, Refresh.REFS, Refresh.HISTORY, Refresh.STATUS, Refresh.STASHES,
           Refresh.COUNT, Refresh.REMOTES, Refresh.LAST_COMMIT)
 _EMPTY: dict[Refresh, object] = {
     Refresh.HEAD: (None, None),  # (branch, sha): two values, two signals (spec §4.1)
     Refresh.BRANCHES: (),
+    Refresh.REFS: (),
     Refresh.HISTORY: (),
     Refresh.STATUS: (),
     Refresh.STASHES: (),
@@ -82,6 +85,7 @@ class RepoSession(QObject):
     head_changed = Signal(object)  # str | None  (None = detached, or no repo)
     head_sha_changed = Signal(object)  # str | None  (None before the first commit, or no repo)
     branches_changed = Signal(object)  # tuple[Branch, ...]
+    refs_changed = Signal(object)  # tuple[Ref, ...]: branches and tags (RZG-77)
     history_changed = Signal(object)  # tuple[Commit, ...]
     status_changed = Signal(object)  # tuple[FileStatus, ...]
     stashes_changed = Signal(object)  # tuple[Stash, ...], newest first
@@ -147,6 +151,7 @@ class RepoSession(QObject):
         self._signals = {
             Refresh.HEAD: self.head_changed,
             Refresh.BRANCHES: self.branches_changed,
+            Refresh.REFS: self.refs_changed,
             Refresh.HISTORY: self.history_changed,
             Refresh.STATUS: self.status_changed,
             Refresh.STASHES: self.stashes_changed,
@@ -183,6 +188,11 @@ class RepoSession(QObject):
     @property
     def branches(self) -> tuple[Branch, ...]:
         return self._values[Refresh.BRANCHES]  # type: ignore[return-value]
+
+    @property
+    def refs(self) -> tuple[Ref, ...]:
+        """The branches, remote-tracking branches and tags, with their commits (RZG-77)."""
+        return self._values[Refresh.REFS]  # type: ignore[return-value]
 
     @property
     def history(self) -> tuple[Commit, ...]:
@@ -594,6 +604,8 @@ class RepoSession(QObject):
         files_stash = next((s for s in self.stashes if s.sha == files_sha), None)
         self._files_pending = False
         refs_may_change = bool(parts & (Refresh.BRANCHES | Refresh.HISTORY))
+        if refs_may_change:
+            parts |= Refresh.REFS  # whatever moves a branch or HEAD may move a ref (spec §4.1)
         details_sha = self._details_sha if self._details_pending or refs_may_change else None
         self._details_pending = False
         commands, self._commands = tuple(self._commands), []
@@ -851,6 +863,8 @@ def _load(repo: Repo, part: Refresh) -> object:
         return repo.current_branch(), repo.head_sha()
     if part is Refresh.BRANCHES:
         return tuple(repo.branches())
+    if part is Refresh.REFS:
+        return tuple(repo.refs())
     if part is Refresh.STATUS:
         return tuple(repo.status())
     if part is Refresh.STASHES:

@@ -13,7 +13,8 @@ from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
 from rzgitclient.core.commit_graph import CommitGraph
 from rzgitclient.ui.panels.graph_painter import PADDING_X
 from rzgitclient.ui.panels.history_model import (AUTHOR_COLUMN, DATE_COLUMN, GRAPH_COLUMN,
-                                                 HASH_COLUMN, MUTED_COLUMNS, SUBJECT_COLUMN)
+                                                 HASH_COLUMN, MUTED_COLUMNS, REFS_COLUMN,
+                                                 SUBJECT_COLUMN)
 from rzgitclient.ui.panels.history_panel import HistoryPanel
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
 from rzgitclient.ui.widgets.column_header import ColumnHeader
@@ -85,9 +86,9 @@ class HistoryPanelTests(unittest.TestCase):
         """RZG-41: History's labels get the shared look."""
         header = self.panel._view.horizontalHeader()
         self.assertIsInstance(header, ColumnHeader)
-        self.assertEqual([header.label(c) for c in range(5)],
-                         ["Graph", "Subject", "Author", "Date", "Commit"])
-        self.assertEqual(header.main_column, SUBJECT_COLUMN)  # the graph comes before it
+        self.assertEqual([header.label(c) for c in range(6)],
+                         ["Refs", "Graph", "Subject", "Author", "Date", "Commit"])
+        self.assertEqual(header.main_column, SUBJECT_COLUMN)  # the labels and graph come before it
 
     def test_a_hidden_column_stays_hidden_through_a_reload(self):
         self.open()
@@ -121,7 +122,7 @@ class HistoryPanelTests(unittest.TestCase):
         self.assertEqual(self.subjects()[1], "elsewhere")
         self.assertEqual((header.sectionSize(AUTHOR_COLUMN), header.sectionSize(DATE_COLUMN)),
                          (width, date))
-        self.assertEqual(sum(header.sectionSize(c) for c in range(5)), header.width())
+        self.assertEqual(sum(header.sectionSize(c) for c in range(6)), header.width())
 
     def test_a_new_panel_gives_the_saved_widths_back(self):
         self.ctx.columns.set_width("history", "Date", 222)
@@ -747,3 +748,112 @@ class HistoryBackToTopTests(unittest.TestCase):
             self.assertFalse(self.button.isVisible())
         self.scroll(self.page + 3)  # effects off (offscreen): at once
         self.assertEqual(self.button.opacity, 1.0)
+
+
+class HistoryRefLabelTests(unittest.TestCase):
+    """The Refs column (RZG-77, spec §5.4)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = qt_app()
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.repo = make_branched_repo(Path(self._tmp.name) / "repo")
+        self.ctx = make_panel_context()
+        self.addCleanup(self.ctx.session.shutdown)
+        self.panel = HistoryPanel(self.ctx)
+        self.addCleanup(self.panel.deleteLater)
+        self.view, self.model = self.panel._view, self.panel._model
+        self.header = self.view.horizontalHeader()
+        self.panel.resize(700, 300)
+        self.panel.show()
+        QTest.qWaitForWindowExposed(self.panel)
+        self.refresh(open_repo=True)
+        self.theme = self.ctx.theme.current
+
+    def refresh(self, open_repo=False):
+        if open_repo:
+            self.ctx.session.open(self.repo)
+        else:
+            self.ctx.session.refresh()
+        wait_idle(self.ctx.session)
+        self.app.processEvents()
+
+    def texts(self, row):
+        return [label.text for label in self.model.ref_labels(row)]
+
+    def test_the_first_column_with_each_commits_labels(self):
+        self.assertEqual(REFS_COLUMN, 0)
+        self.assertEqual(self.header.label(REFS_COLUMN), "Refs")
+        self.assertEqual(self.model.text(1, REFS_COLUMN), "")  # drawn, not written
+        self.assertEqual(self.texts(0), [])  # Uncommitted changes
+        self.assertEqual(self.texts(1), ["main"])  # the merge
+        self.assertTrue(self.model.ref_labels(1)[0].current)
+        self.assertEqual(self.texts(2), ["side"])  # s2
+        self.assertEqual([self.texts(r) for r in (3, 4, 5)], [[], [], []])
+
+    def test_the_tooltip_lists_the_refs(self):
+        self.assertEqual(self.model.data(self.model.index(1, REFS_COLUMN), ROLE.ToolTipRole),
+                         "Branch main (checked out)")
+        self.assertIsNone(self.model.data(self.model.index(3, REFS_COLUMN), ROLE.ToolTipRole))
+
+    def test_a_new_tag_shows_though_head_has_not_moved(self):
+        subprocess.run(["git", "tag", "v1.0", "HEAD~1"], cwd=self.repo, check=True)
+        changed = SignalRecorder(self.model, "dataChanged", "modelReset")
+        self.refresh()
+        self.assertEqual(changed.names(), ["dataChanged"])  # only the labels: no reset
+        row = self.model.row_of(self.ctx.session.history[0].parents[0])
+        self.assertIn("v1.0", self.texts(row))
+
+    def test_a_stash_is_on_the_commit_it_was_made_on(self):
+        (self.repo / "a.txt").write_text("changed")
+        subprocess.run(["git", "stash", "-q", "-m", "half done"], cwd=self.repo, check=True)
+        self.refresh()
+        self.assertEqual(self.texts(1), ["main", "stash@{0}"])
+        tip = self.model.data(self.model.index(1, REFS_COLUMN), ROLE.ToolTipRole)
+        self.assertIn("Stash stash@{0}: half done", tip)
+
+    def test_a_detached_head_has_a_head_label(self):
+        subprocess.run(["git", "switch", "-q", "--detach", "side"], cwd=self.repo, check=True)
+        self.refresh()
+        self.assertEqual(self.texts(1)[:2], ["HEAD", "side"])
+        self.assertFalse(self.model.ref_labels(1)[1].current)
+
+    def test_the_column_fits_the_widest_row_up_to_the_cap(self):
+        refs = self.panel._refs
+        widest = max(refs.natural_width(self.model.ref_labels(r)) for r in (1, 2))
+        self.assertEqual(self.header.sectionSize(REFS_COLUMN),
+                         max(widest, self.header.sectionSizeHint(REFS_COLUMN)))
+        for name in ("a-very-long-branch-name-one", "a-very-long-branch-name-two", "third"):
+            subprocess.run(["git", "branch", name], cwd=self.repo, check=True)
+        self.refresh()
+        self.assertEqual(self.header.sectionSize(REFS_COLUMN),
+                         self.theme.metrics.ref_column_max_width)
+
+    def test_a_user_sized_refs_column_keeps_its_width(self):
+        self.ctx.columns.set_width("history", "Refs", 70)
+        self.header.apply_prefs()
+        subprocess.run(["git", "branch", "another"], cwd=self.repo, check=True)
+        self.refresh()
+        self.assertEqual(self.header.sectionSize(REFS_COLUMN), 70)
+
+    def test_hiding_the_column_turns_the_labels_off(self):
+        self.header.set_column_shown("Refs", False)
+        self.assertTrue(self.header.isSectionHidden(REFS_COLUMN))
+        self.refresh()
+        self.assertTrue(self.header.isSectionHidden(REFS_COLUMN))
+
+    def test_a_branch_label_is_drawn_in_its_lanes_colour(self):
+        rect = self.view.visualRect(self.model.index(2, REFS_COLUMN))  # side, in lane 1
+        lanes = self.theme.graph.lanes
+        colour = lanes[self.model.graph_row(2).color % len(lanes)]
+        image = self.view.viewport().grab().toImage()
+        x = rect.left() + self.theme.metrics.ref_label_gap  # the pill's left border
+        found = {image.pixelColor(x, y).name() for y in range(rect.top(), rect.bottom())}
+        self.assertIn(colour, found)
+        found = {image.pixelColor(x, y).name()
+                 for y in range(self.view.visualRect(self.model.index(3, REFS_COLUMN)).top(),
+                                self.view.visualRect(self.model.index(3, REFS_COLUMN)).bottom())}
+        self.assertEqual(found, {self.theme.colors.content_bg})  # no labels, nothing drawn

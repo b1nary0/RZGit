@@ -25,6 +25,7 @@ from rzgitclient.git.git_models import (
     Hunk,
     LastCommit,
     LineKind,
+    Ref,
     Stash,
     Worktree,
     WorktreeState,
@@ -190,6 +191,17 @@ class Repo:
     def remotes(self) -> list[str]:
         """The remotes' names, in git's order (spec §4.1)."""
         return self.git("remote").split()
+
+    def refs(self) -> list[Ref]:
+        """The branches, remote-tracking branches and tags, each with the commit it
+        points at (an annotated tag peeled), in git's order (spec §4.1, RZG-77)."""
+        out = self.git("for-each-ref", "--format=%(objectname)%00%(*objectname)%00%(refname)",
+                       "refs/heads", "refs/remotes", "refs/tags")
+        refs = []
+        for line in out.splitlines():
+            sha, peeled, name = line.split("\0", 2)
+            refs.append(Ref(name, peeled or sha))
+        return refs
 
     def start_network_git(self, *args: str) -> subprocess.Popen[bytes]:
         """Start a git command that talks to a remote (spec §4.1, "Network commands").
@@ -426,8 +438,9 @@ class Repo:
         for index, record in enumerate(r for r in out.split("\0") if r):
             sha, parents, author, date, subject = record.split("\x1f", 4)
             branch, message = _stash_subject(subject)
+            shas = tuple(parents.split())  # its base commit first (History's labels, RZG-77)
             result.append(Stash(sha, author, datetime.fromisoformat(date), message,
-                                index, branch, message, len(parents.split()) > 2))
+                                index, branch, message, len(shas) > 2, parents=shas))
         return result
 
     def stash_files(self, stash: Stash) -> list[FileStatus]:

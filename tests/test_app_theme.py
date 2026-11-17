@@ -294,6 +294,51 @@ class GraphLaneTests(unittest.TestCase):
                 self.assertGreaterEqual(delta_e(a, b), 20, (variant.name, a, b))
 
 
+def _blend(colour: str, under: str, alpha: int) -> str:
+    """``colour`` at ``alpha`` (0-255) over ``under``."""
+    a, b = QColor(colour), QColor(under)
+    t = alpha / 255
+    mix = [round(x * t + y * (1 - t)) for x, y in
+           ((a.red(), b.red()), (a.green(), b.green()), (a.blue(), b.blue()))]
+    return "#{:02x}{:02x}{:02x}".format(*mix)
+
+
+class RefLabelTokenTests(unittest.TestCase):
+    """History's ref labels (RZG-77, spec §7.1): readable text, borders that show."""
+
+    def fills(self, theme, under):
+        g = theme.graph
+        return [*(_blend(lane, under, g.label_fill_alpha) for lane in g.lanes),
+                g.tag_fill, g.stash_fill]
+
+    def test_valid_colours(self):
+        for theme in ALL_THEMES:
+            g = theme.graph
+            for colour in (g.tag_fill, g.tag_border, g.stash_fill, g.stash_border):
+                self.assertRegex(colour, r"^#[0-9a-f]{6}$", theme.name)
+            self.assertTrue(0 < g.label_fill_alpha < 255, theme.name)
+
+    def test_text_is_readable_on_every_label(self):
+        for theme in ALL_THEMES:
+            c = theme.colors
+            for under in (c.content_bg, c.row_alt_bg):
+                for fill in self.fills(theme, under):
+                    with self.subTest(theme.name, fill=fill):
+                        self.assertGreaterEqual(contrast(c.text, fill), 4.5)
+
+    def test_borders_show(self):
+        for theme in ALL_THEMES:
+            g, c = theme.graph, theme.colors
+            for border in (g.tag_border, g.stash_border, c.text_muted):  # text_muted: "+N"
+                for under in (c.content_bg, c.row_alt_bg):
+                    with self.subTest(theme.name, border=border, under=under):
+                        self.assertGreaterEqual(contrast(border, under), 1.5)
+
+    def test_colour_blind_variants_share_them(self):
+        for base, variant in VARIANTS:
+            self.assertEqual(dataclasses.replace(variant.graph, lanes=base.graph.lanes), base.graph)
+
+
 class DarkThemeTests(unittest.TestCase):
     """The dark theme (RZG-32): its own colours, readable on its backgrounds."""
 

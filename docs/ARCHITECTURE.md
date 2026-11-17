@@ -67,7 +67,7 @@ into each other.
 src/rzgitclient/
   app.py                        composition root
   git/
-    git_models.py               Commit, HistoryOrder, Stash, Branch, FileStatus, FileDiff, Hunk, DiffLine, Worktree, WorktreeState
+    git_models.py               Commit, HistoryOrder, Stash, Branch, Ref, FileStatus, FileDiff, Hunk, DiffLine, Worktree, WorktreeState
     repo.py                     Repo: runs git, returns models; canonical_path; worktree_state
   core/
     repo_session.py             RepoSession: the open repo, its data, git commands
@@ -80,6 +80,7 @@ src/rzgitclient/
     sort_options.py             SortOption, SortOptions, SortOrder: a panel's sort orders (plain Python)
     sort_prefs.py               SortPrefs: each panel's chosen sort order
     commit_graph.py             CommitGraph, GraphRow: History's branch graph lanes (plain Python)
+    ref_labels.py               RefLabel, labels_by_commit: History's ref labels (plain Python)
     selection.py                Selection: what the user has selected (commit, file)
     repo_watcher.py             RepoWatcher: refreshes the session when the repository changes on disk
     inotify_watcher.py          InotifyWatcher: Linux inotify on a QSocketNotifier (folders → named events)
@@ -117,6 +118,7 @@ src/rzgitclient/
       history_panel.py          HistoryPanel
       history_model.py          HistoryModel: the commit table's Qt model, paged
       graph_painter.py          GraphPainter: draws a row of History's branch graph
+      ref_label_painter.py      RefLabelPainter: draws a row of History's ref labels
       back_to_top_button.py     BackToTopButton: History's floating "↑ Back to top" control
       files_panel.py            FilesPanel: "Unstaged Files"
       staged_panel.py           StagedPanel: "Staged Files"
@@ -186,13 +188,14 @@ class RepoSession(QObject):
     notice_occurred  = Signal(str)   # a command worked, but not quite as asked
     busy_changed     = Signal(bool)  # True while git work is queued or running
     remotes_changed  = Signal(object)  # tuple[str, ...]  (the remotes' names, RZG-62)
+    refs_changed     = Signal(object)  # tuple[Ref, ...]  (branches and tags, RZG-77)
     network_changed  = Signal(object)  # NetworkCommand | None  (the one running)
     network_progress = Signal(str)     # its latest progress line
     network_finished = Signal(object, bool)  # NetworkCommand, whether it ran without error
 
     def open(self, path) -> bool          # path, or a Repo already read (§8.1)
     def close(self) -> None
-    def refresh(self, parts: Refresh = Refresh.ALL) -> None   # Flag: HEAD|BRANCHES|HISTORY|STATUS|STASHES|COUNT|REMOTES
+    def refresh(self, parts: Refresh = Refresh.ALL) -> None   # Flag: HEAD|BRANCHES|REFS|HISTORY|STATUS|STASHES|COUNT|REMOTES
     def load_more_history(self) -> None   # the next page of history, in the background
     def set_history_order(self, order: HistoryOrder) -> None   # DATE or TOPO; reloads history
     def request_diff(self, file: FileSelection | None, full: bool = False,
@@ -302,7 +305,8 @@ class RepoSession(QObject):
 - **Stashes** (RZG-36) are a part like the others, `Refresh.STASHES`, in `Refresh.ALL`:
   `Repo.stashes()` reads `git stash list -z` (sha, parents, author, date, reflog subject)
   and returns a tuple of `Stash` (`git_models.py`), newest first. A `Stash` is a `Commit`
-  (so `selection.commit` can hold one, §4.2) with `index` (its `stash@{n}`, as `ref`),
+  (so `selection.commit` can hold one, §4.2; its `parents` are its base commit first,
+  which History's labels use, §5.4) with `index` (its `stash@{n}`, as `ref`),
   `branch` (the one it was made on, from "On *X*:" or "WIP on *X*:"; "(no branch)" when
   detached), `message` (what follows) and `untracked` (whether it has an untracked part,
   a third parent). Its `subject` is its message, its `date` when it was made. A `Stash`
@@ -522,6 +526,15 @@ class RepoSession(QObject):
 - **Remotes** (RZG-62) are a part, `Refresh.REMOTES`, in `Refresh.ALL`, after the count:
   `Repo.remotes()` (`git remote`) gives their names, in git's order, as
   `remotes_changed(tuple[str, ...])`. Fetch is enabled by them (§8).
+- **Refs** (RZG-77) are a part, `Refresh.REFS`, in `Refresh.ALL`, after the branches:
+  `Repo.refs()` (`git for-each-ref refs/heads refs/remotes refs/tags`) gives each
+  branch and tag as a `Ref(name, sha)` (`git_models.py`): its full name
+  (`refs/heads/main`, `refs/remotes/origin/main`, `refs/tags/v1.0`) and the commit it
+  points at, an annotated tag peeled to its commit. They are History's labels (§5.4).
+  **A job that loads `BRANCHES` or `HISTORY` loads `REFS` too**, so whatever moves a ref
+  (a command, the watcher, §4.3) reads them again. They aren't read with `git log`'s `%D`,
+  since History doesn't run `git log` while HEAD hasn't moved: a new tag or branch would
+  never show.
 - **Network commands** (RZG-62) talk to a remote, so they can take minutes. They run on a
   second worker, **`NetworkWorker`** (`core/network_worker.py`), owned by the session,
   so status, diffs and history keep loading and refreshing on the first one meanwhile.
@@ -1284,9 +1297,9 @@ theme when Qt asks, so a theme change is one `dataChanged`.
   session for the next page (§4.1). It watches its scroll bar rather than using Qt's
   `canFetchMore` / `fetchMore`, which Qt also calls while laying rows out, before they have
   a position, so it would load pages nobody scrolled to.
-- **The branch graph** (RZG-58) is the first column, **Graph**; Subject stays the main
-  column (`ColumnHeader(main_column=1)`, §5.2). A dot marks each commit in its lane, and
-  lines join it to its parents.
+- **The branch graph** (RZG-58) is the column **Graph**, after **Refs**; Subject stays the
+  main column (`ColumnHeader(main_column=SUBJECT_COLUMN)`, §5.2). A dot marks each commit
+  in its lane, and lines join it to its parents.
   - **The layout is plain Python:** `CommitGraph` (`core/commit_graph.py`) turns the
     commits, in order, into a `GraphRow` per commit: its lane, its colour, and the lines
     through the row's top half (straight down: lanes into its dot, or passing by) and
@@ -1318,6 +1331,52 @@ theme when Qt asks, so a theme change is one `dataChanged`.
     than the graph; pens and brushes are made once per theme. A full repaint of History
     on RZE costs about 19 ms against 16 ms without the graph (offscreen).
   - History keeps commit order: it isn't sortable (§5.1, RZG-43).
+- **Ref labels** (RZG-77) are the first column, **Refs**, left of the graph (as
+  GitKraken does): each commit's branches, tags and stashes, as pills. We may move them
+  after user tests.
+  - **What gets one:** local branches, remote-tracking branches and tags, from
+    `session.refs` (§4.1), and stashes, from `session.stashes`. A stash's label is on the
+    commit it was made on (its first parent), so you can see where it's built from; the
+    stash itself isn't in History. `<remote>/HEAD` gets none. A detached HEAD has a
+    **HEAD** label on its commit. Uncommitted changes has none.
+  - **Plain Python:** `labels_by_commit(refs, head, head_sha, stashes)`
+    (`core/ref_labels.py`) gives each commit's `RefLabel`s, by sha. A `RefLabel` has its
+    `kind` (`HEAD`, `BRANCH`, `REMOTE`, `TAG`, `STASH`), its `text`, the `names` it
+    stands for, `current` (HEAD's branch) and a stash's `message`. The order: the current
+    branch (or HEAD), the other local branches, remote branches, tags, then stashes
+    (newest first); within a kind, by name.
+  - **A branch and its remote:** a local branch and the remote-tracking branches of the
+    same name on the same commit are one label, `main ⇄ origin` (`main ⇄ origin, fork`
+    for two). That's a branch and its upstream, nearly always; it's matched by name, so
+    History needs no upstream data.
+  - **Tooltip:** every ref of the row, one a line, in full: "Branch main (checked out)",
+    "Remote branch origin/main", "Tag v1.0", "Stash stash@{0}: *message*", "HEAD (detached)".
+  - **Drawing:** `RefLabelPainter` (`ui/panels/ref_label_painter.py`) draws the pills left
+    to right, vertically centred, over the cell's stripe, hover and selection like the
+    graph (and with the same shortcut: a cell that isn't selected, hovered or current
+    skips the style's item painting). A pill is a rounded rect (`ref_label_radius`) with
+    1 px border and the list font in `text`; the current branch and HEAD are bold.
+    - A local branch and HEAD: a tint of the commit's lane colour (`graph.lanes`, at
+      `graph.label_fill_alpha`) with a border in the lane colour, so the label belongs to
+      its line. A remote-only branch: the border alone.
+    - A tag: `graph.tag_fill` and `graph.tag_border`. A stash: `graph.stash_fill` and a
+      dashed `graph.stash_border`. Neutral, so they don't read as a lane.
+  - **Width:** a pill is at most `ref_label_max_width` (160 px); a longer name is
+    shortened in the middle. Pills that don't fit the cell leave a `+N` pill (its border
+    and text `text_muted`), and if the first doesn't fit beside it, it is
+    shortened to fit. The column fits the widest row of labels in the loaded commits, up
+    to `ref_column_max_width` (240 px), unless the user sized it (`set_fitted`, §5.2); with
+    no labels, its column label's width. It is fitted again when the labels or commits
+    change.
+  - **Turning them off:** hide the Refs column in the column labels' right-click menu
+    (§5.2); the choice is saved per panel like any column.
+  - **Updates:** the panel rebuilds the labels when `refs_changed`, `stashes_changed`,
+    `head_changed` or `head_sha_changed` fires, and the model repaints only the Refs
+    column (`dataChanged`). Each label's text width is measured once per theme. A full
+    repaint of History on RZE costs about 17.7 ms with the Refs column against 16.2 ms
+    with it hidden (offscreen).
+  - **Later:** a line's own label while its tip is scrolled away (RZG-82), and a context
+    menu on a label (RZG-83).
 - **Updates:** an appended page inserts rows. Any other change resets the model; the panel
   then re-selects the same commit and keeps the same commit at the top of the view (or
   stays at the top, so new commits show).
@@ -1947,6 +2006,8 @@ class StatusColors:  modified, added, deleted, renamed, copied, type_changed, co
                      def for_code(self, code: str) -> str | None   # porcelain letter → colour; None if unknown
 @dataclass(frozen=True)
 class GraphColors:   lanes: tuple[str, ...]   # History's branch graph (RZG-58): 8 lane colours, used in turn
+                     tag_fill, tag_border, stash_fill, stash_border: str   # History's ref labels (RZG-77)
+                     label_fill_alpha: int    # a branch label's tint of its lane colour, 0–255
 @dataclass(frozen=True)
 class ThemeFonts:    default_point_size: float = 10; mono_family: str = "monospace"
                      ui_point_size, menu_point_size, status_bar_point_size, list_point_size,
@@ -1957,6 +2018,8 @@ class ThemeFonts:    default_point_size: float = 10; mono_family: str = "monospa
 @dataclass(frozen=True)
 class ThemeMetrics:  splitter_width: int = 1; scrollbar_width: int = 10; row_padding: int = 2; row_min_height: int = 18
                      graph_lane_width: int = 14; graph_line_width: float = 1.6; graph_dot_radius: float = 3.5
+                     ref_label_max_width: int = 160; ref_column_max_width: int = 240   # ref labels (RZG-77)
+                     ref_label_padding: int = 5; ref_label_gap: int = 3; ref_label_radius: float = 3
 
 @dataclass(frozen=True)
 class AppTheme:
@@ -1994,6 +2057,11 @@ def colour_blind_theme(base: AppTheme) -> AppTheme   # LIGHT_THEME → LIGHT_CB_
   neighbouring lanes differ. Each is at least 3:1 on the content background (a line
   shows), and tests require a minimum ΔE between neighbours, under every simulated kind
   of colour vision in the colour-blind variants. The stylesheet doesn't use them.
+- **Ref labels** (RZG-77): History's label text is `text`, at least 4.5:1 on every pill
+  fill (a lane tint at `label_fill_alpha`, `tag_fill`, `stash_fill`) over both row
+  backgrounds. A pill's border is at least 1.5:1 on `content_bg`, so it shows. Tags and
+  stashes are neutral greys, so they don't read as a lane; a stash's border is dashed, so
+  the two differ by shape, not colour. The colour-blind variants share them.
 - **Floating button** (RZG-64): `floating_button_bg` is at least ΔE 3 from
   `content_bg`, `row_alt_bg` and `content_hover`, so the pill reads as a control over
   the rows, not as a row. Its text is at least 4.5:1 on both `floating_button_bg` and

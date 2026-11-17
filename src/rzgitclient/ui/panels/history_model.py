@@ -7,9 +7,11 @@ commit, counted from the first, is striped (its BackgroundRole). Pages are
 asked for by the panel, not through Qt's fetchMore, which Qt also calls while
 laying out rows, so it would load pages nobody scrolled to.
 
-The first column is the branch graph (RZG-58): the model keeps a ``CommitGraph``
-of its commits, carried on by an appended page and built again on a reset, and
-the delegate draws its rows (``graph_row``).
+The first column is the ref labels (RZG-77): the panel gives the model each
+commit's labels by sha (``set_labels``), and the delegate draws them
+(``ref_labels``). The second is the branch graph (RZG-58): the model keeps a
+``CommitGraph`` of its commits, carried on by an appended page and built again on
+a reset, and the delegate draws its rows (``graph_row``).
 """
 
 from __future__ import annotations
@@ -18,11 +20,12 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPersistentModelInd
 from PySide6.QtGui import QBrush, QColor, QFont
 
 from rzgitclient.core.commit_graph import CommitGraph, GraphRow
+from rzgitclient.core.ref_labels import RefLabel, row_tooltip
 from rzgitclient.git.git_models import Commit
 from rzgitclient.ui.theme.app_theme import AppTheme
 
-COLUMNS = ("Graph", "Subject", "Author", "Date", "Commit")
-GRAPH_COLUMN, SUBJECT_COLUMN, AUTHOR_COLUMN, DATE_COLUMN, HASH_COLUMN = range(len(COLUMNS))
+COLUMNS = ("Refs", "Graph", "Subject", "Author", "Date", "Commit")
+REFS_COLUMN, GRAPH_COLUMN, SUBJECT_COLUMN, AUTHOR_COLUMN, DATE_COLUMN, HASH_COLUMN = range(len(COLUMNS))
 MUTED_COLUMNS = (AUTHOR_COLUMN, DATE_COLUMN, HASH_COLUMN)
 
 _Index = QModelIndex | QPersistentModelIndex
@@ -37,6 +40,7 @@ class HistoryModel(QAbstractTableModel):
         self._lane_colors = len(theme.graph.lanes)
         self._graph = CommitGraph(colors=self._lane_colors)
         self._uncommitted: int | None = None  # changed files; None: no Uncommitted changes row
+        self._labels: dict[str, tuple[RefLabel, ...]] = {}  # by sha (RZG-77)
         self._italic = QFont()
         self._italic.setItalic(True)  # only italic: the rest comes from the view's font
         self._muted = QColor()
@@ -98,6 +102,24 @@ class HistoryModel(QAbstractTableModel):
         row -= self._offset
         return self._graph.row(row) if 0 <= row < len(self._commits) else None
 
+    def set_labels(self, labels: dict[str, tuple[RefLabel, ...]]) -> None:
+        """Each commit's ref labels, by sha; repaints only the Refs column."""
+        if labels == self._labels:
+            return
+        self._labels = labels
+        if self.rowCount():
+            self.dataChanged.emit(self.index(0, REFS_COLUMN),
+                                  self.index(self.rowCount() - 1, REFS_COLUMN))
+
+    @property
+    def labels(self) -> dict[str, tuple[RefLabel, ...]]:
+        return self._labels
+
+    def ref_labels(self, row: int) -> tuple[RefLabel, ...]:
+        """The labels of the commit at ``row``; none for Uncommitted changes."""
+        commit = self.commit_at(row)
+        return self._labels.get(commit.sha, ()) if commit is not None else ()
+
     @property
     def _offset(self) -> int:
         """The row of the first commit."""
@@ -120,7 +142,7 @@ class HistoryModel(QAbstractTableModel):
             return commit.date.strftime("%Y-%m-%d %H:%M")
         if col == HASH_COLUMN:
             return commit.short_sha
-        return ""  # the graph is drawn, not written
+        return ""  # the labels and the graph are drawn, not written
 
     def striped(self, row: int) -> bool:
         """Whether ``row`` has the stripe: every second commit, never Uncommitted changes."""
@@ -175,6 +197,9 @@ class HistoryModel(QAbstractTableModel):
             return self._mono
         if role == Qt.ItemDataRole.ToolTipRole and col == HASH_COLUMN:
             return self._commits[row - self._offset].sha
+        if role == Qt.ItemDataRole.ToolTipRole and col == REFS_COLUMN:
+            labels = self.ref_labels(row)
+            return row_tooltip(labels) if labels else None
         return None
 
     def headerData(

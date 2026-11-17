@@ -106,9 +106,15 @@ _STATUS_CODES = {
 
 @dataclass(frozen=True)
 class GraphColors:
-    """History's branch graph (RZG-58): the lane colours, taken in turn by new lanes."""
+    """History's branch graph (RZG-58): the lane colours, taken in turn by new lanes;
+    and its ref labels (RZG-77)."""
 
     lanes: tuple[str, ...]
+    tag_fill: str  # a tag's label: neutral, so it doesn't read as a lane
+    tag_border: str
+    stash_fill: str  # a stash's label (its border is dashed)
+    stash_border: str
+    label_fill_alpha: int  # a branch label's tint of its lane colour, 0-255
 
 
 class FontKind(StrEnum):
@@ -160,6 +166,11 @@ class ThemeMetrics:
     graph_lane_width: int = 14  # History's branch graph (RZG-58)
     graph_line_width: float = 1.6
     graph_dot_radius: float = 3.5
+    ref_label_max_width: int = 160  # History's ref labels (RZG-77)
+    ref_column_max_width: int = 240
+    ref_label_padding: int = 5  # left and right of a label's text
+    ref_label_gap: int = 3  # between labels, and before the first
+    ref_label_radius: float = 3
 
 
 @dataclass(frozen=True)
@@ -291,7 +302,8 @@ LIGHT_THEME = AppTheme(
     ),
     graph=GraphColors(lanes=(
         "#0969da", "#c4520a", "#1a7f37", "#8250df", "#cf222e", "#0a7f86", "#bf3989", "#8a6100",
-    )),
+    ), tag_fill="#e6e8eb", tag_border="#8c959f", stash_fill="#f1f1f1", stash_border="#8c959f",
+        label_fill_alpha=48),
 )
 
 
@@ -365,7 +377,8 @@ DARK_THEME = AppTheme(
     ),
     graph=GraphColors(lanes=(
         "#58a6ff", "#f0883e", "#3fb950", "#bc8cff", "#ff7b72", "#39c5cf", "#f778ba", "#d29922",
-    )),
+    ), tag_fill="#3d4049", tag_border="#7d8590", stash_fill="#33353c", stash_border="#7d8590",
+        label_fill_alpha=64),
 )
 
 
@@ -391,7 +404,7 @@ LIGHT_CB_THEME = _colour_blind_variant(
         conflict="#7a1010",  # dark red: apart from gold and violet by lightness
         untracked="#007079",
     ),
-    GraphColors(lanes=(
+    dataclasses.replace(LIGHT_THEME.graph, lanes=(  # the ref labels' tokens are the base's
         "#0072b2", "#c75400", "#5a5a5a", "#b0428a", "#0b8a6c", "#8f6a00", "#3d4fd6", "#a03800",
     )),
     warning="#b84c00",
@@ -419,7 +432,7 @@ DARK_CB_THEME = _colour_blind_variant(
         conflict="#ff7a45",  # vermillion
         untracked="#2ebdc9",
     ),
-    GraphColors(lanes=(
+    dataclasses.replace(DARK_THEME.graph, lanes=(
         "#56b4e9", "#e69f00", "#c8c8c8", "#e07ab8", "#2fbf9a", "#f0e442", "#8a9bff", "#ff7a45",
     )),
     warning="#f0e442",

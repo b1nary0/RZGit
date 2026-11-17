@@ -10,12 +10,13 @@ from rzgitclient.core.diff_patch import hunk_lines
 from rzgitclient.core.git_commands import CommandKind
 from rzgitclient.core.repo_session import Refresh, RepoSession
 from rzgitclient.core.selection import FileSelection, FileSource
-from rzgitclient.git.git_models import DiffSource, FileStatus, HistoryOrder
+from rzgitclient.git.git_models import DiffSource, FileStatus, HistoryOrder, Ref
 from rzgitclient.git.repo import GitError, Repo
 from tests.support import (SignalRecorder, commit_file, git, make_branched_repo, make_repo, qt_app,
                            wait_idle)
 
-DATA_SIGNALS = ("head_changed", "head_sha_changed", "branches_changed", "history_changed", "status_changed",
+DATA_SIGNALS = ("head_changed", "head_sha_changed", "branches_changed", "refs_changed",
+                "history_changed", "status_changed",
                 "stashes_changed", "commit_count_changed")
 ALL_SIGNALS = ("repo_changed", *DATA_SIGNALS, "error_occurred")
 BUSY = "busy_changed"
@@ -100,7 +101,7 @@ class RepoSessionTests(unittest.TestCase):
         self.assertEqual(
             self.rec.names(),
             ["repo_changed", "head_changed", "head_sha_changed", "branches_changed",
-             "error_occurred",
+             "refs_changed", "error_occurred",
              "history_changed", "status_changed", "stashes_changed", "commit_count_changed"],
         )
         self.assertEqual(self.session.history, ())
@@ -193,10 +194,38 @@ class RepoSessionTests(unittest.TestCase):
         commit_file(self.path, "a.txt", "2", "second")
         self.session.refresh()
         wait_idle(self.session)
-        # A new commit moves HEAD's sha and changes history, status and the
-        # count; the branch and the branch list (names, which is current) stay.
-        self.assertEqual(self.rec.names(), ["head_sha_changed", "history_changed",
+        # A new commit moves HEAD's sha and its branch's ref, and changes history,
+        # status and the count; the branch and the branch list (names, which is
+        # current) stay.
+        self.assertEqual(self.rec.names(), ["head_sha_changed", "refs_changed", "history_changed",
                                             "status_changed", "commit_count_changed"])
+
+    # ---- refs (RZG-77) ----------------------------------------------------
+
+    def test_refs_are_loaded_with_their_commits(self):
+        self.open_and_clear()
+        head = self.session.head_sha
+        self.assertEqual(self.session.refs, (Ref("refs/heads/feature", head),
+                                             Ref("refs/heads/main", head)))
+
+    def test_a_new_tag_is_read_though_head_has_not_moved(self):
+        # History runs no git log while HEAD stays, so the refs are read by themselves.
+        self.open_and_clear()
+        git(self.path, "tag", "v1.0")
+        self.session.refresh(Refresh.BRANCHES)
+        wait_idle(self.session)
+        self.assertEqual(self.rec.names(), ["refs_changed"])
+        self.assertIn(Ref("refs/tags/v1.0", self.session.head_sha), self.session.refs)
+
+    def test_refs_come_with_history_and_not_with_status(self):
+        self.open_and_clear()
+        git(self.path, "tag", "v1.0")
+        self.session.refresh(Refresh.STATUS)
+        wait_idle(self.session)
+        self.assertEqual(self.rec.names(), [])
+        self.session.refresh(Refresh.HISTORY)
+        wait_idle(self.session)
+        self.assertEqual(self.rec.names(), ["refs_changed"])
 
     def test_refresh_without_repo_does_nothing(self):
         self.session.refresh()

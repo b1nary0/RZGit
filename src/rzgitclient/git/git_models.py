@@ -91,6 +91,14 @@ class Branch:
 
 
 @dataclass(frozen=True)
+class Ref:
+    """A branch or tag, for History's labels (spec §4.1, RZG-77)."""
+
+    name: str  # in full: "refs/heads/main", "refs/remotes/origin/main", "refs/tags/v1.0"
+    sha: str  # the commit it points at; an annotated tag's, peeled
+
+
+@dataclass(frozen=True)
 class FileStatus:
     index: str  # staged status code (X in porcelain XY)
     worktree: str  # unstaged status code (Y in porcelain XY)
