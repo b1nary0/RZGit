@@ -7,7 +7,6 @@ from PySide6.QtWidgets import QLineEdit, QToolButton
 from rzgitclient.core.repo_session import Refresh
 from rzgitclient.ui.app_actions import BranchOp
 from rzgitclient.ui.panels.controls_panel import FILTER_AT, LABEL_WIDTH, ControlsPanel
-from rzgitclient.ui.theme.style_roles import SURFACE_PROPERTY
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 NAV = 3  # Open, Refresh and Fetch, ahead of the branch button
@@ -32,7 +31,6 @@ class ControlsPanelTests(unittest.TestCase):
         wait_idle(self.ctx.session)
 
     def test_a_bar_without_header_fixed_and_always_shown(self):
-        self.assertEqual(self.panel.property(SURFACE_PROPERTY), "chrome")
         self.assertFalse(ControlsPanel.show_header)
         self.assertTrue(ControlsPanel.fixed_height)
         self.assertTrue(ControlsPanel.always_shown)

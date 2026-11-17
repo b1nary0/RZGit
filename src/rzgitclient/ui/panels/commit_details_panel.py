@@ -30,7 +30,7 @@ from rzgitclient.git.git_models import Commit, CommitDetails, Stash
 from rzgitclient.ui.panels.commit_message_text import reflow
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
-from rzgitclient.ui.theme.style_roles import Role, Surface, set_role
+from rzgitclient.ui.theme.style_roles import Role, set_role
 from rzgitclient.ui.widgets.panel_segment import PanelSegment, PanelSegments
 
 NO_COMMIT = "No commit selected"
@@ -67,7 +67,6 @@ def person(name: str, email: str, date: datetime) -> str:
 class CommitDetailsPanel(Panel):
     panel_id = "commit_details"
     title = "Commit Details"
-    surface = Surface.CONTENT
 
     # Built when a commit is first selected: the panel starts collapsed.
     _content: QWidget | None  # holds the segments, in one stack or two

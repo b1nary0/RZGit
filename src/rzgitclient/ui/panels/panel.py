@@ -41,7 +41,7 @@ class Panel(QWidget):
     ``__init__`` is final and runs, in order:
 
     1. ``QWidget.__init__`` and stores ``ctx``,
-    2. sets the ``surface`` style property,
+    2. sets the content ``surface``, until the layout sets its area's (§6.1),
     3. ``self._setup()``: the panel builds its widgets, connects its signals
        and renders the current state,
     4. ``self.apply_theme(ctx.theme.current)``,
@@ -54,7 +54,6 @@ class Panel(QWidget):
 
     panel_id: ClassVar[str]  # stable, saved in layouts: "history"
     title: ClassVar[str]  # "History"
-    surface: ClassVar[Surface] = Surface.CONTENT
     show_header: ClassVar[bool] = True  # False: the frame draws no section header
     fixed_height: ClassVar[bool] = False  # True: its pane in a vertical split can't be resized
     always_shown: ClassVar[bool] = False  # True: the layout never leaves it out (§6.6)
@@ -81,7 +80,7 @@ class Panel(QWidget):
         self._header = self.title
         self._collapsed = False
         self._header_actions: tuple[QAction, ...] = ()
-        set_surface(self, self.surface)
+        set_surface(self, Surface.CONTENT)  # until the layout places it (§6.1)
         self._setup()
         self.apply_theme(ctx.theme.current)
         ctx.theme.theme_changed.connect(self.apply_theme)

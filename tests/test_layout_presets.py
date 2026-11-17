@@ -1,13 +1,17 @@
+import dataclasses
 import unittest
 
 from rzgitclient.ui.layout.layout_model import (
     Anchor,
+    Area,
+    Arrangement,
+    DropZone,
     LayoutState,
     Orientation,
     PanelNode,
     SplitNode,
     TabsNode,
-    normalize,
+    flatten,
     panel_ids,
     remove_panel,
     to_dict,
@@ -15,6 +19,8 @@ from rzgitclient.ui.layout.layout_model import (
 from rzgitclient.ui.layout.layout_presets import (
     DEFAULT_LAYOUT,
     PRESETS,
+    default_anchor,
+    default_area,
     layout_name_problem,
     matching_preset,
     restore_layout,
@@ -22,59 +28,121 @@ from rzgitclient.ui.layout.layout_presets import (
 from rzgitclient.ui.panels.panel_registry import PANEL_TYPES
 
 H, V = Orientation.HORIZONTAL, Orientation.VERTICAL
+P = PanelNode
+CONTROLS, HISTORY, DIFF, DETAILS = P("controls"), P("history"), P("diff"), P("commit_details")
+MAIN = SplitNode(V, (TabsNode((HISTORY, DIFF)), DETAILS), sizes=(500, 220))
 # A user's layout: the same panels as the default, arranged differently.
-CUSTOM = SplitNode(
-    V,
-    (PanelNode("controls"),
-     SplitNode(H, (PanelNode("history"), PanelNode("diff"), PanelNode("staged"),
-                   PanelNode("commit"), PanelNode("commit_details"),
-                   PanelNode("commit_files"), PanelNode("stash"))),
-     TabsNode((PanelNode("branches"), PanelNode("worktrees"), PanelNode("files")), current=2)),
-    sizes=(30, 500, 200),
-)
+CUSTOM = LayoutState(
+    {Area.CONTROLS: CONTROLS,
+     Area.SIDEBAR: SplitNode(V, (
+         TabsNode((P("branches"), P("worktrees"), P("files")), current=2),
+         SplitNode(H, (P("staged"), P("commit"), P("commit_files"), P("stash"))))),
+     Area.MAIN: SplitNode(H, (HISTORY, DIFF, DETAILS), sizes=(300, 200, 100))},
+    Arrangement.SIDEBAR_RIGHT, (200, 500))
+
+# The presets as one tree, as they were before areas (RZG-69).
+OLD_PRESETS = {
+    "Standard": SplitNode(V, (CONTROLS, SplitNode(H, (
+        SplitNode(V, tuple(P(p) for p in ("branches", "worktrees", "files", "staged", "commit",
+                                          "commit_files", "stash")),
+                  sizes=(180, 140, 220, 120, 160, 0, 170)),
+        MAIN), sizes=(220, 880)))),
+    "Sidebar Tabs": SplitNode(V, (CONTROLS, SplitNode(H, (
+        SplitNode(V, (TabsNode((P("branches"), P("worktrees"), P("files"), P("stash"))),
+                      P("staged"), P("commit"), P("commit_files")), sizes=(330, 120, 160, 0)),
+        MAIN), sizes=(220, 880)))),
+    "Stacked": SplitNode(V, (CONTROLS, SplitNode(V, (
+        MAIN,
+        SplitNode(H, (SplitNode(V, (P("branches"), P("worktrees"), P("stash")),
+                                sizes=(240, 130, 130)),
+                      SplitNode(V, (P("files"), P("staged"), P("commit"), P("commit_files")),
+                                sizes=(120, 90, 160, 0))),
+                  sizes=(400, 700))),
+        sizes=(380, 370)))),
+}
 
 
 class PresetTests(unittest.TestCase):
     def test_default_shows_every_registered_panel_once(self):
-        self.assertEqual(sorted(panel_ids(DEFAULT_LAYOUT)), sorted(t.panel_id for t in PANEL_TYPES))
+        self.assertEqual(sorted(DEFAULT_LAYOUT.panel_ids()), sorted(t.panel_id for t in PANEL_TYPES))
 
     def test_every_preset_shows_every_panel_once_and_is_already_normal(self):
         known = [t.panel_id for t in PANEL_TYPES]
-        self.assertEqual(PRESETS[0].root, DEFAULT_LAYOUT)
+        self.assertIs(PRESETS[0].state, DEFAULT_LAYOUT)
         self.assertEqual(len({p.title for p in PRESETS}), len(PRESETS))
         for preset in PRESETS:
             with self.subTest(preset.title):
-                self.assertEqual(sorted(panel_ids(preset.root)), sorted(known))
-                self.assertEqual(normalize(preset.root, known), preset.root)
+                self.assertEqual(sorted(preset.state.panel_ids()), sorted(known))
+                self.assertEqual(preset.state.normalized(known), preset.state)
+                self.assertEqual(preset.state.hidden, {})
 
+    def test_the_presets_look_as_they_did_before_areas(self):
+        """RZG-69: as one tree, each preset is the tree it was."""
+        self.assertEqual({p.title: flatten(p.state) for p in PRESETS}, OLD_PRESETS)
 
-def strip_sizes(node):
-    if isinstance(node, SplitNode):
-        return SplitNode(node.orientation, tuple(strip_sizes(c) for c in node.children))
-    return node
+    def test_every_preset_has_controls_alone_and_main_in_the_main_pane(self):
+        arrangements = {"Standard": Arrangement.SIDEBAR_LEFT,
+                        "Sidebar Tabs": Arrangement.SIDEBAR_LEFT, "Stacked": Arrangement.MAIN_TOP}
+        for preset in PRESETS:
+            with self.subTest(preset.title):
+                self.assertEqual(preset.state.tree(Area.CONTROLS), CONTROLS)
+                self.assertEqual(preset.state.tree(Area.MAIN), MAIN)
+                self.assertEqual(preset.state.arrangement, arrangements[preset.title])
+
+    def test_default_areas(self):
+        """The Default area column of spec §5.4."""
+        main = {"history", "diff", "commit_details"}
+        for panel_type in PANEL_TYPES:
+            pid = panel_type.panel_id
+            with self.subTest(pid):
+                expected = (Area.CONTROLS if pid == "controls"
+                            else Area.MAIN if pid in main else Area.SIDEBAR)
+                self.assertEqual(default_area(pid), expected)
+        self.assertIsNone(default_area("gone"))
+
+    def test_default_anchor_is_in_the_default_area(self):
+        self.assertEqual(default_anchor("diff"), Anchor(("history",), None, False, area=Area.MAIN))
+        # Alone in its area: no neighbours, it fills the area.
+        self.assertEqual(default_anchor("controls"), Anchor((), None, False, area=Area.CONTROLS))
+        self.assertEqual(default_anchor("history", shown=["controls"]),
+                         Anchor((), None, False, area=Area.MAIN))
+        self.assertIsNone(default_anchor("gone"))
 
 
 def saved(tree, hidden=None):
-    return to_dict(LayoutState(tree, hidden or {}))
+    """A layout as versions before areas saved it (version 2): one tree."""
+    data = to_dict(LayoutState({Area.MAIN: tree}, hidden=hidden or {}))
+    return {"version": 2, "root": data["areas"]["main"], "hidden": data["hidden"]}
+
+
+def resized(node):
+    """``node`` with every split's sizes changed, as a user's drags would."""
+    if isinstance(node, LayoutState):
+        areas = {a: resized(t) for a, t in node.areas.items()}
+        return dataclasses.replace(node, areas=areas, sizes=(301, 799))
+    if isinstance(node, SplitNode):
+        sizes = tuple(s + 7 * i for i, s in enumerate(node.sizes)) if node.sizes else None
+        return SplitNode(node.orientation, tuple(resized(c) for c in node.children), sizes)
+    return node
 
 
 class RestoreLayoutTests(unittest.TestCase):
     def test_nothing_saved_gives_the_default(self):
-        self.assertEqual(restore_layout(None), LayoutState(DEFAULT_LAYOUT))
+        self.assertIs(restore_layout(None), DEFAULT_LAYOUT)
 
     def test_saved_layout_is_used(self):
-        self.assertEqual(restore_layout(saved(CUSTOM)), LayoutState(CUSTOM))
+        self.assertEqual(restore_layout(to_dict(CUSTOM)), CUSTOM)
 
     def test_malformed_layout_gives_the_default_with_a_warning(self):
-        for data in ({"version": 99, "root": {}}, {"version": 1, "root": {"type": "?"}}, {}):
+        for data in ({"version": 99, "root": {}}, {"version": 1, "root": {"type": "?"}}, {},
+                     {**to_dict(CUSTOM), "arrangement": "?"}):
             with self.subTest(saved=data):
                 with self.assertLogs("rzgitclient.ui.layout.layout_presets", "WARNING"):
-                    self.assertEqual(restore_layout(data), LayoutState(DEFAULT_LAYOUT))
+                    self.assertEqual(restore_layout(data), DEFAULT_LAYOUT)
 
     def test_a_hidden_panel_stays_hidden(self):
-        rest, anchor = remove_panel(CUSTOM, "files")
-        self.assertEqual(restore_layout(saved(rest, {"files": anchor})),
-                         LayoutState(rest, {"files": anchor}))
+        hidden = CUSTOM.hide("files")
+        self.assertEqual(restore_layout(to_dict(hidden)), hidden)
 
     def test_a_panel_new_in_this_version_goes_to_its_default_place(self):
         # Saved by a version without the Worktrees, Files, Controls, Diff, Staged, Commit,
@@ -83,38 +151,45 @@ class RestoreLayoutTests(unittest.TestCase):
         # below it (at the default sizes: that split is the default's now), Controls goes
         # across the top, Diff becomes History's second tab and Commit Details goes below
         # the two (MAIN's sizes: that split is MAIN now).
-        older = SplitNode(H, (PanelNode("branches"), PanelNode("history")), sizes=(100, 500))
+        older = SplitNode(H, (P("branches"), HISTORY), sizes=(100, 500))
         restored = restore_layout(saved(older))
-        self.assertEqual(restored.root, SplitNode(V, (
-            PanelNode("controls"),
+        self.assertEqual(flatten(restored), SplitNode(V, (
+            CONTROLS,
             SplitNode(H, (
-                SplitNode(V, (PanelNode("branches"), PanelNode("worktrees"), PanelNode("files"),
-                              PanelNode("staged"), PanelNode("commit"),
-                              PanelNode("commit_files"), PanelNode("stash")),
+                SplitNode(V, (P("branches"), P("worktrees"), P("files"), P("staged"), P("commit"),
+                              P("commit_files"), P("stash")),
                           sizes=(180, 140, 220, 120, 160, 0, 170)),
-                SplitNode(V, (TabsNode((PanelNode("history"), PanelNode("diff"))),
-                              PanelNode("commit_details")), sizes=(500, 220)),
+                MAIN,
             ), sizes=(100, 500)),
         )))
         self.assertEqual(restored.hidden, {})
 
+    def test_a_panel_new_in_this_version_goes_to_its_default_area(self):
+        # Every Main pane panel moved to the Sidebar: Diff, new, still goes to the Main pane.
+        mine = DEFAULT_LAYOUT.move("history", "branches", DropZone.CENTER)
+        mine = mine.move("commit_details", "files", DropZone.CENTER).hide("diff")
+        mine = dataclasses.replace(mine, hidden={})  # Diff: as if it were new
+        self.assertIsNone(mine.tree(Area.MAIN))
+        restored = restore_layout(to_dict(mine))
+        self.assertEqual(restored.tree(Area.MAIN), DIFF)
+        self.assertEqual(restored.area_of("history"), Area.SIDEBAR)
+
     def test_the_default_layout_before_the_diff_panel_migrates_to_today_s(self):
-        before_rzg_18 = SplitNode(V, (PanelNode("controls"), SplitNode(H, (
-            SplitNode(V, (PanelNode("branches"), PanelNode("files")), sizes=(300, 400)),
-            PanelNode("history"),
+        before_rzg_18 = SplitNode(V, (CONTROLS, SplitNode(H, (
+            SplitNode(V, (P("branches"), P("files")), sizes=(300, 400)),
+            HISTORY,
         ), sizes=(220, 880))))
-        self.assertEqual(restore_layout(saved(before_rzg_18)), LayoutState(DEFAULT_LAYOUT))
+        self.assertEqual(restore_layout(saved(before_rzg_18)), DEFAULT_LAYOUT)
 
     def test_stashes_a_tab_only_in_sidebar_tabs(self):
         """RZG-36: at the bottom of Standard's sidebar, the last tab in Sidebar Tabs, below
         Branches and Worktrees in Stacked."""
-        standard, tabs, stacked = (p.root for p in PRESETS)
-        self.assertEqual(standard.children[1].children[0].children[-1], PanelNode("stash"))
-        self.assertEqual(tabs.children[1].children[0].children[0], TabsNode(
-            (PanelNode("branches"), PanelNode("worktrees"), PanelNode("files"),
-             PanelNode("stash"))))
-        self.assertEqual(stacked.children[1].children[1].children[0].children,
-                         (PanelNode("branches"), PanelNode("worktrees"), PanelNode("stash")))
+        standard, tabs, stacked = (p.state.tree(Area.SIDEBAR) for p in PRESETS)
+        self.assertEqual(standard.children[-1], P("stash"))
+        self.assertEqual(tabs.children[0], TabsNode(
+            (P("branches"), P("worktrees"), P("files"), P("stash"))))
+        self.assertEqual(stacked.children[0].children,
+                         (P("branches"), P("worktrees"), P("stash")))
 
     def test_commit_details_is_below_history_and_diff_in_every_preset(self):
         """RZG-65: a vertical split of their own, the tabs first; Commit Files alone
@@ -126,17 +201,11 @@ class RestoreLayoutTests(unittest.TestCase):
                     yield from splits(child)
         for preset in PRESETS:
             with self.subTest(preset.title):
-                [main] = [s for s in splits(preset.root)
-                          if PanelNode("commit_details") in s.children]
-                self.assertEqual(main.orientation, V)
-                self.assertEqual(main.children, (TabsNode((PanelNode("history"),
-                                                           PanelNode("diff"))),
-                                                 PanelNode("commit_details")))
-                self.assertEqual(main.sizes, (500, 220))
-                [sidebar] = [s for s in splits(preset.root)
-                             if PanelNode("commit_files") in s.children]
-                at = sidebar.children.index(PanelNode("commit_files"))
-                self.assertEqual(sidebar.children[at - 1], PanelNode("commit"))
+                self.assertEqual(preset.state.tree(Area.MAIN), MAIN)
+                [sidebar] = [s for s in splits(preset.state.tree(Area.SIDEBAR))
+                             if P("commit_files") in s.children]
+                at = sidebar.children.index(P("commit_files"))
+                self.assertEqual(sidebar.children[at - 1], P("commit"))
                 self.assertEqual(sidebar.sizes[at], 0)
                 self.assertNotIn(0, sidebar.sizes[:at] + sidebar.sizes[at + 1:])
 
@@ -144,137 +213,168 @@ class RestoreLayoutTests(unittest.TestCase):
         """RZG-48: directly below Branches in a split, the tab after it in tabs."""
         for preset in PRESETS:
             with self.subTest(preset.title):
-                ids = panel_ids(preset.root)
+                ids = preset.state.panel_ids()
                 self.assertEqual(ids[ids.index("branches") + 1], "worktrees")
 
     def test_staged_and_commit_go_below_files_in_a_layout_saved_before_them(self):
         for preset in PRESETS:
             with self.subTest(preset.title):
-                before_rzg_20, _anchor = remove_panel(preset.root, "commit")
+                before_rzg_20, _anchor = remove_panel(flatten(preset.state), "commit")
                 before_rzg_20, _anchor = remove_panel(before_rzg_20, "staged")
-                self.assertEqual(restore_layout(saved(before_rzg_20)).root, preset.root)
+                self.assertEqual(restore_layout(saved(before_rzg_20)), preset.state)
 
     def test_a_split_unlike_any_preset_keeps_its_sizes_and_shares_out_the_new_panes(self):
-        mine = SplitNode(V, (PanelNode("controls"), SplitNode(H, (
-            PanelNode("history"), SplitNode(V, (PanelNode("files"), PanelNode("branches")),
-                                            sizes=(500, 100)),
+        mine = SplitNode(V, (CONTROLS, SplitNode(H, (
+            HISTORY, SplitNode(V, (P("files"), P("branches")), sizes=(500, 100)),
         ), sizes=(700, 300))))
-        sidebar = restore_layout(saved(mine)).root.children[1].children[1]
+        restored = restore_layout(saved(mine))
+        self.assertEqual(restored.arrangement, Arrangement.SIDEBAR_RIGHT)
+        self.assertEqual(restored.sizes, (300, 700))
+        sidebar = restored.tree(Area.SIDEBAR)
         self.assertEqual(panel_ids(sidebar),
                          ["worktrees", "files", "staged", "commit", "commit_files", "stash",
                           "branches"])
         self.assertEqual(sidebar.sizes[-1], 100)  # Branches keeps its own
 
     def test_a_new_tab_leaves_the_current_tab_current(self):
-        older = SplitNode(V, (PanelNode("controls"), SplitNode(H, (
-            PanelNode("branches"),
-            TabsNode((PanelNode("files"), PanelNode("history")), current=1)))))
-        # Worktrees goes above the tabs that hold Files (beside Files, as in the default),
-        # Staged and Commit below them.
-        tabs = restore_layout(saved(older)).root.children[1].children[1].children[1]
-        self.assertEqual(tabs, TabsNode(
-            (PanelNode("files"), PanelNode("history"), PanelNode("diff")), current=1))
+        mine = DEFAULT_LAYOUT.with_tree(Area.MAIN, TabsNode((HISTORY, DETAILS), current=1))
+        # Diff goes after History, as in the default; Commit Details stays current.
+        self.assertEqual(restore_layout(to_dict(mine)).tree(Area.MAIN),
+                         TabsNode((HISTORY, DIFF, DETAILS), current=2))
 
     def test_version_1_files_load(self):
-        self.assertEqual(restore_layout({"version": 1, "root": saved(CUSTOM)["root"]}),
-                         LayoutState(CUSTOM))
+        old = saved(flatten(DEFAULT_LAYOUT))
+        self.assertEqual(restore_layout({"version": 1, "root": old["root"]}), DEFAULT_LAYOUT)
 
     def test_panel_this_version_no_longer_has_is_dropped(self):
-        newer = SplitNode(V, (*CUSTOM.children, PanelNode("retired")), sizes=(30, 400, 200, 100))
-        retired_anchor = Anchor(("history",), V, True)
-        restored = restore_layout(saved(newer, {"gone": retired_anchor}))
-        self.assertEqual(sorted(panel_ids(restored.root)),
+        main = SplitNode(H, (*CUSTOM.tree(Area.MAIN).children, P("retired")),
+                         sizes=(300, 200, 100, 50))
+        newer = dataclasses.replace(CUSTOM.with_tree(Area.MAIN, main),
+                                    hidden={"gone": Anchor(("history",), V, True)})
+        restored = restore_layout(to_dict(newer))
+        self.assertEqual(sorted(restored.panel_ids()),
                          ["branches", "commit", "commit_details", "commit_files", "controls", "diff", "files",
                           "history", "staged", "stash", "worktrees"])
-        self.assertIsNone(restored.root.sizes)  # children changed, so sizes no longer fit
+        self.assertIsNone(restored.tree(Area.MAIN).sizes)  # children changed: sizes don't fit
         self.assertEqual(restored.hidden, {})
 
     def test_nothing_known_left_gives_the_default(self):
-        self.assertEqual(restore_layout(saved(PanelNode("retired"))), LayoutState(DEFAULT_LAYOUT))
+        self.assertEqual(restore_layout(saved(P("retired"))), DEFAULT_LAYOUT)
+        retired = LayoutState({Area.MAIN: P("retired")})
+        self.assertEqual(restore_layout(to_dict(retired)), DEFAULT_LAYOUT)
+
+
+class MigrationTests(unittest.TestCase):
+    """Layouts saved before areas (versions 1 and 2) load into areas (spec §6.3, RZG-69)."""
+
+    def test_each_preset_saved_before_areas_loads_as_itself_with_the_user_s_sizes(self):
+        for preset in PRESETS:
+            with self.subTest(preset.title):
+                mine = resized(OLD_PRESETS[preset.title])
+                restored = restore_layout(saved(mine), preset.title)
+                self.assertEqual(flatten(restored), mine)
+                self.assertEqual(matching_preset(restored), preset.title)
+
+    def test_a_preset_with_panels_hidden_keeps_them_hidden_in_their_areas(self):
+        for preset in PRESETS:
+            for pid in ("branches", "commit_details"):
+                with self.subTest((preset.title, pid)):
+                    tree, anchor = remove_panel(OLD_PRESETS[preset.title], pid)
+                    restored = restore_layout(saved(tree, {pid: anchor}), preset.title)
+                    self.assertEqual(restored, preset.state.hide(pid))
+                    back = restored.show(pid, default_anchor(pid))
+                    self.assertEqual(matching_preset(back), preset.title)
+                    self.assertEqual(back.area_of(pid), default_area(pid))
+
+    def test_a_saved_layout_from_before_areas_loads_into_areas(self):
+        """A named saved layout has no preset name: it is migrated the same way."""
+        tree = OLD_PRESETS["Sidebar Tabs"]
+        self.assertEqual(restore_layout(saved(tree)), PRESETS[1].state)
+
+    def test_an_anchor_beside_another_area_is_dropped(self):
+        # Diff hidden while it sat beside Branches: its neighbour isn't on the Main pane.
+        tree = SplitNode(V, (CONTROLS, SplitNode(H, (P("branches"), HISTORY))))
+        restored = restore_layout(saved(tree, {"diff": Anchor(("branches",), V, False)}))
+        self.assertNotIn("diff", restored.hidden)
+        self.assertEqual(restored.area_of("diff"), Area.MAIN)  # so it's new: default place
 
 
 class BuiltInLayoutTests(unittest.TestCase):
     """Built-in layouts follow the code; custom ones stay (spec §6.3)."""
 
     # Standard as an older version had it: Diff below History, no Commit Files.
-    OLD_STANDARD = SplitNode(V, (PanelNode("controls"), SplitNode(H, (
-        SplitNode(V, (PanelNode("branches"), PanelNode("files"), PanelNode("staged"),
-                      PanelNode("commit")), sizes=(200, 220, 120, 160)),
-        SplitNode(V, (PanelNode("history"), PanelNode("diff")), sizes=(400, 300)),
+    OLD_STANDARD = SplitNode(V, (CONTROLS, SplitNode(H, (
+        SplitNode(V, (P("branches"), P("files"), P("staged"), P("commit")),
+                  sizes=(200, 220, 120, 160)),
+        SplitNode(V, (HISTORY, DIFF), sizes=(400, 300)),
     ), sizes=(250, 850))))
-
-    def resized(self, node):
-        """``node`` with every split's sizes changed, as a user's drags would."""
-        if isinstance(node, SplitNode):
-            sizes = tuple(s + 7 * i for i, s in enumerate(node.sizes)) if node.sizes else None
-            return SplitNode(node.orientation, tuple(self.resized(c) for c in node.children), sizes)
-        return node
 
     def test_each_preset_matches_itself_resized_or_with_another_tab_current(self):
         for preset in PRESETS:
             with self.subTest(preset.title):
-                self.assertEqual(matching_preset(LayoutState(self.resized(preset.root))),
-                                 preset.title)
-        body = DEFAULT_LAYOUT.children[1]
-        main = body.children[1]
-        diff_current = TabsNode(main.children[0].children, current=1)
-        other_tab = SplitNode(V, (PanelNode("controls"), SplitNode(
-            H, (body.children[0], SplitNode(V, (diff_current, main.children[1]), main.sizes)),
-            body.sizes)))
-        self.assertEqual(matching_preset(LayoutState(other_tab)), "Standard")
+                self.assertEqual(matching_preset(resized(preset.state)), preset.title)
+        diff_current = SplitNode(V, (TabsNode((HISTORY, DIFF), current=1), DETAILS), MAIN.sizes)
+        self.assertEqual(matching_preset(DEFAULT_LAYOUT.with_tree(Area.MAIN, diff_current)),
+                         "Standard")
 
     def test_a_preset_with_panels_hidden_still_matches(self):
-        root, anchor = remove_panel(DEFAULT_LAYOUT, "branches")
-        self.assertEqual(matching_preset(LayoutState(root, {"branches": anchor})), "Standard")
+        self.assertEqual(matching_preset(DEFAULT_LAYOUT.hide("branches")), "Standard")
+        self.assertEqual(matching_preset(DEFAULT_LAYOUT.hide("history")), "Standard")
 
     def test_a_rearranged_layout_is_custom(self):
-        self.assertIsNone(matching_preset(LayoutState(CUSTOM)))
-        moved = remove_panel(DEFAULT_LAYOUT, "branches")[0]  # removed, but not hidden
-        self.assertIsNone(matching_preset(LayoutState(moved)))
+        self.assertIsNone(matching_preset(CUSTOM))
+        sidebar = remove_panel(DEFAULT_LAYOUT.tree(Area.SIDEBAR), "branches")[0]
+        moved = DEFAULT_LAYOUT.with_tree(Area.SIDEBAR, sidebar)  # removed, but not hidden
+        self.assertIsNone(matching_preset(moved))
+        other_side = dataclasses.replace(DEFAULT_LAYOUT, arrangement=Arrangement.SIDEBAR_RIGHT)
+        self.assertIsNone(matching_preset(other_side))
 
     def test_an_unchanged_preset_keeps_the_user_s_sizes(self):
-        mine = self.resized(DEFAULT_LAYOUT)
-        self.assertEqual(restore_layout(saved(mine), "Standard"), LayoutState(mine))
+        mine = resized(DEFAULT_LAYOUT)
+        self.assertEqual(restore_layout(to_dict(mine), "Standard"), mine)
 
     def test_a_preset_changed_in_code_is_used_instead(self):
-        self.assertEqual(restore_layout(saved(self.OLD_STANDARD), "Standard"),
-                         LayoutState(DEFAULT_LAYOUT))
+        self.assertEqual(restore_layout(saved(self.OLD_STANDARD), "Standard"), DEFAULT_LAYOUT)
+        changed = DEFAULT_LAYOUT.with_tree(Area.MAIN, TabsNode((HISTORY, DIFF, DETAILS)))
+        self.assertEqual(restore_layout(to_dict(changed), "Standard"), DEFAULT_LAYOUT)
 
     def test_the_new_preset_keeps_the_hidden_panels_hidden(self):
         old, anchor = remove_panel(self.OLD_STANDARD, "branches")
         restored = restore_layout(saved(old, {"branches": anchor}), "Standard")
-        new_root, new_anchor = remove_panel(DEFAULT_LAYOUT, "branches")
-        self.assertEqual(restored, LayoutState(new_root, {"branches": new_anchor}))
+        self.assertEqual(restored, DEFAULT_LAYOUT.hide("branches"))
 
     def test_a_custom_layout_stays_as_it_is(self):
         restored = restore_layout(saved(self.OLD_STANDARD), None)
-        self.assertEqual(panel_ids(restored.root),
+        self.assertEqual(restored.panel_ids(),
                          ["controls", "branches", "worktrees", "files", "staged", "commit",
                           "commit_files", "stash", "history", "diff", "commit_details"])
-        main = restored.root.children[1].children[1]
+        main = restored.tree(Area.MAIN)
         self.assertEqual(main.children[0],  # Diff still below History, Commit Details below
-                         SplitNode(V, (PanelNode("history"), PanelNode("diff")), sizes=(400, 300)))
-        self.assertEqual(main.children[1], PanelNode("commit_details"))
+                         SplitNode(V, (HISTORY, DIFF), sizes=(400, 300)))
+        self.assertEqual(main.children[1], DETAILS)
 
     # Standard before RZG-65: Commit Details in the sidebar, above Commit Files.
-    SIDEBAR_DETAILS = SplitNode(V, (PanelNode("controls"), SplitNode(H, (
-        SplitNode(V, tuple(PanelNode(p) for p in (
+    SIDEBAR_DETAILS = SplitNode(V, (CONTROLS, SplitNode(H, (
+        SplitNode(V, tuple(P(p) for p in (
             "branches", "worktrees", "files", "staged", "commit", "commit_details",
             "commit_files", "stash")), sizes=(180, 140, 220, 120, 160, 0, 0, 170)),
-        TabsNode((PanelNode("history"), PanelNode("diff"))),
+        TabsNode((HISTORY, DIFF)),
     ), sizes=(220, 880))))
 
     def test_standard_saved_with_commit_details_in_the_sidebar_follows_the_preset(self):
-        self.assertEqual(restore_layout(saved(self.SIDEBAR_DETAILS), "Standard"),
-                         LayoutState(DEFAULT_LAYOUT))
+        self.assertEqual(restore_layout(saved(self.SIDEBAR_DETAILS), "Standard"), DEFAULT_LAYOUT)
 
-    def test_a_custom_layout_keeps_commit_details_in_the_sidebar(self):
+    def test_a_custom_layout_from_before_areas_moves_commit_details_to_the_main_pane(self):
+        """RZG-69: each panel goes to its default area; the rest keeps its place."""
         restored = restore_layout(saved(self.SIDEBAR_DETAILS), None)
-        self.assertEqual(restored, LayoutState(self.SIDEBAR_DETAILS))
+        self.assertEqual(restored.area_of("commit_details"), Area.MAIN)
+        self.assertEqual(restored.tree(Area.SIDEBAR),
+                         remove_panel(self.SIDEBAR_DETAILS.children[1].children[0],
+                                      "commit_details")[0])
         self.assertIsNone(matching_preset(restored))
 
     def test_an_unknown_preset_name_is_a_custom_layout(self):
-        self.assertEqual(restore_layout(saved(CUSTOM), "Gone"), LayoutState(CUSTOM))
+        self.assertEqual(restore_layout(to_dict(CUSTOM), "Gone"), CUSTOM)
 
 
 class LayoutNameTests(unittest.TestCase):

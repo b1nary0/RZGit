@@ -6,12 +6,12 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QMenu, QToolButton, QVBoxLayout, QWidget
 
 from rzgitclient.ui.panels.panel import Panel
-from rzgitclient.ui.theme.style_roles import Role, set_role, set_surface
+from rzgitclient.ui.theme.style_roles import Role, Surface, set_role, set_surface
 from rzgitclient.ui.widgets.section_header import SectionHeader
 
 
 class PanelFrame(QWidget):
-    """Section header above the panel, on the panel's surface.
+    """Section header above the panel, on its area's ``surface`` (spec §6.1).
 
     The header follows the panel's ``header`` text, and is hidden for a panel
     with ``show_header = False``. At its right, a ⋯ button shows the panel's
@@ -19,10 +19,11 @@ class PanelFrame(QWidget):
     the panel stays unaware of it (contract rule 5).
     """
 
-    def __init__(self, panel: Panel, parent: QWidget | None = None):
+    def __init__(self, panel: Panel, surface: Surface, parent: QWidget | None = None):
         super().__init__(parent)
         self.panel = panel
-        set_surface(self, panel.surface)
+        set_surface(self, surface)
+        set_surface(panel, surface)
 
         self.header = SectionHeader(panel.header)
         self.header.setVisible(panel.show_header)

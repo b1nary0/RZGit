@@ -132,7 +132,7 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         self.layout_host = LayoutHost(self.ctx)
         settings = self.settings
-        self.layout_host.apply_state(restore_layout(settings.layout, settings.layout_preset))
+        self.layout_host.apply(restore_layout(settings.layout, settings.layout_preset))
         self.setCentralWidget(self.layout_host)
         self.statusBar().showMessage("No repository open")
         # Beside the summary, not replacing it.
@@ -155,8 +155,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         state = self.layout_host.state()
-        self.settings.layout = to_dict(state) if state is not None else None
-        self.settings.layout_preset = matching_preset(state) if state is not None else None
+        self.settings.layout = to_dict(state)
+        self.settings.layout_preset = matching_preset(state)
         self.settings.window_geometry = self.saveGeometry()
         self.settings.side_by_side_diff = self.ctx.actions.side_by_side_diff.isChecked()
         self.settings.whole_file_diff = self.ctx.actions.whole_file_diff.isChecked()

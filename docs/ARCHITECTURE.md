@@ -131,7 +131,7 @@ src/rzgitclient/
     layout/
       layout_model.py           PanelNode / SplitNode / TabsNode, (de)serialisation, normalize
       layout_presets.py         PRESETS, DEFAULT_LAYOUT, restore_layout
-      layout_host.py            LayoutHost
+      layout_host.py            LayoutHost, AreaPane (one per area)
       panel_frame.py            PanelFrame: section header + panel
       drop_indicator.py         DropIndicator: where a dragged panel will land
       layout_menu.py            LayoutMenu: View → Layout (presets, saved layouts)
@@ -782,7 +782,6 @@ class PanelContext:
 class Panel(QWidget):
     panel_id: ClassVar[str]                        # stable, saved in layouts: "history"
     title: ClassVar[str]                           # "History"
-    surface: ClassVar[Surface] = Surface.CONTENT   # SIDEBAR for branches/files
     show_header: ClassVar[bool] = True             # False: the frame draws no section header
     fixed_height: ClassVar[bool] = False           # True: its pane in a vertical split can't be resized
     always_shown: ClassVar[bool] = False           # True: the layout never leaves it out (§6.6)
@@ -833,11 +832,15 @@ panel that overrides `__init__`, or doesn't set `panel_id` and `title`, raises `
 **Construction order.** `Panel.__init__` is a template method. In order, it:
 
 1. calls `QWidget.__init__` and stores `ctx`,
-2. sets the `surface` style property,
+2. sets the content `surface` style property, until the layout places it,
 3. calls `self._setup()`. The panel builds its widgets, connects its signals and renders
    the current state (contract rule 3),
 4. calls `self.apply_theme(ctx.theme.current)`,
 5. connects `ctx.theme.theme_changed` to `apply_theme`.
+
+A panel doesn't choose its background: the layout sets its `surface` from the area it is
+in (§6.1, §7.2), so a panel dragged into the Main pane looks like it belongs there.
+Outside any layout (a panel's own tests) it stays on the content surface.
 
 Panels don't define `__init__` and take no constructor arguments besides `ctx` and `parent`.
 Everything they need comes through `ctx`. Widget attributes created in `_setup()` are
@@ -960,19 +963,19 @@ every panel. The lookup table is built at import by `index_panel_types()`, which
 The first three are extracted from the original `main_window.py` with the same behaviour
 (History no longer stops at 500 commits):
 
-| Panel | id | Surface | Shows | Writes |
+| Panel | id | Default area | Shows | Writes |
 |---|---|---|---|---|
-| ControlsPanel | `controls` | chrome | Open, Refresh, Fetch (`ctx.actions`), the branch button | switches and makes branches, through `actions.request_branch`; fetches, through `actions.fetch`; (later: pull/push) |
-| BranchesPanel | `branches` | sidebar | branches, current in bold | branch operations, through `actions.request_branch` |
-| StashPanel | `stash` | sidebar | "Stashes": message, branch and age of each, newest first | `selection.commit` (a `Stash`); stash operations, through `actions.request_stash` |
-| HistoryPanel | `history` | content | Uncommitted changes, then the commit table; no row while a stash is selected | `selection.commit` |
-| CommitDetailsPanel | `commit_details` | content | "Commit Details", below History and Diff: the selected commit's message, author, committer, SHA, parents and refs; collapsed for Uncommitted changes | `selection.commit` (a parent link) |
-| CommitFilesPanel | `commit_files` | sidebar | "Commit Files": the selected commit's changed files, in place of Unstaged Files, Staged Files and Commit; collapsed for Uncommitted changes | `selection.select()` |
-| FilesPanel | `files` | sidebar | "Unstaged Files": unstaged and untracked files, status colours | `selection.select()`; stages |
-| StagedPanel | `staged` | sidebar | "Staged Files": the index's changes; collapsed when empty | `selection.select()`; unstages |
-| DiffPanel | `diff` | content | the diff of `selection.file`, unified or side by side | stages, unstages and discards hunks and lines |
-| CommitPanel | `commit` | sidebar | the commit message being written | commits the staged changes |
-| WorktreesPanel | `worktrees` | sidebar | "Worktrees": each worktree's name, state and ahead/behind (branch and path on request); collapsed with only one worktree | opens a worktree, through `actions.request_open_worktree` and `request_open_worktree_here`; asks for worktree operations (`request_worktree`) |
+| ControlsPanel | `controls` | Controls | Open, Refresh, Fetch (`ctx.actions`), the branch button | switches and makes branches, through `actions.request_branch`; fetches, through `actions.fetch`; (later: pull/push) |
+| BranchesPanel | `branches` | Sidebar | branches, current in bold | branch operations, through `actions.request_branch` |
+| StashPanel | `stash` | Sidebar | "Stashes": message, branch and age of each, newest first | `selection.commit` (a `Stash`); stash operations, through `actions.request_stash` |
+| HistoryPanel | `history` | Main pane | Uncommitted changes, then the commit table; no row while a stash is selected | `selection.commit` |
+| CommitDetailsPanel | `commit_details` | Main pane | "Commit Details", below History and Diff: the selected commit's message, author, committer, SHA, parents and refs; collapsed for Uncommitted changes | `selection.commit` (a parent link) |
+| CommitFilesPanel | `commit_files` | Sidebar | "Commit Files": the selected commit's changed files, in place of Unstaged Files, Staged Files and Commit; collapsed for Uncommitted changes | `selection.select()` |
+| FilesPanel | `files` | Sidebar | "Unstaged Files": unstaged and untracked files, status colours | `selection.select()`; stages |
+| StagedPanel | `staged` | Sidebar | "Staged Files": the index's changes; collapsed when empty | `selection.select()`; unstages |
+| DiffPanel | `diff` | Main pane | the diff of `selection.file`, unified or side by side | stages, unstages and discards hunks and lines |
+| CommitPanel | `commit` | Sidebar | the commit message being written | commits the staged changes |
+| WorktreesPanel | `worktrees` | Sidebar | "Worktrees": each worktree's name, state and ahead/behind (branch and path on request); collapsed with only one worktree | opens a worktree, through `actions.request_open_worktree` and `request_open_worktree_here`; asks for worktree operations (`request_worktree`) |
 
 **The branch button** (ControlsPanel, RZG-56) names the current branch and switches to
 another. It sits at the right end of the Controls panel, beside the Branches panel, which
@@ -1088,7 +1091,7 @@ commit is selected; Commit keeps its draft while collapsed.
 asks `session.request_commit_details` when `selection.commit` changes, and collapses by
 itself while it is None, like Commit Files. **It sits at the bottom of the main pane**
 (RZG-65), below the History and Diff tabs in a vertical split of their own in every
-preset, on the content surface: the message reads at the main pane's width, right under
+preset, so on the content surface: the message reads at the main pane's width, right under
 the commit. Collapsed, its space goes to the tabs above, and it comes back at the height
 it had (§6.2); it is nobody's stand-in. It builds its
 widgets the first time a commit is selected; uncollapsed with no commit (a layout where it
@@ -1506,14 +1509,46 @@ class SplitNode:  orientation: Orientation; children: tuple[LayoutNode, ...]; si
 class TabsNode:   children: tuple[PanelNode, ...]; current: int = 0
 LayoutNode = PanelNode | SplitNode | TabsNode
 
+class Area(StrEnum):        CONTROLS; SIDEBAR; MAIN
+class Arrangement(StrEnum): SIDEBAR_LEFT; SIDEBAR_RIGHT; MAIN_TOP
+
 @dataclass(frozen=True)
-class Anchor:      neighbors: tuple[str, ...]; orientation: Orientation | None; before: bool; share: float | None = None
+class Anchor:      neighbors: tuple[str, ...]; orientation: Orientation | None; before: bool; share: float | None = None; area: Area | None = None
 @dataclass(frozen=True)
-class LayoutState: root: LayoutNode; hidden: Mapping[str, Anchor] = {}   # what's saved
+class LayoutState: areas: Mapping[Area, LayoutNode | None]; arrangement: Arrangement = SIDEBAR_LEFT
+                   sizes: tuple[int, int] | None = None; hidden: Mapping[str, Anchor] = {}   # what's saved
 ```
 
-- `to_dict` / `from_dict` turn a `LayoutState` into `{"version": 2, "root": …, "hidden":
-  {…}}` and back, so the saved format can be migrated. Version 1 (no `hidden`) still loads.
+**Areas** (RZG-69). The window has three areas: **Controls** (the bar across the top),
+the **Sidebar** and the **Main pane**. Every layout has all three: `LayoutState.areas`
+always holds the three keys, and an area whose panels all left it holds `None` (empty),
+never disappears. Each area holds a free tree of splits and tab groups, the
+`LayoutNode` below, and the tree functions work on one area's tree.
+- **Arrangement:** Controls is always across the top. Below it, the Sidebar sits left
+  (`SIDEBAR_LEFT`) or right (`SIDEBAR_RIGHT`) of the Main pane, or below it (`MAIN_TOP`).
+  The preset chooses the arrangement; the user moves panels, not areas. `sizes` is the
+  split between the Sidebar and the Main pane, Sidebar first (None: the preset's).
+- **Which area:** `state.area_of(panel_id) -> Area | None` (None: hidden or unknown), and
+  `LayoutHost.area_of` for what's on screen. RZG-55 asks it ("is History on the Main
+  pane?").
+- **Default area:** the area a panel has in `DEFAULT_LAYOUT` (`default_area(panel_id)`,
+  `layout_presets.py`). Panels don't declare one.
+- **Surfaces follow the area** (§7.2): Controls is on `CHROME`, the Sidebar on `SIDEBAR`,
+  the Main pane on `CONTENT` (`AREA_SURFACES`, in `layout_host.py`). A panel moved to
+  another area takes that area's surface.
+- **Edits of a whole state** are `LayoutState` methods, each returning a new state:
+  `normalized(known_ids)`, `hide(id)`, `show(id, fallback)`, `move(id, target, zone)`
+  (beside a panel, in the target's area), `move_to_area(id, area)` (into an empty area,
+  which the panel then fills) and `insert(id, anchor, fallback)`. They keep every area,
+  so the Main pane stays when its last panel leaves.
+- **Controls holds only the Controls panel:** it can't be moved (§6.2), and the Controls
+  area is never a drop target.
+
+- `to_dict` / `from_dict` turn a `LayoutState` into `{"version": 3, "arrangement": …,
+  "sizes": [s, m], "areas": {"controls": …, "sidebar": …, "main": …}, "hidden": {…}}` and
+  back, so the saved format can be migrated. An empty area is `null`. Versions 1 and 2 (one
+  tree for the whole window) are migrated as they load: `from_dict(data, default_area)`
+  passes them to `migrate_tree` (§6.3).
 - `normalize(node, known_ids)` drops unknown or duplicate panel ids, removes empty
   containers and collapses single-child splits. A saved layout from an older version can
   never crash the app. It just loses what no longer exists.
@@ -1540,37 +1575,56 @@ class LayoutState: root: LayoutNode; hidden: Mapping[str, Anchor] = {}   # what'
   "horizontal" | "vertical", "sizes": [...], "children": [...]}` (`sizes` optional) and
   `{"type": "tabs", "current": n, "children": [...]}`. A hidden panel's anchor:
   `{"neighbors": [...], "container": "horizontal" | "vertical" | "tabs", "before": bool,
-  "share": 0.3}` (`share` optional, dropped if it isn't between 0 and 1).
+  "share": 0.3, "area": "sidebar"}` (`share` optional, dropped if it isn't between 0 and 1;
+  `area` optional, dropped if unknown: the panel's default area). `neighbors` is empty for
+  a panel that was alone in its area: it comes back filling it. `normalized` runs
+  `normalize` on each area with one set of seen ids, so a panel in two areas keeps its
+  first place (Controls, Sidebar, Main pane).
 
-**Presets** (`layout_presets.py`, `PRESETS`) are named trees that show every panel. Each
-has the Controls panel across the top, above the arrangement described. In every preset,
-History and Diff are tabs of one group, with History current, and Commit Details below
+**Presets** (`layout_presets.py`, `PRESETS`) are named `LayoutState`s that show every
+panel. Each has the Controls panel alone in the Controls area, and an arrangement. The
+Main pane holds `MAIN` in every preset: History and Diff are tabs of one group, with History current, and Commit Details below
 the group in a vertical split of their own (`MAIN`: `Split(V, [Tabs([history, diff]),
 commit_details], sizes=(500, 220))`, RZG-65). Staged Files, Commit and Commit Files are
 directly below Unstaged Files (`files`), in that order:
-- **Standard** (`DEFAULT_LAYOUT`): Branches, Worktrees, Unstaged Files, Staged Files,
-  Commit, Commit Files and Stashes stacked in a left sidebar, History, Diff and Commit
-  Details on the right: `Split(V, [controls, Split(H, [Split(V, [branches, worktrees,
-  files, staged, commit, commit_files, stash], sizes=(180, 140, 220, 120, 160, 0, 170)),
-  MAIN], sizes=(220, 880))])`. Commit Files' size is 0 in every preset: it has no space of
-  its own (§6.2, swaps).
-- **Sidebar Tabs:** Branches, Worktrees, Unstaged Files and Stashes as tabs on the left, Staged
-  Files, Commit and Commit Files below the tabs; `MAIN` on the right.
-- **Stacked:** `MAIN` across the top; below, Branches with Worktrees and Stashes below it,
-  beside Unstaged Files, with Staged Files, Commit and Commit Files below it.
+- **Standard** (`DEFAULT_LAYOUT`, `SIDEBAR_LEFT`, sizes (220, 880)): the Sidebar holds
+  Branches, Worktrees, Unstaged Files, Staged Files, Commit, Commit Files and Stashes
+  stacked: `Split(V, [branches, worktrees, files, staged, commit, commit_files, stash],
+  sizes=(180, 140, 220, 120, 160, 0, 170))`. Commit Files' size is 0 in every preset: it
+  has no space of its own (§6.2, swaps).
+- **Sidebar Tabs** (`SIDEBAR_LEFT`): the Sidebar holds Branches, Worktrees, Unstaged Files
+  and Stashes as tabs, with Staged Files, Commit and Commit Files below the tabs.
+- **Stacked** (`MAIN_TOP`, sizes (370, 380)): the Main pane across the top; the Sidebar
+  below holds Branches with Worktrees and Stashes below it, beside Unstaged Files, with
+  Staged Files, Commit and Commit Files below it.
+
+`flatten(state)` (`layout_model.py`) is a state as one tree, the way versions 1 and 2 saved it:
+`Split(V, [controls, Split(H | V, [sidebar, main] in the arrangement's order)])`, without
+the empty areas. The host builds that same shape (§6.2), so the presets look as they did
+before areas.
 
 ### 6.2 LayoutHost
 
-`LayoutHost(QWidget)` (`layout/layout_host.py`) turns a tree into widgets:
-- `apply(node)` builds `QSplitter`s and `QTabWidget`s. It **reuses existing panel
-  instances** by id: they're re-parented, so lists, scroll positions and selection survive.
-  It creates missing panels through the registry and deletes panels no longer in the tree.
-- `current_layout() -> LayoutNode` reads splitter sizes and the current tab back into a tree.
-- It also holds the **hidden panels** and their anchors (§6.6): `apply_state(state)`,
-  `state() -> LayoutState`, `hide_panel(id)`, `show_panel(id)`, and `layout_changed` after
-  every change, which the menus follow.
+`LayoutHost(QWidget)` (`layout/layout_host.py`) turns a `LayoutState` into widgets:
+- `apply(state)` builds the areas, and in each its tree of `QSplitter`s and `QTabWidget`s.
+  It **reuses existing panel instances** by id: they're re-parented, so lists, scroll
+  positions and selection survive. It creates missing panels through the registry and
+  deletes panels no longer in the layout.
+- **The areas:** a vertical `QSplitter` holds the Controls area above a splitter of the
+  Sidebar and the Main pane, side by side or stacked by the arrangement, at the state's
+  `sizes` (an even split when it has none). Each area is an `AreaPane` on its area's
+  surface, holding its tree's widget, or nothing when it is empty. An empty Controls area
+  is left out (it can only be empty in a layout built by hand); an empty Sidebar or Main
+  pane keeps its space, shows its surface only, and never shrinks below
+  `EMPTY_AREA_MIN` (48 px), so it stays a drop target.
+- `state() -> LayoutState` reads splitter sizes, the current tabs and the split between
+  the areas back. `area_of(panel_id)` is the area a shown panel is in.
+- It also holds the **hidden panels** and their anchors (§6.6): `hide_panel(id)`,
+  `show_panel(id)`, and `layout_changed` after every change, which the menus follow.
 - In a split, each panel is wrapped in a `PanelFrame` (`layout/panel_frame.py`): a section
-  header plus the panel, with the panel's `surface` set as a style property. The header
+  header plus the panel. The host sets the area's `surface` as a style property on the
+  frame and on the panel, in splits and in tabs (`set_surface` repolishes the panel when it
+  changes, §7.2). The header
   has its own background (`header_bg`), not the surface's, so it reads as chrome like a
   tab bar; `LIGHT_THEME` gives it the tab bar's colour. In tabs, the
   tab label is the panel's `header` instead, and follows `header_changed`. A tab group
@@ -1583,7 +1637,7 @@ directly below Unstaged Files (`files`), in that order:
   beside; the one after, if it is first), and comes back from that pane when it is shown
   again, at the size it had: so Staged Files or Commit appearing takes its height from
   Unstaged Files (the nearest shown pane above), never from
-  Branches, and Commit Details takes its height from the History and Diff tabs above it. (If that pane can't spare it, Qt shares it out as usual.) `current_layout()`
+  Branches, and Commit Details takes its height from the History and Diff tabs above it. (If that pane can't spare it, Qt shares it out as usual.) `state()`
   reports the pane at that size, taken from the same pane, so a layout saved meanwhile
   brings it back at that size.
 - **Collapsing is batched:** the host applies the collapse changes of one moment together
@@ -1594,7 +1648,7 @@ directly below Unstaged Files (`files`), in that order:
   Files, Staged Files and Commit were (§5.4), and back. Otherwise each change lends or
   takes back space one pane at a time, as above. Tab visibility isn't batched.
   - The host remembers which shown panes **stand in** for which collapsed ones. A stand-in
-    has no size of its own (it collapses at 0), and `current_layout()` reads a swap as if
+    has no size of its own (it collapses at 0), and `state()` reads a swap as if
     swapped back, so a layout saved while a commit is selected is the working tree's.
   - Building a split applies the same rule: shown panes of size 0 next to collapsed panes
     with sizes take their space (a layout applied while a commit is selected); otherwise
@@ -1604,7 +1658,10 @@ directly below Unstaged Files (`files`), in that order:
   carries the panel id under its own MIME type. The host accepts the drop: the pane
   under the cursor (a frame, or a whole tab group, where the tab bar means `CENTER`) and
   `drop_zone` give the target, and `move_panel` the new tree, which `apply` shows (panels
-  keep their state). A `DropIndicator` overlay (`drop_indicator.py`), transparent to the mouse, fills the half
+  keep their state). A drop stays in the area of the pane under the cursor: an edge zone
+  puts the panel beside it, in that area. **An empty Sidebar or Main pane** is a target as
+  a whole: the panel fills it (`move_to_area`), and the indicator covers the area. The
+  Controls area is never a target. A `DropIndicator` overlay (`drop_indicator.py`), transparent to the mouse, fills the half
   of the pane the panel will take (all of it for tabs) with the theme's `accent` at low
   opacity and an accent border; it reads `ctx.theme.current` when painting, never a
   stylesheet. Panels with `movable = False` (Controls) can't be dragged and aren't
@@ -1618,8 +1675,8 @@ directly below Unstaged Files (`files`), in that order:
   menu of the panel's `header_actions`, follows `header_actions_changed`, and is made
   the first time the panel has actions (most have none), hidden while it has none again. In a tab group, right-clicking a panel's tab shows a menu of
   the same actions (`menu_for(index)`), and nothing when it has none.
-- An empty tree (everything dropped by `normalize`) shows an empty area. Falling back to
-  `DEFAULT_LAYOUT` is the loader's job (§6.3).
+- A layout with every area empty (everything dropped by `normalize`) shows the empty
+  areas. Falling back to `DEFAULT_LAYOUT` is the loader's job (§6.3).
 
 ### 6.3 Persistence
 
@@ -1673,8 +1730,9 @@ given on the command line is opened as usual and shows its error.
 On close, the window saves the host's `state()` (as JSON, so the format is ours) and its
 geometry (with several windows, each saves as it closes, so the last one closed wins): size and maximized state, plus position where the platform allows it (not on
 Wayland). With the layout it saves `layout_preset`: the title of the preset the layout
-is, if it is one (`matching_preset(state)`: the preset whose shape, without sizes or
-current tabs and with the saved hidden panels taken out, is the layout's), else None.
+is, if it is one (`matching_preset(state)`: the preset whose arrangement is the layout's,
+and whose areas, without sizes or current tabs and with the saved hidden panels taken
+out, have the layout's shapes), else None.
 
 **Built-in layouts follow the code; custom ones stay.** On start,
 `restore_layout(saved, preset)` in `layout_presets.py` (plain Python, no Qt) returns the
@@ -1683,12 +1741,13 @@ taken out) is no longer the saved layout's, the preset changed in code since: th
 preset is applied instead, with the same panels hidden (anchored in the new tree) and the
 preset's sizes. Otherwise, and for a custom layout (`preset` None: rearranged, or a saved
 named layout), the saved layout is used:
-- nothing saved, malformed data, or `normalize` leaves nothing → `DEFAULT_LAYOUT`, with a
-  logged warning for malformed data (no dialog);
+- nothing saved, malformed data, or `normalized` leaves every area empty →
+  `DEFAULT_LAYOUT`, with a logged warning for malformed data (no dialog);
 - a panel the user hid stays hidden (anchors of panels this version no longer has are
   dropped);
 - a panel that is neither shown nor hidden is new in this version: it's inserted at its
-  place in `DEFAULT_LAYOUT` (§6.6), and the rest of the user's layout is kept. When it
+  place in `DEFAULT_LAYOUT` (§6.6), in its default area, and the rest of the user's
+  layout is kept. When it
   joins a tab group, the tab the user had current stays current (a Diff tab added beside
   History doesn't hide History on the first start).
   - "Its place" is taken among the panels on screen (`default_anchor(id, shown)`), so two
@@ -1697,6 +1756,27 @@ named layout), the saved layout is used:
   - A split that gained new panels, and now holds the same panes as a split of a preset,
     takes that split's sizes; otherwise each new pane takes its share of its neighbour's
     space, and a second new pane would take a share of the first's.
+
+**Migrating to areas** (version 3, RZG-69). A layout saved as one tree (versions 1 and 2:
+the window's layout and saved layouts alike) is migrated as it loads
+(`migrate_tree(root, hidden, default_area)` in `layout_model.py`, given `default_area`
+by `restore_layout`), before the steps above:
+- **Each panel goes to its default area**, and each area's tree is the old tree with the
+  other areas' panels taken out (`remove_panel`), so it keeps its structure and sizes.
+  Controls goes to Controls; History, Diff and Commit Details to the Main pane; the rest
+  to the Sidebar.
+- **The arrangement** comes from the smallest split holding both Main pane and Sidebar
+  panels: side by side with the Main pane's panels after the Sidebar's → `SIDEBAR_LEFT`,
+  before → `SIDEBAR_RIGHT`; stacked → `MAIN_TOP`. With no such split (an area left
+  empty, or the two mixed in one tab group), `SIDEBAR_LEFT`.
+- **The split between the areas** keeps that split's sizes when it has two children, one
+  holding each area's panels (every preset); otherwise the default (None).
+- So a layout shaped like a preset becomes that preset in areas, with the same sizes and
+  the same panels hidden, and `layout_preset` still names it.
+- **A hidden panel's anchor** is kept, in the panel's default area, when one of its
+  neighbours is in that area; otherwise it's dropped, and showing the panel uses its
+  default place.
+- The migrated layout is written as version 3 the next time it's saved.
 
 **View → Reset Layout** applies `DEFAULT_LAYOUT` at once, showing every panel.
 
@@ -1742,7 +1822,12 @@ and tabs gives full control over the look, is plain data we can test, and is abo
 last visible panel can't be hidden. A hidden panel is deleted like any panel that leaves
 the tree, and a new one is created when it's shown again (it renders the current state, §5.2).
 
-Edits are pure functions in `layout_model.py`, tested without Qt:
+Edits are pure functions in `layout_model.py`, tested without Qt. `LayoutState.hide(id)`
+and `LayoutState.show(id, fallback)` work on a whole state: hiding takes the panel out of
+its area's tree and records the area in its anchor (`Anchor.area`); showing puts it back
+into that area (the fallback's area, the default area, when the anchor has none). Both
+leave every area in place, so the area of the last panel hidden stays, empty. Within an
+area's tree:
 - `remove_panel(root, id) -> (root, Anchor)`: the panel's share of space goes to its
   neighbours, and a split left with one child collapses into it. The **anchor** records
   where it sat: the panels of the node beside it (the next one, or the previous one if it
@@ -1753,17 +1838,19 @@ Edits are pure functions in `layout_model.py`, tested without Qt:
   its share of that node's space. If that node sits in a split of the same orientation,
   the panel joins that split; otherwise the node is wrapped in a new split (or tabs). If
   none of the neighbours is shown, it uses `fallback` (the panel's anchor in
-  `DEFAULT_LAYOUT`), and failing that the right-hand edge. A panel added to tabs becomes
+  `DEFAULT_LAYOUT`), and failing that the right-hand edge. An empty area's tree becomes
+  the panel alone. A panel added to tabs becomes
   the current tab, unless `make_current` is False (migration, §6.3).
 
 **Panels that are always shown** (`always_shown`, the Controls panel): `LayoutHost.apply`
-inserts one at its `DEFAULT_LAYOUT` place whenever a tree lacks it, so no preset, saved
+inserts one at its `DEFAULT_LAYOUT` place, in its default area, whenever a layout lacks it, so no preset, saved
 layout or edit can lose it; `hide_panel` refuses it, and its View → Panels entry stays
 checked but disabled. "The last visible panel" counts only panels that can be hidden.
 
 **Fixed-height panes** (`fixed_height`): in a vertical split, the host fixes the pane to the
 height the panel asks for, and disables the dividers beside it (no resize cursor). Used
-by the Controls panel, so the bar can't be dragged taller.
+by the Controls panel, so the bar can't be dragged taller. The Controls area is fixed the
+same way, to the height of its tree, when that tree holds only fixed-height panels.
 
 **Why anchors, not "the default place":** a panel hidden from a rearranged layout comes
 back where the user had it. The default place is only the fallback.
@@ -1870,7 +1957,8 @@ def colour_blind_theme(base: AppTheme) -> AppTheme   # LIGHT_THEME → LIGHT_CB_
 
 ### 7.2 Semantic roles
 
-`style_roles.py` defines `Surface` (SIDEBAR, CONTENT, CHROME) and `Role` (SECTION_HEADER,
+`style_roles.py` defines `Surface` (SIDEBAR, CONTENT, CHROME: one per layout area, which
+sets it, §6.1) and `Role` (SECTION_HEADER,
 SEGMENT_HEADER for the header strip of a segment inside a panel (§5.2),
 PLACEHOLDER for a muted "nothing to show" message, DIFF_VIEW for the borderless diff text,
 HINT and HINT_WARNING for a small muted note and the same past a limit, HEADER_MENU for
@@ -1880,7 +1968,9 @@ stylesheet targets those (`QWidget[surface="sidebar"]`). The theme decides what 
 looks like; panels only say what they are.
 
 A surface or role is added when a widget first needs it (`Surface.CHROME` came with the
-Controls panel: the toolbar's background), not ahead of time. A test checks that every
+Controls panel: the toolbar's background), not ahead of time. Panels don't set their own
+surface: the layout sets the surface of the area a panel is in (§6.1, RZG-69), on its
+frame and on the panel. A test checks that every
 value is used by the stylesheet, so a role can't be defined and forgotten.
 
 Roles style **widgets**. A widget that paints itself (`ColumnHeader`, the diff gutter)

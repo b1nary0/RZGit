@@ -45,12 +45,12 @@ class LayoutMenu(QMenu):
 
     def apply(self, preset: Preset) -> None:
         """Show ``preset``. Presets show every panel, so nothing stays hidden."""
-        self._host.apply(preset.root)
+        self._host.apply(preset.state)
 
     def open_saved(self, data: dict[str, Any]) -> None:
         """Show a saved layout, normalised like the layout at startup (its hidden
         panels stay hidden)."""
-        self._host.apply_state(restore_layout(data))
+        self._host.apply(restore_layout(data))
 
     def save_as(self) -> None:
         name = self.ask_name()
@@ -61,8 +61,6 @@ class LayoutMenu(QMenu):
         """Save the current layout as ``name``; ``False`` if refused or not confirmed."""
         name = name.strip()
         state = self._host.state()
-        if state is None:
-            return False
         if problem := layout_name_problem(name):
             self.show_problem(problem)
             return False

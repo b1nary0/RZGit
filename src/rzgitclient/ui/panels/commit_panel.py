@@ -22,7 +22,7 @@ from rzgitclient.core.git_commands import CommandKind, GitCommand
 from rzgitclient.core.repo_session import Refresh
 from rzgitclient.git.git_models import LastCommit
 from rzgitclient.ui.panels.panel import Panel
-from rzgitclient.ui.theme.style_roles import Role, Surface, set_role
+from rzgitclient.ui.theme.style_roles import Role, set_role
 
 SUBJECT_GUIDE = 50  # shown as "n/50"
 SUBJECT_WARNING = 72  # past this the counter turns to the warning colour
@@ -50,7 +50,6 @@ def split_message(message: str) -> tuple[str, str]:
 class CommitPanel(Panel):
     panel_id = "commit"
     title = "Commit"
-    surface = Surface.SIDEBAR
 
     # Built when the panel is first shown: it starts collapsed (no repo yet),
     # and many sessions never stage anything.

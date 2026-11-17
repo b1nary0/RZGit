@@ -27,7 +27,6 @@ class BranchNamesPanel(Panel):
 
     panel_id = "test-branches"
     title = "Branches"
-    surface = Surface.SIDEBAR
 
     _label: QLabel
 
@@ -66,9 +65,9 @@ class PanelTests(unittest.TestCase):
         self.assertEqual(panel.calls, ["setup", ("apply_theme", "Light", True)])
         self.assertIs(panel.ctx, self.ctx)
 
-    def test_surface_is_set_on_the_panel(self):
+    def test_a_panel_is_on_the_content_surface_until_the_layout_places_it(self):
         panel = BranchNamesPanel(self.ctx)
-        self.assertEqual(panel.property("surface"), "sidebar")
+        self.assertEqual(panel.property("surface"), str(Surface.CONTENT))
 
     def test_empty_state_then_follows_the_session(self):
         panel = BranchNamesPanel(self.ctx)

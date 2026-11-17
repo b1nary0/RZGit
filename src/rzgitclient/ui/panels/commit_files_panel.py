@@ -16,13 +16,11 @@ from rzgitclient.git.git_models import Commit, Stash
 from rzgitclient.ui.panels.file_list import FileList
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
-from rzgitclient.ui.theme.style_roles import Surface
 
 
 class CommitFilesPanel(Panel):
     panel_id = "commit_files"
     title = "Commit Files"
-    surface = Surface.SIDEBAR
 
     # Built when a commit is first selected: the panel starts collapsed.
     _list: FileList | None

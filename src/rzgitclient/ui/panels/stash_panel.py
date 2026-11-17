@@ -26,7 +26,7 @@ from rzgitclient.git.git_models import Commit, Stash
 from rzgitclient.ui.app_actions import StashOp
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
-from rzgitclient.ui.theme.style_roles import Role, Surface, set_role
+from rzgitclient.ui.theme.style_roles import Role, set_role
 from rzgitclient.ui.widgets.column_header import ColumnHeader
 
 NO_STASHES = "No stashes"
@@ -60,7 +60,6 @@ def age(date: datetime, now: datetime | None = None) -> str:
 class StashPanel(Panel):
     panel_id = "stash"
     title = "Stashes"
-    surface = Surface.SIDEBAR
 
     _tree: QTreeWidget
     _labels: ColumnHeader

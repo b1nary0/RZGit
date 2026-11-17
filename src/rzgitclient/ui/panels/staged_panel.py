@@ -13,13 +13,11 @@ from rzgitclient.git.git_models import FileStatus
 from rzgitclient.ui.panels.file_list import FileList
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
-from rzgitclient.ui.theme.style_roles import Surface
 
 
 class StagedPanel(Panel):
     panel_id = "staged"
     title = "Staged Files"
-    surface = Surface.SIDEBAR
 
     # Built when something is first staged: the panel starts collapsed (no
     # repo yet), and the list would only cost startup time (6 ms).

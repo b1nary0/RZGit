@@ -1,4 +1,4 @@
-"""Builds the window's panes from a layout tree (spec §6.2)."""
+"""Builds the window's areas and panes from a layout state (spec §6.2)."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from rzgitclient.ui.layout.layout_model import (
     Anchor,
+    Area,
     DropZone,
     LayoutNode,
     LayoutState,
@@ -27,18 +28,16 @@ from rzgitclient.ui.layout.layout_model import (
     PanelNode,
     SplitNode,
     TabsNode,
+    area_order,
+    area_orientation,
     drop_zone,
-    insert_panel,
-    move_panel,
-    normalize,
-    panel_ids,
-    remove_panel,
 )
 from rzgitclient.ui.layout.drop_indicator import DropIndicator, zone_rect
 from rzgitclient.ui.layout.layout_presets import default_anchor
 from rzgitclient.ui.layout.panel_frame import PanelFrame
 from rzgitclient.ui.panels.panel import Panel, PanelContext
 from rzgitclient.ui.panels.panel_registry import PANEL_TYPES, panel_type
+from rzgitclient.ui.theme.style_roles import Surface, set_surface
 
 _KNOWN_IDS = frozenset(t.panel_id for t in PANEL_TYPES)
 _ALWAYS_SHOWN = tuple(t.panel_id for t in PANEL_TYPES if t.always_shown)
@@ -49,6 +48,28 @@ _QT_ORIENTATION = {
 PANEL_MIME = "application/x-rzgitclient-panel"  # a dragged panel's id (§6.2)
 _DRAG_EVENTS = frozenset({QEvent.Type.DragEnter, QEvent.Type.DragMove,
                           QEvent.Type.DragLeave, QEvent.Type.Drop})
+# An empty area never shrinks below this, so it stays a drop target (spec §6.2).
+EMPTY_AREA_MIN = 48
+# Each area's background (spec §6.1, §7.2): its panels take it, wherever they came from.
+AREA_SURFACES = {Area.CONTROLS: Surface.CHROME, Area.SIDEBAR: Surface.SIDEBAR,
+                 Area.MAIN: Surface.CONTENT}
+
+
+class AreaPane(QWidget):
+    """One area (spec §6.2): its tree's widget on the area's surface, or, when
+    the area is empty, the surface alone."""
+
+    def __init__(self, area: Area, content: QWidget | None):
+        super().__init__()
+        self.area = area
+        self.content = content
+        set_surface(self, AREA_SURFACES[area])
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        if content is not None:
+            layout.addWidget(content)
+        else:
+            self.setMinimumSize(EMPTY_AREA_MIN, EMPTY_AREA_MIN)
 
 
 class LayoutHost(QWidget):
@@ -66,9 +87,10 @@ class LayoutHost(QWidget):
         super().__init__(parent)
         self._ctx = ctx
         self._panels: dict[str, Panel] = {}
-        self._tree: LayoutNode | None = None
-        self._hidden: dict[str, Anchor] = {}
-        self._containers: list[QSplitter | QTabWidget] = []  # in pre-order of _tree
+        self._state = LayoutState()  # as applied; state() reads the sizes back
+        # Each area's splitters and tabs, in pre-order of its tree.
+        self._containers: dict[Area, list[QSplitter | QTabWidget]] = {}
+        self._body: QSplitter | None = None  # the Sidebar and the Main pane
         # A collapsed panel's size in its split when it collapsed: what to save.
         self._collapsed_sizes: dict[str, int] = {}
         # Collapse changes in splits, applied together (§6.2): panel id → collapsed.
@@ -87,7 +109,7 @@ class LayoutHost(QWidget):
         # is running, and the tree to apply once it returns.
         self._press: tuple[QPoint, str] | None = None
         self._dragging = False
-        self._pending: LayoutNode | None = None
+        self._pending: LayoutState | None = None
         self._indicator = DropIndicator(ctx.theme, self)
         self.setAcceptDrops(True)
 
@@ -98,15 +120,11 @@ class LayoutHost(QWidget):
     @property
     def hidden(self) -> Mapping[str, Anchor]:
         """Hidden panels, and where each sat."""
-        return MappingProxyType(self._hidden)
+        return self._state.hidden
 
-    def apply_state(self, state: LayoutState) -> None:
-        self.apply(state.root, state.hidden)
-
-    def state(self) -> LayoutState | None:
-        """What to save: ``current_layout()`` plus the hidden panels."""
-        root = self.current_layout()
-        return LayoutState(root, self._hidden) if root is not None else None
+    def area_of(self, panel_id: str) -> Area | None:
+        """The area ``panel_id`` is shown in; None if it isn't shown (spec §6.1)."""
+        return self._state.area_of(panel_id)
 
     def can_hide(self, panel_id: str) -> bool:
         """Shown, not ``always_shown``, and not the last panel that could be hidden."""
@@ -115,37 +133,25 @@ class LayoutHost(QWidget):
 
     def hide_panel(self, panel_id: str) -> None:
         """Hide a shown panel, remembering where it sat (if ``can_hide``)."""
-        root = self.current_layout()
-        if root is None or not self.can_hide(panel_id):
-            return
-        root, anchor = remove_panel(root, panel_id)
-        assert root is not None and anchor is not None  # it wasn't the only panel
-        self.apply(root, {**self._hidden, panel_id: anchor})
+        if self.can_hide(panel_id):
+            self.apply(self.state().hide(panel_id))
 
     def show_panel(self, panel_id: str) -> None:
         """Show a panel where it sat when hidden, else at its default place."""
         if panel_id in self._panels or panel_id not in _KNOWN_IDS:
             return
-        hidden = dict(self._hidden)
-        anchor = hidden.pop(panel_id, None)
-        self.apply(insert_panel(self.current_layout(), panel_id, anchor,
-                                default_anchor(panel_id, self._panels)), hidden)
+        self.apply(self.state().show(panel_id, default_anchor(panel_id, self._panels)))
 
-    def apply(self, node: LayoutNode, hidden: Mapping[str, Anchor] | None = None) -> None:
-        """Show ``node``. ``hidden`` (default: none) is kept for panels not in it.
+    def apply(self, state: LayoutState) -> None:
+        """Show ``state``: its areas, and its hidden panels kept for later.
 
         A panel that is ``always_shown`` is added at its default place if
-        ``node`` lacks it (§6.6).
+        ``state`` lacks it (§6.6).
         """
-        tree = normalize(node, _KNOWN_IDS)
-        if tree is not None:
-            for panel_id in _ALWAYS_SHOWN:
-                tree = insert_panel(tree, panel_id, None,
-                                    default_anchor(panel_id, panel_ids(tree)))
-        wanted = set(panel_ids(tree))
-        self._hidden = {
-            pid: a for pid, a in (hidden or {}).items() if pid in _KNOWN_IDS and pid not in wanted
-        }
+        state = state.normalized(_KNOWN_IDS)
+        for panel_id in _ALWAYS_SHOWN:
+            state = state.insert(panel_id, None, default_anchor(panel_id, state.panel_ids()))
+        wanted = set(state.panel_ids())
 
         # Take every panel out of the old containers before they are deleted.
         for panel_id, panel in list(self._panels.items()):
@@ -157,11 +163,10 @@ class LayoutHost(QWidget):
             self._layout.removeWidget(self._root)
             self._root.deleteLater()
 
-        self._tree, self._containers = tree, []
+        self._state, self._containers = state, {}
         self._stand_ins, self._swapped_out = set(), set()
-        self._root = self._build(tree) if tree is not None else None
-        if self._root is not None:
-            self._layout.addWidget(self._root)
+        self._root = self._build_areas(state)
+        self._layout.addWidget(self._root)
         self.layout_changed.emit()
 
     # ---- drag and drop (§6.2) ---------------------------------------------
@@ -187,27 +192,31 @@ class LayoutHost(QWidget):
             self._dragging = False
             self._indicator.hide()
         # Only now: apply deletes the header or tab bar the drag started from.
-        tree, self._pending = self._pending, None
-        if tree is not None:
-            self.apply(tree, self._hidden)
+        state, self._pending = self._pending, None
+        if state is not None:
+            self.apply(state)
 
-    def drop_target(self, panel_id: str, pos: QPoint) -> tuple[LayoutNode, QRect] | None:
-        """Dropping ``panel_id`` at ``pos`` (host coordinates): the new tree, and the
-        area the panel would take. None if ``pos`` isn't a target or nothing changes."""
+    def drop_target(self, panel_id: str, pos: QPoint) -> tuple[LayoutState, QRect] | None:
+        """Dropping ``panel_id`` at ``pos`` (host coordinates): the new state, and the
+        part of the window the panel would take. None if ``pos`` isn't a target or
+        nothing changes."""
         dragged = self._panels.get(panel_id)
-        root = self.current_layout()
-        if dragged is None or not dragged.movable or root is None:
+        if dragged is None or not dragged.movable:
             return None
         pane = self._pane_at(pos, panel_id)
         if pane is None:
             return None
         widget, target, on_tab_bar = pane
         rect = QRect(widget.mapTo(self, QPoint(0, 0)), widget.size())
+        state = self.state()
+        if isinstance(widget, AreaPane):  # an empty area: the panel fills it
+            moved = state.move_to_area(panel_id, widget.area)
+            return None if moved is state else (moved, rect)
         zone = DropZone.CENTER if on_tab_bar else drop_zone(
             (pos.x() - rect.x()) / max(rect.width(), 1),
             (pos.y() - rect.y()) / max(rect.height(), 1))
-        tree = move_panel(root, panel_id, target, zone)
-        return None if tree is root else (tree, zone_rect(rect, zone))
+        moved = state.move(panel_id, target, zone)
+        return None if moved is state else (moved, zone_rect(rect, zone))
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         """Start a drag from a section header or a tab (installed in ``_build``),
@@ -264,9 +273,13 @@ class LayoutHost(QWidget):
 
     def _pane_at(self, pos: QPoint, dragged: str) -> tuple[QWidget, str, bool] | None:
         """The pane under ``pos``: its widget, the panel to drop beside, and whether
-        ``pos`` is on a tab bar. None over dividers, empty space or an unmovable panel."""
+        ``pos`` is on a tab bar; or an empty Sidebar or Main pane (an ``AreaPane``,
+        no panel). None over dividers or an unmovable panel (the Controls bar: an
+        empty Controls area is never built)."""
         widget, on_tab_bar = self.childAt(pos), False
         while widget is not None and widget is not self:
+            if isinstance(widget, AreaPane):
+                return (widget, "", False) if widget.content is None else None
             if isinstance(widget, QTabBar) and isinstance(widget.parentWidget(), _PanelTabs):
                 on_tab_bar = True
             if isinstance(widget, PanelFrame):
@@ -281,11 +294,23 @@ class LayoutHost(QWidget):
             widget = widget.parentWidget()
         return None
 
-    def current_layout(self) -> LayoutNode | None:
-        """The applied tree with the splitter sizes and current tabs as they are now."""
-        if self._tree is None:
+    def state(self) -> LayoutState:
+        """What to save: the applied state with the splitter sizes, current tabs and
+        the split between the Sidebar and the Main pane as they are now."""
+        areas = {a: self._current_tree(a) for a in Area}
+        sizes = self._state.sizes
+        if self._body is not None and sum(now := self._body.sizes()) > 0:
+            first, second = now
+            sizes = (first, second) if area_order(self._state.arrangement)[0] is Area.SIDEBAR \
+                else (second, first)
+        return dataclasses.replace(self._state, areas=areas, sizes=sizes)
+
+    def _current_tree(self, area: Area) -> LayoutNode | None:
+        """``area``'s applied tree with its splitter sizes and current tabs as they are now."""
+        tree = self._state.tree(area)
+        if tree is None:
             return None
-        containers = iter(self._containers)
+        containers = iter(self._containers[area])
 
         def read(node: LayoutNode) -> LayoutNode:
             match node:
@@ -299,7 +324,7 @@ class LayoutHost(QWidget):
                     return dataclasses.replace(node, current=next(containers).currentIndex())
             return node
 
-        return read(self._tree)
+        return read(tree)
 
     def _sizes(self, splitter: QSplitter) -> tuple[int, ...]:
         """The splitter's sizes, with each collapsed pane at its size when it
@@ -335,7 +360,7 @@ class LayoutHost(QWidget):
             self._collapse_queue[panel.panel_id] = collapsed
             self._collapse_timer.start()
             return
-        for tabs in self._containers:
+        for tabs in (c for area in self._containers.values() for c in area):
             if isinstance(tabs, _PanelTabs) and (index := tabs.indexOf(panel)) >= 0:
                 tabs.setTabVisible(index, not collapsed)
                 return
@@ -437,26 +462,54 @@ class LayoutHost(QWidget):
         for i, _ in collapsed:  # lent out from the start, as if it had collapsed
             sizes[:] = _lend(sizes, i, 0) or sizes
 
-    def _panel(self, panel_id: str) -> Panel:
+    def _panel(self, panel_id: str, area: Area) -> Panel:
+        """The panel, made if it's new, on ``area``'s surface."""
         panel = self._panels.get(panel_id)
         if panel is None:
             panel = self._panels[panel_id] = panel_type(panel_id)(self._ctx)
             panel.collapsed_changed.connect(self._on_collapsed)
+        set_surface(panel, AREA_SURFACES[area])  # repolished if it changed area
         return panel
 
-    def _build(self, node: LayoutNode) -> QWidget:
+    def _build_areas(self, state: LayoutState) -> QWidget:
+        """Controls above a split of the Sidebar and the Main pane, in the
+        arrangement's order; an empty Controls area is left out."""
+        def pane(area: Area) -> AreaPane:
+            tree = state.tree(area)
+            self._containers[area] = []
+            return AreaPane(area, self._build(tree, area) if tree is not None else None)
+
+        outer = QSplitter(Qt.Orientation.Vertical)
+        outer.setChildrenCollapsible(False)
+        if state.tree(Area.CONTROLS) is not None:
+            outer.addWidget(pane(Area.CONTROLS))
+        else:
+            self._containers[Area.CONTROLS] = []
+        body = self._body = QSplitter(_QT_ORIENTATION[area_orientation(state.arrangement)])
+        body.setChildrenCollapsible(False)
+        order = area_order(state.arrangement)
+        for area in order:
+            body.addWidget(pane(area))
+        # No sizes: an even split, so an empty area keeps its space too.
+        sizes = state.sizes or (1, 1)
+        body.setSizes(list(sizes if order[0] is Area.SIDEBAR else sizes[::-1]))
+        outer.addWidget(body)
+        _fix_heights(outer)
+        return outer
+
+    def _build(self, node: LayoutNode, area: Area) -> QWidget:
         match node:
             case PanelNode():
-                frame = PanelFrame(self._panel(node.panel_id))
+                frame = PanelFrame(self._panel(node.panel_id, area), AREA_SURFACES[area])
                 if frame.panel.movable:
                     frame.header.installEventFilter(self)
                 return frame
             case SplitNode():
                 splitter = QSplitter(_QT_ORIENTATION[node.orientation])
                 splitter.setChildrenCollapsible(False)
-                self._containers.append(splitter)
+                self._containers[area].append(splitter)
                 for child in node.children:
-                    splitter.addWidget(self._build(child))
+                    splitter.addWidget(self._build(child, area))
                 sizes = list(node.sizes) if node.sizes is not None else None
                 self._place_collapsed(splitter, sizes)
                 if sizes is not None:
@@ -467,9 +520,9 @@ class LayoutHost(QWidget):
             case TabsNode():
                 tabs = _PanelTabs()
                 tabs.tabBar().installEventFilter(self)
-                self._containers.append(tabs)
+                self._containers[area].append(tabs)
                 for child in node.children:
-                    panel = self._panel(child.panel_id)
+                    panel = self._panel(child.panel_id, area)
                     tabs.add_panel(panel)
                     if panel.collapsed:
                         tabs.setTabVisible(tabs.count() - 1, False)
@@ -519,11 +572,18 @@ def _lend(sizes: list[int], index: int, size: int) -> list[int] | None:
     return new
 
 
+def _fixed_height(widget: QWidget) -> bool:
+    """A pane of a ``fixed_height`` panel, or an area holding just one (Controls)."""
+    if isinstance(widget, AreaPane):
+        widget = widget.content
+    return isinstance(widget, PanelFrame) and widget.panel.fixed_height
+
+
 def _fix_heights(splitter: QSplitter) -> None:
     """Fix the panes of ``fixed_height`` panels, and lock the dividers beside them."""
     for i in range(splitter.count()):
         frame = splitter.widget(i)
-        if not (isinstance(frame, PanelFrame) and frame.panel.fixed_height):
+        if not _fixed_height(frame):
             continue
         frame.ensurePolished()
         frame.setFixedHeight(frame.sizeHint().height())

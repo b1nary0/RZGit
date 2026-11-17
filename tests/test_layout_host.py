@@ -1,10 +1,11 @@
+import dataclasses
 import tempfile
 import unittest
 from pathlib import Path
 
 from unittest import mock
 
-from PySide6.QtCore import QCoreApplication, QEvent, QMimeData, QPoint, QPointF, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QMimeData, QPoint, QPointF, QRect, Qt
 from PySide6.QtGui import (
     QColor,
     QDrag,
@@ -19,21 +20,45 @@ from PySide6.QtWidgets import QSplitter, QTabWidget
 from PySide6.QtGui import QAction
 
 from rzgitclient.ui.layout.layout_host import PANEL_MIME, LayoutHost, _drag_source
+from rzgitclient.ui.layout.layout_host import EMPTY_AREA_MIN, AreaPane
 from rzgitclient.ui.layout.layout_model import (
+    Anchor,
+    Area,
+    Arrangement,
     LayoutState,
     Orientation,
     PanelNode,
     SplitNode,
     TabsNode,
-    remove_panel,
 )
-from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
+from rzgitclient.ui.layout.layout_model import DropZone, panel_ids
+from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT, matching_preset
 from rzgitclient.ui.layout.panel_frame import PanelFrame
 from rzgitclient.ui.panels.history_model import SUBJECT_COLUMN
 from tests.support import commit_file, make_panel_context, make_repo, qt_app, wait_idle
 
 H, V = Orientation.HORIZONTAL, Orientation.VERTICAL
 TABS = TabsNode((PanelNode("history"), PanelNode("files")), current=1)
+
+
+def apply_to(host, layout, hidden=None):
+    """Apply a state, or a tree as the Main pane's (Controls joins it in its area),
+    with the empty Sidebar at its narrowest."""
+    if not isinstance(layout, LayoutState):
+        layout = LayoutState({Area.MAIN: layout}, sizes=(0, 1000), hidden=hidden or {})
+    host.apply(layout)
+
+
+def main_tree(host):
+    return host.state().tree(Area.MAIN)
+
+
+def area_content(host, area):
+    """The widget of ``area``'s tree, below the Controls bar or in it."""
+    root = host.layout().itemAt(0).widget()
+    panes = [root.widget(0), *(root.widget(1).widget(i) for i in range(2))]
+    [pane] = [p for p in panes if isinstance(p, AreaPane) and p.area is area]
+    return pane.content
 
 
 def flush_deletes():
@@ -63,24 +88,27 @@ class LayoutHostTests(unittest.TestCase):
         return self.host.layout().itemAt(0).widget()
 
     def body(self):
-        """What's below the Controls bar, which every layout gets (§6.6)."""
-        root = self.root()
-        self.assertIs(root.widget(0).panel, self.host.panels["controls"])
-        return root.widget(1)
+        """The Main pane's widget (Controls, which every layout gets, is above, §6.6)."""
+        self.assertIs(area_content(self.host, Area.CONTROLS).panel, self.host.panels["controls"])
+        return area_content(self.host, Area.MAIN)
+
+    def sidebar(self):
+        return area_content(self.host, Area.SIDEBAR)
 
     # ---- building -------------------------------------------------------
 
     def test_builds_the_default_layout(self):
-        self.host.apply(DEFAULT_LAYOUT)
+        apply_to(self.host, DEFAULT_LAYOUT)
         self.assertEqual(set(self.host.panels), {"controls", "branches", "worktrees", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
 
         top = self.root()
         self.assertEqual(top.orientation(), Qt.Orientation.Vertical)
-        root = self.body()
-        self.assertIsInstance(root, QSplitter)
-        self.assertEqual(root.orientation(), Qt.Orientation.Horizontal)
-        self.assertFalse(root.childrenCollapsible())
-        sidebar, content = root.widget(0), root.widget(1)
+        areas = top.widget(1)  # below the Controls area
+        self.assertIsInstance(areas, QSplitter)
+        self.assertEqual(areas.orientation(), Qt.Orientation.Horizontal)
+        self.assertFalse(areas.childrenCollapsible())
+        self.assertEqual([areas.widget(i).area for i in range(2)], [Area.SIDEBAR, Area.MAIN])
+        sidebar, content = self.sidebar(), self.body()
         self.assertEqual(sidebar.orientation(), Qt.Orientation.Vertical)
         frames = [sidebar.widget(0), sidebar.widget(1), sidebar.widget(2)]
         self.assertTrue(all(isinstance(f, PanelFrame) for f in frames))
@@ -98,7 +126,7 @@ class LayoutHostTests(unittest.TestCase):
                          ["staged", "commit", "commit_files"])
 
     def test_tabs_use_the_panel_header_and_follow_it(self):
-        self.host.apply(TABS)
+        apply_to(self.host, TABS)
         tabs = self.body()
         self.assertIsInstance(tabs, QTabWidget)
         self.assertEqual([tabs.tabText(i) for i in range(2)], ["History", "Unstaged Files"])
@@ -106,25 +134,39 @@ class LayoutHostTests(unittest.TestCase):
         self.host.panels["files"].set_header("Files (3)")
         self.assertEqual(tabs.tabText(1), "Files (3)")
 
-    def test_unknown_panels_are_dropped_and_empty_tree_shows_nothing(self):
-        self.host.apply(SplitNode(H, (PanelNode("history"), PanelNode("nope"))))
+    def test_unknown_panels_are_dropped_and_an_empty_area_shows_its_surface(self):
+        apply_to(self.host, SplitNode(H, (PanelNode("history"), PanelNode("nope"))))
         self.assertEqual(set(self.host.panels), {"controls", "history"})
         self.assertIsInstance(self.body(), PanelFrame)  # single-child split collapsed
+        self.assertIsNone(self.sidebar())  # empty, but there
+        self.assertEqual(area_content(self.host, Area.MAIN).parentWidget().property("surface"),
+                         "content")
 
-        self.host.apply(PanelNode("nope"))  # nothing left: not even the Controls bar
-        self.assertEqual(dict(self.host.panels), {})
-        self.assertIsNone(self.host.current_layout())
-        self.assertEqual(self.host.layout().count(), 0)
+    def test_an_empty_area_keeps_its_space_without_saved_sizes(self):
+        self.host.apply(LayoutState({Area.MAIN: PanelNode("history")}))  # no sizes
+        self.show()
+        areas = self.root().widget(1)
+        # An even split, as far as History's own minimum width allows: not just a strip.
+        self.assertGreater(areas.sizes()[0], sum(areas.sizes()) // 3)
+        areas.setSizes([0, sum(areas.sizes())])  # dragged as far as it goes
+        self.assertEqual(areas.sizes()[0], EMPTY_AREA_MIN)
+
+    def test_every_area_is_built_even_when_every_panel_is_gone(self):
+        self.host.apply(LayoutState({Area.MAIN: PanelNode("nope")}))
+        self.assertEqual(dict(self.host.panels), {"controls": self.host.panels["controls"]})
+        self.assertIsNone(self.body())
+        self.assertIsNone(self.sidebar())
+        self.assertEqual(set(self.host.state().areas), set(Area))
 
     # ---- re-applying ----------------------------------------------------
 
     def test_reapplying_reuses_panels_and_deletes_dropped_ones(self):
-        self.host.apply(DEFAULT_LAYOUT)
+        apply_to(self.host, DEFAULT_LAYOUT)
         history, files = self.host.panels["history"], self.host.panels["files"]
         deleted = []
         self.host.panels["branches"].destroyed.connect(lambda: deleted.append("branches"))
 
-        self.host.apply(TABS)
+        apply_to(self.host, TABS)
         flush_deletes()
         self.assertIs(self.host.panels["history"], history)
         self.assertIs(self.host.panels["files"], files)
@@ -140,12 +182,12 @@ class LayoutHostTests(unittest.TestCase):
         self.ctx.session.open(repo)
         wait_idle(self.ctx.session)
 
-        self.host.apply(DEFAULT_LAYOUT)
+        apply_to(self.host, DEFAULT_LAYOUT)
         self.show()
         history = self.host.panels["history"]
         history._view.setCurrentIndex(history._model.index(2, SUBJECT_COLUMN))  # row 0: Uncommitted
 
-        self.host.apply(TabsNode((PanelNode("files"), PanelNode("history")), current=1))
+        apply_to(self.host, TabsNode((PanelNode("files"), PanelNode("history")), current=1))
         flush_deletes()
         self.app.processEvents()
         self.assertEqual(history._view.currentIndex().data(), "first")
@@ -153,7 +195,7 @@ class LayoutHostTests(unittest.TestCase):
         self.assertTrue(history.isVisible())
         self.assertFalse(self.host.panels["files"].isVisible())  # the other tab
 
-        self.host.apply(DEFAULT_LAYOUT)  # back from tabs to frames
+        apply_to(self.host, DEFAULT_LAYOUT)  # back from tabs to frames
         flush_deletes()
         self.app.processEvents()
         # Only Diff, History's other tab, and the collapsed Unstaged Files, Staged
@@ -163,8 +205,8 @@ class LayoutHostTests(unittest.TestCase):
                          {"diff", "files", "staged", "commit", "worktrees"})
 
     def test_header_changes_after_moving_out_of_tabs(self):
-        self.host.apply(TABS)
-        self.host.apply(DEFAULT_LAYOUT)
+        apply_to(self.host, TABS)
+        apply_to(self.host, DEFAULT_LAYOUT)
         flush_deletes()  # the old tabs are gone; their connection must be too
         files = self.host.panels["files"]
         files.set_header("Files (2)")
@@ -177,7 +219,7 @@ class LayoutHostTests(unittest.TestCase):
     def test_hide_and_show_a_panel_where_it_was(self):
         changes = []
         self.host.layout_changed.connect(lambda: changes.append(1))
-        self.host.apply(DEFAULT_LAYOUT)
+        apply_to(self.host, DEFAULT_LAYOUT)
         self.show()
         self.host.hide_panel("files")
         flush_deletes()
@@ -187,13 +229,13 @@ class LayoutHostTests(unittest.TestCase):
 
         self.host.show_panel("files")
         self.assertEqual(self.host.hidden, {})
-        sidebar = self.body().widget(0)
+        sidebar = self.sidebar()
         self.assertEqual([sidebar.widget(i).panel.panel_id for i in range(3)],
                          ["branches", "worktrees", "files"])
         self.assertEqual(len(changes), 3)  # apply, hide, show
 
     def test_the_last_panel_can_not_be_hidden(self):
-        self.host.apply(PanelNode("history"))
+        apply_to(self.host, PanelNode("history"))
         self.assertFalse(self.host.can_hide("history"))  # Controls doesn't count
         self.host.hide_panel("history")
         self.assertEqual(set(self.host.panels), {"controls", "history"})
@@ -201,44 +243,64 @@ class LayoutHostTests(unittest.TestCase):
         self.assertEqual(self.host.hidden, {})
 
     def test_an_always_shown_panel_can_not_be_hidden_or_left_out(self):
-        self.host.apply(DEFAULT_LAYOUT)
+        apply_to(self.host, DEFAULT_LAYOUT)
         self.assertFalse(self.host.can_hide("controls"))
         self.host.hide_panel("controls")
         self.assertIn("controls", self.host.panels)
-        _, anchor = remove_panel(DEFAULT_LAYOUT, "controls")
-        self.host.apply_state(LayoutState(DEFAULT_LAYOUT.children[1], {"controls": anchor}))
+        apply_to(self.host, DEFAULT_LAYOUT.hide("controls"))
         self.assertIn("controls", self.host.panels)  # put back, at its default place
         self.assertEqual(self.host.hidden, {})
 
     def test_controls_bar_has_no_header_and_a_fixed_height(self):
-        self.host.apply(DEFAULT_LAYOUT)
+        apply_to(self.host, DEFAULT_LAYOUT)
         self.show()
         top = self.root()
         bar = top.widget(0)
-        self.assertFalse(bar.header.isVisible())
+        self.assertFalse(bar.content.header.isVisible())
         self.assertEqual(bar.minimumHeight(), bar.maximumHeight())
         self.assertFalse(top.handle(1).isEnabled())  # its divider can't be dragged
         top.setSizes([300, 299])
         self.assertEqual(top.sizes()[0], bar.maximumHeight())
-        self.assertTrue(self.body().widget(0).widget(0).header.isVisible())  # others keep theirs
+        self.assertIsInstance(bar, AreaPane)  # the Controls area holds the bar alone
+        self.assertIs(bar.content.panel, self.host.panels["controls"])
+        self.assertTrue(self.sidebar().widget(0).header.isVisible())  # others keep theirs
 
     def test_a_panel_hidden_without_an_anchor_goes_to_its_default_place(self):
-        self.host.apply(SplitNode(H, (PanelNode("branches"), PanelNode("history"))))
+        apply_to(self.host, LayoutState({Area.SIDEBAR: PanelNode("branches"),
+                                         Area.MAIN: PanelNode("history")}))
         self.host.show_panel("files")  # never hidden, e.g. new in this version
-        self.assertEqual(self.body().widget(0).orientation(), Qt.Orientation.Vertical)
+        self.assertEqual(main_tree(self.host), PanelNode("history"))
+        sidebar = self.host.state().tree(Area.SIDEBAR)
+        self.assertEqual((sidebar.orientation, panel_ids(sidebar)), (V, ["branches", "files"]))
         self.assertEqual(set(self.host.panels), {"controls", "branches", "files", "history"})
 
+    def test_a_panel_comes_back_to_the_area_it_was_hidden_from(self):
+        apply_to(self.host, LayoutState({Area.SIDEBAR: PanelNode("files"), Area.MAIN: SplitNode(
+            H, (PanelNode("history"), PanelNode("branches")))}))
+        self.host.hide_panel("branches")
+        self.assertEqual(self.host.hidden["branches"].area, Area.MAIN)
+        self.host.show_panel("branches")
+        self.assertEqual(self.host.area_of("branches"), Area.MAIN)
+
+    def test_area_of(self):
+        apply_to(self.host, DEFAULT_LAYOUT)
+        self.assertEqual(self.host.area_of("history"), Area.MAIN)
+        self.assertEqual(self.host.area_of("files"), Area.SIDEBAR)
+        self.assertEqual(self.host.area_of("controls"), Area.CONTROLS)
+        self.host.hide_panel("history")
+        self.assertIsNone(self.host.area_of("history"))
+
     def test_a_panel_asking_to_be_activated_becomes_the_current_tab(self):
-        self.host.apply(DEFAULT_LAYOUT)
-        tabs = self.body().widget(1).widget(0)
+        apply_to(self.host, DEFAULT_LAYOUT)
+        tabs = self.body().widget(0)
         self.host.panels["diff"].request_activation()
         self.assertEqual(tabs.currentWidget(), self.host.panels["diff"])
         self.host.panels["history"].request_activation()
         self.assertEqual(tabs.currentWidget(), self.host.panels["history"])
 
     def test_activation_follows_a_panel_into_new_tabs_and_is_harmless_in_a_split(self):
-        self.host.apply(DEFAULT_LAYOUT)
-        self.host.apply(SplitNode(H, (PanelNode("history"), TabsNode(
+        apply_to(self.host, DEFAULT_LAYOUT)
+        apply_to(self.host, SplitNode(H, (PanelNode("history"), TabsNode(
             (PanelNode("files"), PanelNode("diff"), PanelNode("branches"))))))
         flush_deletes()  # the old tabs, and their connections, are gone
         tabs = self.body().widget(1)
@@ -248,12 +310,13 @@ class LayoutHostTests(unittest.TestCase):
         self.assertEqual(tabs.currentIndex(), 1)
 
     def test_apply_keeps_hidden_only_for_panels_not_shown(self):
-        _, anchor = remove_panel(DEFAULT_LAYOUT, "files")
-        self.host.apply(DEFAULT_LAYOUT, {"files": anchor, "nope": anchor})
+        anchor = Anchor(("branches",), V, False)
+        apply_to(self.host, dataclasses.replace(DEFAULT_LAYOUT, hidden={"files": anchor,
+                                                                        "nope": anchor}))
         self.assertEqual(self.host.hidden, {})  # files is shown; nope isn't a panel
-        self.host.apply_state(LayoutState(PanelNode("history"), {"files": anchor}))
+        apply_to(self.host, PanelNode("history"), {"files": anchor})
         self.assertEqual(set(self.host.hidden), {"files"})
-        self.host.apply(PanelNode("history"))  # a preset or reset forgets hidden panels
+        apply_to(self.host, PanelNode("history"))  # a preset or reset forgets hidden panels
         self.assertEqual(self.host.hidden, {})
 
     # ---- collapsed panels (§5.1) ------------------------------------------
@@ -266,7 +329,7 @@ class LayoutHostTests(unittest.TestCase):
     SIDE = SplitNode(H, (PanelNode("history"), PanelNode("commit")), sizes=(500, 300))
 
     def test_a_collapsed_pane_lends_its_space_and_takes_it_back(self):
-        self.host.apply(self.SIDE)
+        apply_to(self.host, self.SIDE)
         self.show()
         commit = self.host.panels["commit"]
         commit.set_collapsed(False)
@@ -283,34 +346,34 @@ class LayoutHostTests(unittest.TestCase):
         self.assertEqual(splitter.sizes(), before)
 
     def test_a_layout_read_while_collapsed_keeps_the_pane_s_size(self):
-        self.host.apply(self.SIDE)
+        apply_to(self.host, self.SIDE)
         self.show()
         commit = self.host.panels["commit"]
         commit.set_collapsed(False)
         self.settle()
-        before = self.host.current_layout()
+        before = main_tree(self.host)
         commit.set_collapsed(True)
         self.settle()
-        read = self.host.current_layout()
-        self.assertEqual(read.children[1].children, before.children[1].children)
-        for got, want in zip(read.children[1].sizes, before.children[1].sizes):
+        read = main_tree(self.host)
+        self.assertEqual(read.children, before.children)
+        for got, want in zip(read.sizes, before.sizes):
             self.assertAlmostEqual(got, want, delta=1)
 
     def test_a_panel_collapsed_from_the_start_comes_back_at_its_saved_size(self):
-        self.host.apply(self.SIDE)  # nothing staged: Commit is collapsed
+        apply_to(self.host, self.SIDE)  # nothing staged: Commit is collapsed
         self.show()
         splitter = self.body()
         self.assertFalse(splitter.widget(1).isVisible())
-        self.assertEqual(self.host.current_layout().children[1].sizes[1], 300)
+        self.assertEqual(main_tree(self.host).sizes[1], 300)
         self.host.panels["commit"].set_collapsed(False)
         self.settle()
         self.assertTrue(splitter.widget(1).isVisible())
-        self.assertAlmostEqual(splitter.sizes()[1] / sum(splitter.sizes()), 300 / 800, delta=0.01)
+        self.assertAlmostEqual(splitter.sizes()[1], 300, delta=3)
 
     def test_a_collapsing_pane_lends_its_space_to_the_pane_above(self):
         tree = SplitNode(V, (PanelNode("branches"), PanelNode("files"), PanelNode("commit")),
                          sizes=(150, 250, 150))
-        self.host.apply(SplitNode(H, (tree, PanelNode("history"))))  # Commit starts collapsed
+        apply_to(self.host, SplitNode(H, (tree, PanelNode("history"))))  # Commit starts collapsed
         self.show()
         column = self.body().widget(0)
         branches, files, commit = column.sizes()
@@ -321,14 +384,14 @@ class LayoutHostTests(unittest.TestCase):
         self.host.panels["commit"].set_collapsed(True)
         self.settle()
         self.assertEqual(column.sizes(), [branches, files, 0])  # Files took it back
-        read = self.host.current_layout().children[1].children[0]
+        read = main_tree(self.host).children[0]
         self.assertEqual(read.sizes[0], branches)
         self.assertEqual(read.sizes[2], 150)
 
     def test_a_swap_gives_the_freed_space_to_the_panes_shown_and_back(self):
         column = SplitNode(V, (PanelNode("branches"), PanelNode("files"), PanelNode("staged"),
                                PanelNode("commit_files")), sizes=(150, 250, 150, 300))
-        self.host.apply(SplitNode(H, (column, PanelNode("history"))))
+        apply_to(self.host, SplitNode(H, (column, PanelNode("history"))))
         self.show()
         panels = self.host.panels
         panels["staged"].set_collapsed(False)
@@ -355,27 +418,27 @@ class LayoutHostTests(unittest.TestCase):
     def test_a_swap_reads_as_swapped_back_and_survives_a_rebuild(self):
         column = SplitNode(V, (PanelNode("branches"), PanelNode("files"),
                                PanelNode("commit_files")), sizes=(150, 400, 0))
-        self.host.apply(SplitNode(H, (column, PanelNode("history"))))
+        apply_to(self.host, SplitNode(H, (column, PanelNode("history"))))
         self.show()
         panels = self.host.panels
         panels["commit_files"].set_collapsed(True)
         self.settle()
-        before = self.host.current_layout()
+        before = main_tree(self.host)
         panels["files"].set_collapsed(True)  # a commit is selected
         panels["commit_files"].set_collapsed(False)
         self.settle()
-        read = self.host.current_layout()
+        read = main_tree(self.host)
         self.assertEqual(read, before)  # as if swapped back: Commit Files has no size
-        self.host.apply(read)  # e.g. after hiding another panel
+        apply_to(self.host, read)  # e.g. after hiding another panel
         self.settle()
         splitter = self.body().widget(0)
         self.assertFalse(splitter.widget(1).isVisible())
         self.assertTrue(splitter.widget(2).isVisible())
         self.assertGreater(splitter.sizes()[2], 300)  # in Unstaged Files' place
-        self.assertEqual(self.host.current_layout(), before)
+        self.assertEqual(main_tree(self.host), before)
 
     def test_a_change_undone_in_the_same_moment_does_nothing(self):
-        self.host.apply(self.SIDE)
+        apply_to(self.host, self.SIDE)
         self.show()
         commit = self.host.panels["commit"]
         commit.set_collapsed(False)
@@ -387,7 +450,7 @@ class LayoutHostTests(unittest.TestCase):
         self.assertEqual(self.body().sizes(), before)
 
     def test_a_collapsed_tab_is_hidden_and_the_panel_stays_in_the_layout(self):
-        self.host.apply(TabsNode((PanelNode("history"), PanelNode("commit"))))
+        apply_to(self.host, TabsNode((PanelNode("history"), PanelNode("commit"))))
         self.show()
         tabs = self.body()
         self.assertFalse(tabs.isTabVisible(1))
@@ -400,37 +463,74 @@ class LayoutHostTests(unittest.TestCase):
 
     # ---- reading back ---------------------------------------------------
 
-    def test_current_layout_reads_sizes_and_current_tab(self):
+    def test_the_state_reads_sizes_and_current_tab(self):
         tree = SplitNode(H, (PanelNode("branches"), TABS), sizes=(200, 599))
-        self.host.apply(tree)
+        apply_to(self.host, tree)
         self.show()
         splitter = self.body()
         tabs = splitter.widget(1)
-        splitter.setSizes([300, 499])
+        total = sum(splitter.sizes())
+        splitter.setSizes([300, total - 300])
         tabs.setCurrentIndex(0)
 
-        read = self.host.current_layout()
-        self.assertEqual(read.children[0], PanelNode("controls"))
-        self.assertEqual(read.children[1], SplitNode(
-            H, (PanelNode("branches"), TabsNode(TABS.children, current=0)), sizes=(300, 499)
+        read = main_tree(self.host)
+        self.assertEqual(read, SplitNode(
+            H, (PanelNode("branches"), TabsNode(TABS.children, current=0)),
+            sizes=(300, total - 300)
         ))
 
         # Applying what was read back restores it.
-        self.host.apply(read)
+        apply_to(self.host, read)
         self.app.processEvents()
-        self.assertEqual(self.host.current_layout(), read)
+        self.assertEqual(main_tree(self.host), read)
 
-    def test_current_layout_of_the_default_keeps_its_shape(self):
-        self.host.apply(DEFAULT_LAYOUT)
+    def test_the_state_of_the_default_keeps_its_shape(self):
+        apply_to(self.host, DEFAULT_LAYOUT)
         self.show()
-        read = self.host.current_layout()
-        strip = lambda n: (  # noqa: E731
-            SplitNode(n.orientation, tuple(strip(c) for c in n.children))
-            if isinstance(n, SplitNode) else n
-        )
-        self.assertEqual(strip(read), strip(DEFAULT_LAYOUT))
-        self.assertEqual(sum(read.children[1].sizes) + 1, 800)  # the 1px divider takes the rest
-        self.assertEqual(sum(read.sizes) + 1, 600)
+        read = self.host.state()
+        self.assertEqual(matching_preset(read), "Standard")
+        self.assertEqual(sum(read.sizes) + 1, 800)  # the 1px divider takes the rest
+        # Commit Details is collapsed: its divider is hidden too.
+        self.assertEqual(sum(read.tree(Area.MAIN).sizes), self.body().height())
+
+    def test_the_state_reads_the_split_between_the_areas_sidebar_first(self):
+        for arrangement in Arrangement:
+            with self.subTest(arrangement):
+                apply_to(self.host, dataclasses.replace(
+                    DEFAULT_LAYOUT, arrangement=arrangement, sizes=(200, 599)))
+                self.show()
+                areas = self.root().widget(1)
+                self.assertEqual(areas.orientation(), Qt.Orientation.Vertical
+                                 if arrangement is Arrangement.MAIN_TOP
+                                 else Qt.Orientation.Horizontal)
+                first = Area.SIDEBAR if arrangement is Arrangement.SIDEBAR_LEFT else Area.MAIN
+                self.assertIs(areas.widget(0).area, first)
+                total = sum(areas.sizes())
+                areas.setSizes([200, total - 200])
+                now = areas.sizes()
+                self.assertEqual(self.host.state().sizes,
+                                 tuple(now if first is Area.SIDEBAR else now[::-1]))
+
+    def test_surfaces_follow_the_area(self):
+        """RZG-69: a panel takes its area's surface, in a split or in tabs, and a new
+        one when it moves (spec §6.1, §7.2)."""
+        apply_to(self.host, DEFAULT_LAYOUT)
+        self.show()
+        panels = self.host.panels
+        surfaces = {pid: panels[pid].property("surface") for pid in ("controls", "files", "diff")}
+        self.assertEqual(surfaces, {"controls": "chrome", "files": "sidebar", "diff": "content"})
+        self.assertEqual(panels["files"].parentWidget().property("surface"), "sidebar")
+        apply_to(self.host, DEFAULT_LAYOUT.move("files", "history", DropZone.CENTER))
+        files = panels["files"]
+        self.assertEqual(files.property("surface"), "content")
+        apply_to(self.host, DEFAULT_LAYOUT.move("history", "branches", DropZone.BOTTOM))
+        self.app.processEvents()
+        self.assertEqual(panels["history"].property("surface"), "sidebar")
+        self.assertEqual(panels["history"].parentWidget().property("surface"), "sidebar")
+        # The stylesheet follows: a list inside takes the sidebar's colours.
+        view = panels["history"]._view
+        self.assertEqual(view.palette().color(view.backgroundRole()).name(),
+                         self.ctx.theme.current.colors.sidebar_bg)
 
 
 class HeaderMenuHostTests(unittest.TestCase):
@@ -448,7 +548,7 @@ class HeaderMenuHostTests(unittest.TestCase):
         self.addCleanup(self.host.deleteLater)
 
     def test_right_clicking_a_tab_shows_its_panel_s_actions(self):
-        self.host.apply(TABS)
+        apply_to(self.host, TABS)
         history = self.host.panels["history"]
         action = QAction("Sort by Date", history)
         history.set_header_actions([action])
@@ -459,7 +559,7 @@ class HeaderMenuHostTests(unittest.TestCase):
         self.assertIsNone(tabs.menu_for(-1))
 
     def test_a_press_on_the_button_starts_no_drag(self):
-        self.host.apply(SplitNode(H, (PanelNode("branches"), PanelNode("history"))))
+        apply_to(self.host, SplitNode(H, (PanelNode("branches"), PanelNode("history"))))
         history = self.host.panels["history"]
         history.set_header_actions([QAction("One", history)])
         frame = history.parentWidget()
@@ -479,7 +579,7 @@ class DragDropTests(unittest.TestCase):
         self.ctx = make_panel_context()
         self.host = LayoutHost(self.ctx)
         self.host.resize(800, 600)
-        self.host.apply(SplitNode(H, (PanelNode("history"), PanelNode("files")), sizes=(400, 400)))
+        apply_to(self.host, SplitNode(H, (PanelNode("history"), PanelNode("files")), sizes=(400, 400)))
         self.host.show()
         self.app.processEvents()
 
@@ -532,7 +632,7 @@ class DragDropTests(unittest.TestCase):
                                      self.send(QDropEvent, panel_id, pos)))
 
     def body(self):
-        return self.host.current_layout().children[1]  # below the Controls bar
+        return main_tree(self.host)
 
     def test_an_edge_shows_the_indicator_and_the_drop_splits_beside_it(self):
         history = self.host.panels["history"]
@@ -550,16 +650,16 @@ class DragDropTests(unittest.TestCase):
             self.assertEqual(self.body().children[0], PanelNode("history"))  # not yet
 
         self.drag("history", during)
-        # History's old row collapses into Files, so the two stack below Controls.
-        root = self.host.current_layout()
+        # History's old row collapses into Files, so the two stack.
+        root = main_tree(self.host)
         self.assertEqual((root.orientation, [c.panel_id for c in root.children]),
-                         (V, ["controls", "files", "history"]))
+                         (V, ["files", "history"]))
         self.assertIs(self.host.panels["history"], history)  # the same panel, state kept
 
     def test_the_centre_and_the_tab_bar_make_tabs(self):
         self.drop("history", self.at("files", 0.5, 0.5))
         self.assertEqual(self.body(), TabsNode((PanelNode("files"), PanelNode("history")), 1))
-        self.host.apply(SplitNode(H, (TABS, PanelNode("branches"))))
+        apply_to(self.host, SplitNode(H, (TABS, PanelNode("branches"))))
         self.app.processEvents()
         tab_bar = self.pane("history").tabBar()
         self.drop("branches", tab_bar.mapTo(self.host, tab_bar.rect().center()))
@@ -567,7 +667,7 @@ class DragDropTests(unittest.TestCase):
             (PanelNode("history"), PanelNode("files"), PanelNode("branches")), 2))
 
     def test_controls_is_not_a_target_and_can_not_be_dropped(self):
-        before = self.host.current_layout()
+        before = main_tree(self.host)
         controls = self.host.panels["controls"].parentWidget()
         pos = controls.mapTo(self.host, controls.rect().center())
 
@@ -577,12 +677,60 @@ class DragDropTests(unittest.TestCase):
             self.send(QDropEvent, "history", pos)
 
         self.drag("history", during)
-        self.assertEqual(self.host.current_layout(), before)
+        self.assertEqual(main_tree(self.host), before)
         self.assertIsNone(self.host.drop_target("controls", self.at("files", 0.5, 0.9)))
         with mock.patch.object(self.host, "drag_panel") as drag:
             header = self.pane("controls").header
             self.press_and_move(header, QPoint(5, 5))
             drag.assert_not_called()
+
+    def area_pane(self, area):
+        root = self.host.layout().itemAt(0).widget()
+        panes = [root.widget(0), root.widget(1).widget(0), root.widget(1).widget(1)]
+        return next(p for p in panes if p.area is area)
+
+    def test_an_empty_area_is_a_target_as_a_whole_and_the_panel_fills_it(self):
+        """RZG-69: the Sidebar is empty here (everything is in the Main pane)."""
+        pane = self.area_pane(Area.SIDEBAR)
+        self.assertIsNone(pane.content)
+        pos = pane.mapTo(self.host, QPoint(pane.width() // 2, pane.height() // 4))
+
+        def during():
+            self.assertTrue(self.drag_to("files", pos).isAccepted())
+            self.assertEqual(self.host._indicator.geometry(),
+                             QRect(pane.mapTo(self.host, QPoint(0, 0)), pane.size()))
+            self.send(QDropEvent, "files", pos)
+
+        self.drag("files", during)
+        self.assertEqual(self.host.state().tree(Area.SIDEBAR), PanelNode("files"))
+        self.assertEqual(self.body(), PanelNode("history"))
+        self.assertEqual(self.host.panels["files"].property("surface"), "sidebar")
+
+    def test_the_last_panel_can_leave_the_main_pane_which_stays_empty_and_a_target(self):
+        apply_to(self.host, LayoutState({Area.SIDEBAR: PanelNode("files"),
+                                         Area.MAIN: PanelNode("history")}))
+        self.app.processEvents()
+        self.drop("history", self.at("files", 0.5, 0.9))  # into the Sidebar, below Files
+        self.assertIsNone(self.body())
+        self.assertEqual(panel_ids(self.host.state().tree(Area.SIDEBAR)), ["files", "history"])
+        self.app.processEvents()
+        pane = self.area_pane(Area.MAIN)
+        self.drop("history", pane.mapTo(self.host, pane.rect().center()))  # and back
+        self.assertEqual(self.body(), PanelNode("history"))
+
+    def test_an_edge_drop_stays_in_the_target_s_area(self):
+        apply_to(self.host, LayoutState({Area.SIDEBAR: PanelNode("files"),
+                                         Area.MAIN: SplitNode(V, (PanelNode("history"),
+                                                                  PanelNode("diff")))}))
+        self.app.processEvents()
+        self.drop("files", self.at("history", 0.05, 0.5))  # the left edge, by the Sidebar
+        self.assertEqual(self.host.area_of("files"), Area.MAIN)
+        self.assertIsNone(self.host.state().tree(Area.SIDEBAR))
+
+    def test_the_controls_area_is_not_a_target(self):
+        pane = self.area_pane(Area.CONTROLS)
+        pos = pane.mapTo(self.host, pane.rect().center())
+        self.assertIsNone(self.host.drop_target("history", pos))
 
     def test_its_own_pane_is_not_a_target(self):
         def during():
@@ -591,10 +739,10 @@ class DragDropTests(unittest.TestCase):
         self.drag("history", during)
 
     def test_drag_events_are_left_alone_when_no_panel_drag_runs(self):
-        before = self.host.current_layout()
+        before = main_tree(self.host)
         self.assertFalse(self.drag_to("history", self.at("files", 0.9, 0.5)).isAccepted())
         self.send(QDropEvent, "history", self.at("files", 0.9, 0.5))
-        self.assertEqual(self.host.current_layout(), before)
+        self.assertEqual(main_tree(self.host), before)
 
     def test_the_indicator_is_painted_in_the_theme_s_accent(self):
         seen = {}
@@ -623,7 +771,7 @@ class DragDropTests(unittest.TestCase):
             header = self.pane("files").header
             self.press_and_move(header, header.rect().center())
             drag.assert_called_once_with("files")
-        self.host.apply(SplitNode(H, (TABS, PanelNode("branches"))))
+        apply_to(self.host, SplitNode(H, (TABS, PanelNode("branches"))))
         self.app.processEvents()
         tab_bar = self.pane("history").tabBar()
         with mock.patch.object(self.host, "drag_panel") as drag:
@@ -631,7 +779,7 @@ class DragDropTests(unittest.TestCase):
             drag.assert_called_once_with("history")
 
     def test_a_cancelled_drag_leaves_the_layout_as_it_was(self):
-        before = self.host.current_layout()
+        before = main_tree(self.host)
         changed = mock.Mock()
         self.host.layout_changed.connect(changed)
 
@@ -641,7 +789,7 @@ class DragDropTests(unittest.TestCase):
 
         self.drag("history", cancel, Qt.DropAction.IgnoreAction)
         changed.assert_not_called()
-        self.assertEqual(self.host.current_layout(), before)
+        self.assertEqual(main_tree(self.host), before)
         self.assertFalse(self.host._indicator.isVisible())
 
 if __name__ == "__main__":

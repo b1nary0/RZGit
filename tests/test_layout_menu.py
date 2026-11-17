@@ -9,21 +9,19 @@ from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.ui.layout.layout_host import LayoutHost
 from rzgitclient.ui.layout.layout_menu import LayoutMenu
 from rzgitclient.ui.layout.layout_model import (
+    Area,
     LayoutState,
+    Orientation,
     PanelNode,
     SplitNode,
-    remove_panel,
+    flatten,
     to_dict,
 )
-from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT, PRESETS
+from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT, PRESETS, matching_preset
 from tests.support import make_panel_context, qt_app
 
 
-def shape(node):
-    """The tree without sizes: the host reports the splitters' real pixel sizes."""
-    if isinstance(node, SplitNode):
-        return SplitNode(node.orientation, tuple(shape(c) for c in node.children))
-    return node
+V = Orientation.VERTICAL
 
 
 class LayoutMenuTests(unittest.TestCase):
@@ -81,16 +79,26 @@ class LayoutMenuTests(unittest.TestCase):
         self.assertEqual(self.host.hidden, {})
         self.action("Review").trigger()
         self.assertEqual(set(self.host.hidden), {"branches"})
-        self.assertEqual(shape(self.host.current_layout()),
-                         shape(remove_panel(DEFAULT_LAYOUT, "branches")[0]))
+        self.assertEqual(matching_preset(self.host.state()), "Standard")
+        self.assertIsNone(self.host.area_of("branches"))
 
     def test_a_saved_layout_with_an_unknown_panel_still_opens(self):
-        data = to_dict(LayoutState(SplitNode(DEFAULT_LAYOUT.orientation,
-                                             (*DEFAULT_LAYOUT.children, PanelNode("gone")))))
+        main = SplitNode(V, (DEFAULT_LAYOUT.tree(Area.MAIN), PanelNode("gone")))
+        data = to_dict(DEFAULT_LAYOUT.with_tree(Area.MAIN, main))
         self.settings.saved_layouts = [("Old", data)]
         self.menu.rebuild()
         self.action("Old").trigger()
-        self.assertEqual(shape(self.host.current_layout()), shape(DEFAULT_LAYOUT))
+        self.assertEqual(matching_preset(self.host.state()), "Standard")
+
+    def test_a_saved_layout_from_before_areas_opens_in_areas(self):
+        """RZG-69: saved as one tree (version 2), it is migrated as it opens."""
+        old = {"version": 2, "hidden": {}, "root": to_dict(LayoutState(
+            {Area.MAIN: flatten(PRESETS[2].state)}))["areas"]["main"]}
+        self.settings.saved_layouts = [("Old", old)]
+        self.menu.rebuild()
+        self.action("Old").trigger()
+        self.assertEqual(matching_preset(self.host.state()), "Stacked")
+        self.assertEqual(self.host.area_of("history"), Area.MAIN)
 
     def test_saving_over_a_saved_name_asks_and_keeps_its_place(self):
         self.settings.saved_layouts = [("Review", {"old": 1}), ("Other", {})]
@@ -121,14 +129,14 @@ class LayoutMenuTests(unittest.TestCase):
         self.assertNotIn("Review", self.texts())
 
     def test_choosing_a_preset_shows_it_with_every_panel(self):
-        self.host.apply(PanelNode("history"), {})
+        self.host.apply(LayoutState({Area.MAIN: PanelNode("history")}))
         self.host.show_panel("files")
         self.host.hide_panel("files")
         self.assertEqual(set(self.host.hidden), {"files"})
         for action, preset in zip(self.menu.actions(), PRESETS):
             with self.subTest(preset.title):
                 action.trigger()
-                self.assertEqual(shape(self.host.current_layout()), shape(preset.root))
+                self.assertEqual(matching_preset(self.host.state()), preset.title)
                 self.assertEqual(self.host.hidden, {})
 
 

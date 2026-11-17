@@ -12,7 +12,6 @@ from tests.support import make_panel_context, qt_app
 class FilesLikePanel(Panel):
     panel_id = "test-files"
     title = "Files"
-    surface = Surface.SIDEBAR
 
     def _setup(self):
         QLabel("content", self)
@@ -27,7 +26,7 @@ class PanelFrameTests(unittest.TestCase):
         self.panel = FilesLikePanel(make_panel_context())
 
     def test_header_shows_title_and_panel_sits_below_it(self):
-        frame = PanelFrame(self.panel)
+        frame = PanelFrame(self.panel, Surface.SIDEBAR)
         self.assertEqual(frame.header.text(), "FILES")
         self.assertIs(self.panel.parentWidget(), frame)
         layout = frame.layout()
@@ -37,24 +36,24 @@ class PanelFrameTests(unittest.TestCase):
         )
 
     def test_header_follows_header_changed(self):
-        frame = PanelFrame(self.panel)
+        frame = PanelFrame(self.panel, Surface.SIDEBAR)
         self.panel.set_header("Files (19)")
         self.assertEqual(frame.header.text(), "FILES (19)")
 
     def test_new_frame_shows_the_latest_header(self):
         # A reused panel re-wrapped by the layout keeps its dynamic header.
         self.panel.set_header("Files (19)")
-        frame = PanelFrame(self.panel)
+        frame = PanelFrame(self.panel, Surface.SIDEBAR)
         self.assertEqual(frame.header.text(), "FILES (19)")
 
-    def test_frame_takes_the_panel_surface(self):
-        frame = PanelFrame(self.panel)
+    def test_frame_takes_the_surface_it_is_given(self):
+        frame = PanelFrame(self.panel, Surface.SIDEBAR)
         self.assertEqual(frame.property("surface"), "sidebar")
 
     def test_renders_header_on_its_own_background_above_the_surface(self):
         from rzgitclient.ui.theme.app_theme import LIGHT_THEME
 
-        frame = PanelFrame(self.panel)
+        frame = PanelFrame(self.panel, Surface.SIDEBAR)
         frame.resize(200, 100)
         frame.show()
         self.app.processEvents()
@@ -78,7 +77,7 @@ class HeaderMenuTests(unittest.TestCase):
 
     def setUp(self):
         self.panel = FilesLikePanel(make_panel_context())
-        self.frame = PanelFrame(self.panel)
+        self.frame = PanelFrame(self.panel, Surface.SIDEBAR)
         self.frame.resize(300, 200)
         self.frame.show()
         self.addCleanup(self.frame.deleteLater)

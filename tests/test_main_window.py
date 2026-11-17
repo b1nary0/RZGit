@@ -13,6 +13,7 @@ from rzgitclient.core.selection import FileSelection, FileSource
 from rzgitclient.git.git_models import DiffSource, HistoryOrder
 from rzgitclient.git.repo import Repo
 from rzgitclient.ui.layout.layout_model import (
+    Area,
     LayoutState,
     Orientation,
     PanelNode,
@@ -39,9 +40,20 @@ def bright_share(image, step=3):
 
 
 def strip_sizes(node):
+    """A state's arrangement, areas and hidden panels, without sizes (the host
+    reports the splitters' real pixel sizes)."""
+    if isinstance(node, LayoutState):
+        return (node.arrangement, {a: strip_sizes(t) for a, t in node.areas.items()},
+                dict(node.hidden))
     if isinstance(node, SplitNode):
         return SplitNode(node.orientation, tuple(strip_sizes(c) for c in node.children))
     return node
+
+
+def legacy(tree):
+    """``tree`` saved as versions before areas saved a layout (version 2)."""
+    root = to_dict(LayoutState({Area.MAIN: tree}))["areas"]["main"]
+    return {"version": 2, "root": root, "hidden": {}}
 
 
 class MainWindowTests(unittest.TestCase):
@@ -74,8 +86,8 @@ class MainWindowTests(unittest.TestCase):
         window.settings.sync()
 
     def sizes(self, window):
-        body = window.layout_host.current_layout().children[1]  # below the Controls bar
-        return body.sizes, body.children[0].sizes
+        state = window.layout_host.state()
+        return state.sizes, state.tree(Area.SIDEBAR).sizes
 
     def body(self, window):
         return window.layout_host.layout().itemAt(0).widget().widget(1)
@@ -122,7 +134,7 @@ class MainWindowTests(unittest.TestCase):
 
     def test_first_start_uses_the_default_layout(self):
         window = self.start()
-        self.assertEqual(strip_sizes(window.layout_host.current_layout()), strip_sizes(DEFAULT_LAYOUT))
+        self.assertEqual(strip_sizes(window.layout_host.state()), strip_sizes(DEFAULT_LAYOUT))
 
     def test_layout_and_window_size_come_back_after_a_restart(self):
         window = self.start()
@@ -130,7 +142,7 @@ class MainWindowTests(unittest.TestCase):
         self.app.processEvents()
         root = self.body(window)
         root.setSizes([250, 449])
-        root.widget(0).setSizes([150, 200])
+        root.widget(0).content.setSizes([150, 200])
         before = self.sizes(window)
         self.quit(window)
 
@@ -142,7 +154,7 @@ class MainWindowTests(unittest.TestCase):
         self.settings_path.write_text('[General]\nlayout="{broken"\n')
         with self.assertLogs("rzgitclient.core.app_settings", "WARNING"):
             window = self.start()
-        self.assertEqual(strip_sizes(window.layout_host.current_layout()), strip_sizes(DEFAULT_LAYOUT))
+        self.assertEqual(strip_sizes(window.layout_host.state()), strip_sizes(DEFAULT_LAYOUT))
 
     def test_reset_layout_restores_the_default_and_keeps_panels(self):
         window = self.start()
@@ -151,9 +163,9 @@ class MainWindowTests(unittest.TestCase):
         window.ctx.actions.reset_layout.trigger()
         self.app.processEvents()
         self.assertIs(window.layout_host.panels["history"], history)
-        read = window.layout_host.current_layout()
+        read = window.layout_host.state()
         self.assertEqual(strip_sizes(read), strip_sizes(DEFAULT_LAYOUT))
-        self.assertNotEqual(read.children[1].sizes[0], 500)
+        self.assertNotEqual(read.sizes[0], 500)
 
     def test_a_hidden_panel_stays_hidden_after_a_restart(self):
         window = self.start()
@@ -163,7 +175,7 @@ class MainWindowTests(unittest.TestCase):
         again = self.start()
         self.assertEqual(set(again.layout_host.panels), {"controls", "worktrees", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
         again.layout_host.show_panel("branches")  # and comes back where it was
-        self.assertEqual(strip_sizes(again.layout_host.current_layout()), strip_sizes(DEFAULT_LAYOUT))
+        self.assertEqual(strip_sizes(again.layout_host.state()), strip_sizes(DEFAULT_LAYOUT))
 
     def test_no_toolbar_the_controls_panel_has_its_buttons(self):
         window = self.start()
@@ -429,19 +441,21 @@ class MainWindowTests(unittest.TestCase):
         old = SplitNode(Orientation.VERTICAL, (PanelNode("controls"), SplitNode(
             Orientation.HORIZONTAL, (PanelNode("branches"), PanelNode("history"),
                                      PanelNode("diff")))))
-        settings.layout = to_dict(LayoutState(old))
+        settings.layout = legacy(old)
         settings.sync()
         again = self.start()
-        self.assertEqual(strip_sizes(again.layout_host.current_layout()), strip_sizes(DEFAULT_LAYOUT))
+        self.assertEqual(strip_sizes(again.layout_host.state()), strip_sizes(DEFAULT_LAYOUT))
         self.quit(again)
 
         settings = AppSettings(self.settings_path)
-        settings.layout, settings.layout_preset = to_dict(LayoutState(old)), None  # custom
+        settings.layout, settings.layout_preset = legacy(old), None  # custom
         settings.sync()
         third = self.start()
-        self.assertEqual(
-            [type(c).__name__ for c in third.layout_host.current_layout().children[1].children],
-            ["SplitNode", "PanelNode", "PanelNode"])  # still History beside Diff
+        main = third.layout_host.state().tree(Area.MAIN)  # Commit Details, new, below
+        self.assertEqual(main.children[0], SplitNode(  # still History beside Diff
+            Orientation.HORIZONTAL, (PanelNode("history"), PanelNode("diff")), sizes=(
+                main.children[0].sizes)))
+        self.assertEqual(third.layout_host.area_of("branches"), Area.SIDEBAR)
         self.quit(third)
         self.assertIsNone(AppSettings(self.settings_path).layout_preset)
 
@@ -601,8 +615,9 @@ class MainWindowTests(unittest.TestCase):
         window.show_worktrees()
         self.assertIn("worktrees", window.layout_host.panels)
         self.assertEqual(window.layout_host.hidden, {})
-        window.layout_host.apply(SplitNode(Orientation.HORIZONTAL, (
-            TabsNode((PanelNode("branches"), PanelNode("worktrees"))), PanelNode("history"))))
+        window.layout_host.apply(LayoutState({
+            Area.SIDEBAR: TabsNode((PanelNode("branches"), PanelNode("worktrees"))),
+            Area.MAIN: PanelNode("history")}))
         tabs = window.layout_host.panels["worktrees"].parentWidget().parentWidget()
         self.assertEqual(tabs.currentIndex(), 0)
         window.show_worktrees()

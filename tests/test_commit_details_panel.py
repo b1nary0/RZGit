@@ -11,7 +11,6 @@ from PySide6.QtWidgets import QWidget
 from rzgitclient.ui.panels import commit_details_panel
 from rzgitclient.ui.panels.commit_details_panel import CommitDetailsPanel, format_date, full_date
 from rzgitclient.ui.theme.app_theme import DARK_THEME
-from rzgitclient.ui.theme.style_roles import Surface
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 
@@ -235,10 +234,6 @@ class CommitDetailsPanelTests(unittest.TestCase):
         self.panel.show()
         for _ in range(3):
             QCoreApplication.processEvents()
-
-    def test_the_content_surface(self):
-        """RZG-65: it sits in the main pane."""
-        self.assertEqual(self.panel.surface, Surface.CONTENT)
 
     def test_wide_details_is_a_column_beside_the_message(self):
         """RZG-65: over WIDE px, the message on the left and Details on the right."""

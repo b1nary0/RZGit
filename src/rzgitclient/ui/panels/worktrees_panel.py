@@ -26,7 +26,7 @@ from rzgitclient.git.git_models import Worktree, WorktreeState
 from rzgitclient.ui.app_actions import WorktreeOp
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
-from rzgitclient.ui.theme.style_roles import Role, Surface, set_role
+from rzgitclient.ui.theme.style_roles import Role, set_role
 from rzgitclient.ui.widgets.column_header import ColumnHeader
 
 NO_WORKTREES = "No worktrees"
@@ -107,7 +107,6 @@ def sync_tooltip(state: WorktreeState | None) -> str:
 class WorktreesPanel(Panel):
     panel_id = "worktrees"
     title = "Worktrees"
-    surface = Surface.SIDEBAR
 
     # The list is built the first time there is something to choose from (or an
     # error to show): most repositories have one worktree, and it costs startup time.

@@ -12,13 +12,11 @@ from rzgitclient.core.selection import FileSource
 from rzgitclient.ui.panels.file_list import FileList
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
-from rzgitclient.ui.theme.style_roles import Surface
 
 
 class FilesPanel(Panel):
     panel_id = "files"  # its id from before Staged Files had a panel: saved layouts keep it
     title = "Unstaged Files"
-    surface = Surface.SIDEBAR
 
     _list: FileList
 

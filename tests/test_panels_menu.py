@@ -3,7 +3,13 @@ import unittest
 from PySide6.QtCore import QCoreApplication, QEvent
 
 from rzgitclient.ui.layout.layout_host import LayoutHost
-from rzgitclient.ui.layout.layout_model import PanelNode, SplitNode, Orientation
+from rzgitclient.ui.layout.layout_model import (
+    Area,
+    LayoutState,
+    Orientation,
+    PanelNode,
+    SplitNode,
+)
 from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
 from rzgitclient.ui.layout.panels_menu import PanelsMenu
 from rzgitclient.ui.panels.panel_registry import PANEL_TYPES
@@ -46,7 +52,8 @@ class PanelsMenuTests(unittest.TestCase):
         self.assertEqual(self.checked(), {"controls", "branches", "worktrees", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
 
     def test_follows_layout_changes_made_elsewhere(self):
-        self.host.apply(SplitNode(Orientation.HORIZONTAL, (PanelNode("files"), PanelNode("history"))))
+        self.host.apply(LayoutState({Area.MAIN: SplitNode(
+            Orientation.HORIZONTAL, (PanelNode("files"), PanelNode("history")))}))
         self.assertEqual(self.checked(), {"controls", "files", "history"})
 
     def test_the_last_visible_panel_can_not_be_unchecked(self):

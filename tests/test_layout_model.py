@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import subprocess
 import sys
@@ -5,6 +6,8 @@ import unittest
 
 from rzgitclient.ui.layout.layout_model import (
     Anchor,
+    Area,
+    Arrangement,
     DropZone,
     LayoutError,
     LayoutState,
@@ -14,6 +17,7 @@ from rzgitclient.ui.layout.layout_model import (
     TabsNode,
     anchor_of,
     drop_zone,
+    flatten,
     from_dict,
     insert_panel,
     move_panel,
@@ -22,7 +26,9 @@ from rzgitclient.ui.layout.layout_model import (
     remove_panel,
     to_dict,
 )
-from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
+from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT as DEFAULT_STATE
+
+DEFAULT_LAYOUT = flatten(DEFAULT_STATE)  # the tree functions work on one tree
 
 H, V = Orientation.HORIZONTAL, Orientation.VERTICAL
 A, B, C = PanelNode("a"), PanelNode("b"), PanelNode("c")
@@ -30,95 +36,293 @@ KNOWN = {"a", "b", "c"}
 
 
 def root(node: dict, hidden: dict | None = None) -> dict:
+    """A version 2 layout: one tree."""
     return {"version": 2, "root": node, "hidden": hidden or {}}
 
 
+def areas(sidebar: dict | None = None, main: dict | None = None, hidden: dict | None = None,
+          controls: dict | None = None, **extra) -> dict:
+    """A version 3 layout."""
+    return {"version": 3, "arrangement": "sidebar_left",
+            "areas": {"controls": controls, "sidebar": sidebar, "main": main},
+            "hidden": hidden or {}, **extra}
+
+
 def tree_of(data: dict):
-    return from_dict(data).root
+    return from_dict(data).tree(Area.SIDEBAR)
 
 
 def panel(pid: str) -> dict:
     return {"type": "panel", "panel_id": pid}
 
 
+def state(sidebar=None, main=None, controls=None, **kwargs) -> LayoutState:
+    return LayoutState({Area.CONTROLS: controls, Area.SIDEBAR: sidebar, Area.MAIN: main},
+                       **kwargs)
+
+
+# For migration: a, b in the Sidebar, c in the Main pane, x in Controls.
+AREA_OF = {"a": Area.SIDEBAR, "b": Area.SIDEBAR, "c": Area.MAIN, "x": Area.CONTROLS}.get
+X = PanelNode("x")
+
+
 class SerialisationTests(unittest.TestCase):
     def test_round_trip_through_json(self):
-        trees = (
-            DEFAULT_LAYOUT,
-            A,
-            SplitNode(V, (A, TabsNode((B, C), current=1))),
-            SplitNode(H, (A, SplitNode(V, (B, C), sizes=(1, 2))), sizes=(0, 5)),
+        hidden = {"c": Anchor(("a", "b"), V, True, 0.25, Area.MAIN),
+                  "d": Anchor(("a",), None, False), "e": Anchor((), None, False, None, Area.MAIN)}
+        states = (
+            DEFAULT_STATE,
+            state(A),
+            state(SplitNode(V, (A, TabsNode((B, C), current=1))), arrangement=Arrangement.MAIN_TOP),
+            state(None, SplitNode(H, (A, SplitNode(V, (B, C), sizes=(1, 2))), sizes=(0, 5)),
+                  sizes=(10, 20), arrangement=Arrangement.SIDEBAR_RIGHT),
+            state(),
         )
-        for tree in trees:
-            with self.subTest(tree=tree):
-                state = LayoutState(tree, {"c": Anchor(("a", "b"), V, True, 0.25),
-                                           "d": Anchor(("a",), None, False)})
-                data = json.loads(json.dumps(to_dict(state)))
-                self.assertEqual(from_dict(data), state)
-
-    def test_version_1_loads_with_nothing_hidden(self):
-        self.assertEqual(from_dict({"version": 1, "root": panel("a")}), LayoutState(A))
+        for s in states:
+            with self.subTest(state=s):
+                s = dataclasses.replace(s, hidden=hidden)
+                data = json.loads(json.dumps(to_dict(s)))
+                self.assertEqual(from_dict(data), s)
 
     def test_anchor_shape(self):
-        data = to_dict(LayoutState(A, {"b": Anchor(("a",), None, True),
-                                       "c": Anchor(("a", "b"), H, False, 0.5)}))
+        data = to_dict(state(A, hidden={"b": Anchor(("a",), None, True),
+                                        "c": Anchor(("a", "b"), H, False, 0.5, Area.MAIN)}))
         self.assertEqual(data["hidden"], {
             "b": {"neighbors": ["a"], "container": "tabs", "before": True},
-            "c": {"neighbors": ["a", "b"], "container": "horizontal", "before": False, "share": 0.5},
+            "c": {"neighbors": ["a", "b"], "container": "horizontal", "before": False,
+                  "share": 0.5, "area": "main"},
         })
 
     def test_bad_share_is_dropped_not_rejected(self):
         for share in (0, 1, 1.5, -0.2, "0.5", True, None):
             with self.subTest(share=share):
                 anchor = {"neighbors": ["a"], "container": "vertical", "before": True, "share": share}
-                self.assertEqual(from_dict(root(panel("a"), {"b": anchor})).hidden["b"].share, None)
+                self.assertEqual(from_dict(areas(panel("a"), hidden={"b": anchor})).hidden["b"].share, None)
+
+    def test_an_unknown_anchor_area_is_dropped_not_rejected(self):
+        for area in ("toolbar", 3, None):
+            with self.subTest(area=area):
+                anchor = {"neighbors": ["a"], "container": "tabs", "before": True, "area": area}
+                self.assertIsNone(from_dict(areas(panel("a"), hidden={"b": anchor})).hidden["b"].area)
 
     def test_shape(self):
-        data = to_dict(LayoutState(SplitNode(H, (A, TabsNode((B,))), sizes=(1, 2))))
-        self.assertEqual(data, root({
+        data = to_dict(state(SplitNode(H, (A, TabsNode((B,))), sizes=(1, 2)), sizes=(3, 4)))
+        self.assertEqual(data, areas({
             "type": "split", "orientation": "horizontal", "sizes": [1, 2],
             "children": [panel("a"), {"type": "tabs", "current": 0, "children": [panel("b")]}],
-        }))
+        }, sizes=[3, 4]))
+
+    def test_every_area_is_written_an_empty_one_as_null(self):
+        self.assertEqual(to_dict(state())["areas"],
+                         {"controls": None, "sidebar": None, "main": None})
+
+    def test_a_missing_area_loads_empty(self):
+        data = areas(panel("a"))
+        del data["areas"]["main"]
+        self.assertIsNone(from_dict(data).tree(Area.MAIN))
 
     def test_structural_errors_raise_layout_error(self):
         bad = {
             "not an object": [],
-            "missing version": {"root": panel("a")},
-            "wrong version": {"version": 3, "root": panel("a"), "hidden": {}},
-            "missing root": {"version": 1},
-            "missing hidden": {"version": 2, "root": panel("a")},
-            "anchor not an object": root(panel("a"), {"b": "a"}),
-            "anchor without neighbors": root(panel("a"), {"b": {
-                "neighbors": [], "container": "tabs", "before": True}}),
-            "unknown anchor container": root(panel("a"), {"b": {
+            "missing version": {"areas": {}},
+            "wrong version": {**areas(panel("a")), "version": 4},
+            "missing areas": {"version": 3, "arrangement": "sidebar_left", "hidden": {}},
+            "missing arrangement": {"version": 3, "areas": {}, "hidden": {}},
+            "unknown arrangement": {**areas(panel("a")), "arrangement": "diagonal"},
+            "unknown area": {**areas(panel("a")), "areas": {"toolbar": panel("a")}},
+            "area not a node": {**areas(panel("a")), "areas": {"main": "a"}},
+            "missing hidden": {"version": 3, "arrangement": "sidebar_left", "areas": {}},
+            "anchor not an object": areas(panel("a"), hidden={"b": "a"}),
+            "anchor neighbors not ids": areas(panel("a"), hidden={"b": {
+                "neighbors": [1], "container": "tabs", "before": True}}),
+            "unknown anchor container": areas(panel("a"), hidden={"b": {
                 "neighbors": ["a"], "container": "grid", "before": True}}),
-            "mistyped before": root(panel("a"), {"b": {
+            "mistyped before": areas(panel("a"), hidden={"b": {
                 "neighbors": ["a"], "container": "tabs", "before": 1}}),
-            "unknown node type": root({"type": "grid"}),
-            "missing panel id": root({"type": "panel"}),
-            "mistyped panel id": root({"type": "panel", "panel_id": 3}),
-            "unknown orientation": root({"type": "split", "orientation": "diagonal", "children": []}),
-            "children not a list": root({"type": "split", "orientation": "vertical", "children": {}}),
-            "child not an object": root({"type": "split", "orientation": "vertical", "children": ["a"]}),
-            "split inside tabs": root({"type": "tabs", "children": [
+            "unknown node type": areas({"type": "grid"}),
+            "missing panel id": areas({"type": "panel"}),
+            "mistyped panel id": areas({"type": "panel", "panel_id": 3}),
+            "unknown orientation": areas({"type": "split", "orientation": "diagonal", "children": []}),
+            "children not a list": areas({"type": "split", "orientation": "vertical", "children": {}}),
+            "child not an object": areas({"type": "split", "orientation": "vertical", "children": ["a"]}),
+            "split inside tabs": areas({"type": "tabs", "children": [
                 {"type": "split", "orientation": "vertical", "children": []}]}),
-            "mistyped current": root({"type": "tabs", "current": "1", "children": [panel("a")]}),
+            "mistyped current": areas({"type": "tabs", "current": "1", "children": [panel("a")]}),
+            "version 2 without default areas": root(panel("a")),
+            "version 2 missing root": {"version": 2, "hidden": {}},
         }
         for name, data in bad.items():
             with self.subTest(name), self.assertRaises(LayoutError):
-                from_dict(data)
+                from_dict(data, AREA_OF if name == "version 2 missing root" else None)
         self.assertTrue(issubclass(LayoutError, ValueError))
 
     def test_bad_sizes_are_dropped_not_rejected(self):
         for sizes in ([1], [1, 2, 3], [1, -2], [1, "2"], [1.5, 2], [True, 2], "12", None):
             with self.subTest(sizes=sizes):
-                data = root({"type": "split", "orientation": "vertical",
-                             "sizes": sizes, "children": [panel("a"), panel("b")]})
+                data = areas({"type": "split", "orientation": "vertical",
+                              "sizes": sizes, "children": [panel("a"), panel("b")]}, sizes=sizes)
                 self.assertEqual(tree_of(data), SplitNode(V, (A, B)))
+                if sizes != [1, 2]:
+                    self.assertIsNone(from_dict(data).sizes)
 
     def test_current_defaults_to_zero(self):
-        self.assertEqual(tree_of(root({"type": "tabs", "children": [panel("a")]})),
+        self.assertEqual(tree_of(areas({"type": "tabs", "children": [panel("a")]})),
                          TabsNode((A,)))
+
+
+class MigrationTests(unittest.TestCase):
+    """Versions 1 and 2 (one tree) load into areas (spec §6.3, RZG-69)."""
+
+    def migrate(self, tree, hidden=None, version=2):
+        data = {"version": version, "root": json.loads(json.dumps(_node(tree)))}
+        if version == 2:
+            data["hidden"] = {k: _anchor(a) for k, a in (hidden or {}).items()}
+        return from_dict(data, AREA_OF)
+
+    def test_each_panel_goes_to_its_default_area_keeping_structure_and_sizes(self):
+        tree = SplitNode(V, (X, SplitNode(H, (SplitNode(V, (A, B), sizes=(1, 2)), C),
+                                          sizes=(30, 70))))
+        self.assertEqual(self.migrate(tree), state(
+            SplitNode(V, (A, B), sizes=(1, 2)), C, X, sizes=(30, 70)))
+
+    def test_version_1_loads_with_nothing_hidden(self):
+        self.assertEqual(self.migrate(SplitNode(H, (A, C)), version=1), state(A, C))
+
+    def test_the_arrangement_comes_from_where_the_main_pane_sat(self):
+        cases = {
+            SplitNode(H, (A, C)): Arrangement.SIDEBAR_LEFT,
+            SplitNode(H, (C, A)): Arrangement.SIDEBAR_RIGHT,
+            SplitNode(V, (C, A)): Arrangement.MAIN_TOP,
+            SplitNode(V, (A, C)): Arrangement.MAIN_TOP,
+            TabsNode((A, C)): Arrangement.SIDEBAR_LEFT,  # mixed in one tab group
+            SplitNode(H, (A, B)): Arrangement.SIDEBAR_LEFT,  # no Main pane panels
+        }
+        for tree, arrangement in cases.items():
+            with self.subTest(tree=tree):
+                self.assertEqual(self.migrate(tree).arrangement, arrangement)
+
+    def test_split_sizes_kept_only_with_one_child_per_area(self):
+        self.assertEqual(self.migrate(SplitNode(H, (C, A), sizes=(70, 30))).sizes, (30, 70))
+        self.assertIsNone(self.migrate(SplitNode(H, (A, C, B), sizes=(1, 2, 3))).sizes)
+        mixed = SplitNode(H, (A, SplitNode(V, (C, B))), sizes=(1, 2))
+        self.assertIsNone(self.migrate(mixed).sizes)
+
+    def test_panels_scattered_through_the_tree_land_in_their_areas(self):
+        tree = SplitNode(H, (TabsNode((C, A), current=1), B))
+        migrated = self.migrate(tree)
+        self.assertEqual(migrated.tree(Area.MAIN), TabsNode((C,)))
+        self.assertEqual(migrated.tree(Area.SIDEBAR), SplitNode(H, (TabsNode((A,)), B)))
+
+    def test_an_area_with_no_panels_is_empty(self):
+        self.assertEqual(self.migrate(SplitNode(H, (A, B))), state(SplitNode(H, (A, B))))
+
+    def test_panels_with_no_default_area_are_dropped(self):
+        self.assertEqual(self.migrate(SplitNode(H, (A, PanelNode("gone"), C))), state(A, C))
+
+    def test_a_hidden_anchor_is_kept_in_its_area_when_a_neighbour_is_there(self):
+        hidden = {"b": Anchor(("a",), V, False, 0.5), "d": Anchor(("c",), H, True),
+                  "c": Anchor(("a", "b"), H, True)}
+        migrated = self.migrate(SplitNode(H, (A, PanelNode("d"))), hidden)
+        self.assertEqual(migrated.hidden, {"b": Anchor(("a",), V, False, 0.5, Area.SIDEBAR)})
+
+
+def _node(node):
+    return to_dict(state(node))["areas"]["sidebar"]
+
+
+def _anchor(anchor):
+    return to_dict(state(hidden={"p": anchor}))["hidden"]["p"]
+
+
+class AreaStateTests(unittest.TestCase):
+    """LayoutState's areas and its edits (spec §6.1, §6.6)."""
+
+    def test_every_area_is_there_missing_ones_empty(self):
+        s = LayoutState({Area.MAIN: A})
+        self.assertEqual(dict(s.areas), {Area.CONTROLS: None, Area.SIDEBAR: None, Area.MAIN: A})
+        with self.assertRaises(TypeError):
+            LayoutState({"main": A})
+
+    def test_area_of(self):
+        s = state(SplitNode(V, (A, B)), C, X)
+        self.assertEqual([s.area_of(p) for p in "abcx"],
+                         [Area.SIDEBAR, Area.SIDEBAR, Area.MAIN, Area.CONTROLS])
+        self.assertIsNone(s.area_of("gone"))
+        self.assertEqual(s.panel_ids(), ["x", "a", "b", "c"])
+
+    def test_normalized_keeps_a_panel_in_two_areas_at_its_first_place(self):
+        s = state(SplitNode(V, (A, B)), SplitNode(H, (B, C)), X,
+                  hidden={"c": Anchor(("a",), V, True), "gone": Anchor(("a",), V, True),
+                          "d": Anchor(("a",), V, True)})
+        n = s.normalized({"a", "b", "c", "d", "x"})
+        self.assertEqual(n.tree(Area.MAIN), C)
+        self.assertEqual(n.tree(Area.SIDEBAR), SplitNode(V, (A, B)))
+        self.assertEqual(set(n.hidden), {"d"})  # shown or unknown ones dropped
+
+    def test_hiding_the_last_panel_of_an_area_leaves_it_empty_and_showing_brings_it_back(self):
+        s = state(A, C)
+        hidden = s.hide("c")
+        self.assertIsNone(hidden.tree(Area.MAIN))
+        self.assertEqual(set(hidden.areas), set(Area))
+        self.assertEqual(hidden.hidden["c"], Anchor((), None, False, None, Area.MAIN))
+        self.assertEqual(hidden.show("c"), s)
+
+    def test_a_panel_comes_back_to_the_area_it_was_hidden_from(self):
+        # b moved to the Main pane, then hidden: it comes back there, not to the Sidebar.
+        s = state(A, SplitNode(V, (C, B), sizes=(60, 40)))
+        hidden = s.hide("b")
+        self.assertEqual(hidden.hidden["b"].area, Area.MAIN)
+        fallback = Anchor(("a",), V, False, None, Area.SIDEBAR)  # its default place
+        back = hidden.show("b", fallback)
+        self.assertEqual(back.tree(Area.MAIN), SplitNode(V, (C, B), sizes=(600, 400)))
+        self.assertEqual(back.tree(Area.SIDEBAR), A)
+
+    def test_show_uses_the_fallback_and_its_area_when_the_neighbours_are_gone(self):
+        s = state(A, None, hidden={"b": Anchor(("gone",), V, False, None, Area.MAIN)})
+        shown = s.show("b", Anchor(("a",), V, False, None, Area.SIDEBAR))
+        self.assertEqual(shown, state(SplitNode(V, (A, B))))
+        # No neighbours anywhere: alone in the anchor's (empty) area.
+        self.assertEqual(s.show("b", None).tree(Area.MAIN), B)
+
+    def test_insert_leaves_a_shown_panel_alone(self):
+        s = state(A, C)
+        self.assertIs(s.insert("c", Anchor(("a",), V, False, None, Area.SIDEBAR)), s)
+
+    def test_move_within_an_area(self):
+        s = state(SplitNode(V, (A, B)), C)
+        self.assertEqual(s.move("b", "a", DropZone.CENTER),
+                         state(TabsNode((A, B), current=1), C))
+
+    def test_move_between_areas_leaves_the_old_area_empty_when_it_was_the_last(self):
+        s = state(A, C)
+        moved = s.move("a", "c", DropZone.RIGHT)
+        self.assertEqual(moved, state(None, SplitNode(H, (C, A), sizes=(500, 500))))
+        self.assertEqual(moved.area_of("a"), Area.MAIN)
+
+    def test_moves_that_change_nothing_return_the_same_state(self):
+        s = state(TabsNode((A, B)), C)
+        for pid, target, zone in (("a", "a", DropZone.LEFT), ("a", "b", DropZone.CENTER),
+                                  ("gone", "c", DropZone.LEFT), ("a", "gone", DropZone.LEFT)):
+            with self.subTest((pid, target, zone)):
+                self.assertIs(s.move(pid, target, zone), s)
+
+    def test_move_to_an_empty_area_fills_it(self):
+        s = state(SplitNode(V, (A, B)), None)
+        self.assertEqual(s.move_to_area("b", Area.MAIN), state(A, B))
+        self.assertIs(s.move_to_area("b", Area.SIDEBAR), s)  # its own area
+        full = state(A, C)
+        self.assertIs(full.move_to_area("a", Area.MAIN), full)  # not empty
+        self.assertIs(full.move_to_area("gone", Area.CONTROLS), full)
+
+    def test_flatten_is_the_old_single_tree(self):
+        s = state(A, C, X, sizes=(30, 70))
+        self.assertEqual(flatten(s), SplitNode(V, (X, SplitNode(H, (A, C), sizes=(30, 70)))))
+        right = dataclasses.replace(s, arrangement=Arrangement.SIDEBAR_RIGHT)
+        self.assertEqual(flatten(right), SplitNode(V, (X, SplitNode(H, (C, A), sizes=(70, 30)))))
+        top = dataclasses.replace(s, arrangement=Arrangement.MAIN_TOP)
+        self.assertEqual(flatten(top), SplitNode(V, (X, SplitNode(V, (C, A), sizes=(70, 30)))))
+        self.assertEqual(flatten(state(None, C)), C)
+        self.assertIsNone(flatten(state()))
 
 
 class NormalizeTests(unittest.TestCase):
@@ -192,6 +396,10 @@ class EditTests(unittest.TestCase):
         self.assertEqual(anchor_of(tree, "d"), Anchor(("b", "c"), H, False, 0.25))
         self.assertEqual(anchor_of(tree, "b"), Anchor(("c",), V, True))  # no sizes, no share
         self.assertIsNone(anchor_of(A, "a"))  # the root has nowhere to come back to
+        self.assertIsNone(anchor_of(TabsNode((A,)), "a"))
+        # The only tab of a group sits where its group does.
+        self.assertEqual(anchor_of(SplitNode(H, (TabsNode((A,)), B)), "a"),
+                         Anchor(("b",), H, True))
         self.assertIsNone(anchor_of(tree, "nope"))
 
     def test_every_panel_of_the_default_comes_back_where_it_was(self):

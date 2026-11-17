@@ -8,7 +8,6 @@ from PySide6.QtWidgets import QListWidget, QListWidgetItem, QMenu, QVBoxLayout
 
 from rzgitclient.ui.app_actions import BranchOp, WorktreeOp
 from rzgitclient.ui.panels.panel import Panel
-from rzgitclient.ui.theme.style_roles import Surface
 
 _NAME = Qt.ItemDataRole.UserRole  # a branch row's name; None for "(no commits)"
 _CURRENT = " (current branch)"
@@ -17,7 +16,6 @@ _CURRENT = " (current branch)"
 class BranchesPanel(Panel):
     panel_id = "branches"
     title = "Branches"
-    surface = Surface.SIDEBAR
 
     _list: QListWidget
 

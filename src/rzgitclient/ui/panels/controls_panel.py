@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QMenu, QToolButton, QWidge
 
 from rzgitclient.ui.app_actions import BranchOp
 from rzgitclient.ui.panels.panel import Panel
-from rzgitclient.ui.theme.style_roles import Role, Surface, set_role
+from rzgitclient.ui.theme.style_roles import Role, set_role
 
 FILTER_AT = 15  # more branches than this: a filter box on top of the menu
 LABEL_WIDTH = 360  # px; a longer label is cut short in the middle
@@ -23,7 +23,6 @@ NO_REPO = "No repository"
 class ControlsPanel(Panel):
     panel_id = "controls"
     title = "Controls"
-    surface = Surface.CHROME
     show_header = False
     fixed_height = True
     always_shown = True

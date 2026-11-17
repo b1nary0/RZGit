@@ -10,6 +10,8 @@ from typing import Any
 
 from rzgitclient.ui.layout.layout_model import (
     Anchor,
+    Area,
+    Arrangement,
     LayoutError,
     LayoutNode,
     LayoutState,
@@ -19,8 +21,6 @@ from rzgitclient.ui.layout.layout_model import (
     TabsNode,
     anchor_of,
     from_dict,
-    insert_panel,
-    normalize,
     panel_ids,
     remove_panel,
 )
@@ -44,41 +44,45 @@ MAIN = SplitNode(V, (CONTENT, COMMIT_DETAILS), sizes=(500, 220))
 @dataclass(frozen=True)
 class Preset:
     title: str  # shown in View → Layout
-    root: LayoutNode
+    state: LayoutState
 
 
-def _below_controls(root: LayoutNode) -> SplitNode:
-    """The Controls bar across the top (its height is fixed), ``root`` below it."""
-    return SplitNode(V, (CONTROLS, root))
+def _areas(arrangement: Arrangement, sidebar: LayoutNode,
+           sizes: tuple[int, int]) -> LayoutState:
+    """The Controls bar alone in Controls (its height is fixed), ``sidebar`` in
+    the Sidebar and ``MAIN`` in the Main pane; ``sizes`` Sidebar first."""
+    return LayoutState({Area.CONTROLS: CONTROLS, Area.SIDEBAR: sidebar, Area.MAIN: MAIN},
+                       arrangement, sizes)
 
 
 # In every preset Staged Files, Commit and Commit Files are directly below
 # (Unstaged) Files, as in GitKraken: Commit Files takes the place of the other
 # three while a commit is selected (spec §5.4). Its size is 0: it always takes
 # theirs (§6.2). Standard: Branches, Worktrees, Unstaged Files, Staged Files,
-# Commit and Stashes stacked in a left sidebar; MAIN on the right.
-DEFAULT_LAYOUT = _below_controls(SplitNode(
-    H, (SplitNode(V, (BRANCHES, WORKTREES, FILES, STAGED, COMMIT, COMMIT_FILES, STASH),
-                  sizes=(180, 140, 220, 120, 160, 0, 170)),
-        MAIN),
-    sizes=(220, 880)))
+# Commit and Stashes stacked in the Sidebar, left of the Main pane.
+DEFAULT_LAYOUT = _areas(
+    Arrangement.SIDEBAR_LEFT,
+    SplitNode(V, (BRANCHES, WORKTREES, FILES, STAGED, COMMIT, COMMIT_FILES, STASH),
+              sizes=(180, 140, 220, 120, 160, 0, 170)),
+    (220, 880))
 
 PRESETS = (
     Preset("Standard", DEFAULT_LAYOUT),
     # Branches, Worktrees, Unstaged Files and Stashes as tabs, above Staged Files and Commit.
-    Preset("Sidebar Tabs", _below_controls(SplitNode(H, (
+    Preset("Sidebar Tabs", _areas(
+        Arrangement.SIDEBAR_LEFT,
         SplitNode(V, (TabsNode((BRANCHES, WORKTREES, FILES, STASH)), STAGED, COMMIT,
                       COMMIT_FILES), sizes=(330, 120, 160, 0)),
-        MAIN), sizes=(220, 880)))),
-    # MAIN across the top; below, Branches (Worktrees and Stashes below it) beside
-    # Unstaged Files, with Staged Files, Commit and Commit Files below it.
-    Preset("Stacked", _below_controls(SplitNode(V, (
-        MAIN,
+        (220, 880))),
+    # The Main pane across the top; below, Branches (Worktrees and Stashes below
+    # it) beside Unstaged Files, with Staged Files, Commit and Commit Files below it.
+    Preset("Stacked", _areas(
+        Arrangement.MAIN_TOP,
         SplitNode(H, (SplitNode(V, (BRANCHES, WORKTREES, STASH), sizes=(240, 130, 130)),
                       SplitNode(V, (FILES, STAGED, COMMIT, COMMIT_FILES),
                                 sizes=(120, 90, 160, 0))),
-                  sizes=(400, 700))),
-        sizes=(380, 370)))),
+                  sizes=(400, 700)),
+        (370, 380))),
 )
 
 
@@ -95,45 +99,47 @@ def layout_name_problem(name: str, taken: Collection[str] = ()) -> str | None:
     return None
 
 
+def default_area(panel_id: str) -> Area | None:
+    """The area ``panel_id`` has in ``DEFAULT_LAYOUT``; None for an unknown panel."""
+    return DEFAULT_LAYOUT.area_of(panel_id)
+
+
 def default_anchor(panel_id: str, shown: Collection[str] | None = None) -> Anchor | None:
-    """Where ``panel_id`` sits in ``DEFAULT_LAYOUT``: the fallback place to show it.
+    """Where ``panel_id`` sits in ``DEFAULT_LAYOUT``, in its default area: the
+    fallback place to show it. None for an unknown panel.
 
     With ``shown``, the panels on screen, its place among those only: so Files
     shown while Commit is hidden goes below Branches, not next to the missing
     Commit (and two panels new in a version, such as Files and Commit, still
-    land together).
+    land together). Alone in its area, it has no neighbours: it fills the area.
     """
-    reference: LayoutNode | None = DEFAULT_LAYOUT
+    area = default_area(panel_id)
+    if area is None:
+        return None
+    reference = DEFAULT_LAYOUT.tree(area)
     if shown is not None:
-        for other in panel_ids(DEFAULT_LAYOUT):
+        for other in panel_ids(reference):
             if other != panel_id and other not in shown and reference is not None:
                 reference = remove_panel(reference, other)[0]
-    return anchor_of(reference, panel_id) if reference is not None else None
+    anchor = anchor_of(reference, panel_id) if reference is not None else None
+    return dataclasses.replace(anchor or Anchor((), None, False), area=area)
 
 
 def matching_preset(state: LayoutState) -> str | None:
     """The title of the preset ``state`` is, sizes, current tabs and hidden
     panels aside; None for a custom layout (spec §6.3)."""
-    shape = _shape(state.root)
+    shape = _shape(state)
     for preset in PRESETS:
-        root = _without_panels(preset.root, state.hidden)[0]
-        if root is not None and _shape(root) == shape:
+        if _shape(_without_panels(preset.state, state.hidden)) == shape:
             return preset.title
     return None
 
 
-def _without_panels(root: LayoutNode, panel_ids_: Collection[str]
-                    ) -> tuple[LayoutNode | None, dict[str, Anchor]]:
-    """``root`` without the panels ``panel_ids_``, and where each sat."""
-    anchors: dict[str, Anchor] = {}
+def _without_panels(state: LayoutState, panel_ids_: Collection[str]) -> LayoutState:
+    """``state`` with the panels ``panel_ids_`` hidden."""
     for pid in panel_ids_:
-        if root is None:
-            break
-        if pid in panel_ids(root):
-            root, anchor = remove_panel(root, pid)
-            if anchor is not None:
-                anchors[pid] = anchor
-    return root, anchors
+        state = state.hide(pid)
+    return state
 
 
 def restore_layout(saved: Any, preset: str | None = None) -> LayoutState:
@@ -149,34 +155,35 @@ def restore_layout(saved: Any, preset: str | None = None) -> LayoutState:
     the default layout.
     """
     if saved is None:
-        return LayoutState(DEFAULT_LAYOUT)
+        return DEFAULT_LAYOUT
     try:
-        state = from_dict(saved)
+        state = from_dict(saved, default_area)  # an older version is migrated to areas
     except LayoutError as exc:
         log.warning("Saved layout is malformed (%s); using the default", exc)
-        return LayoutState(DEFAULT_LAYOUT)
-    known = panel_ids(DEFAULT_LAYOUT)
+        return DEFAULT_LAYOUT
+    known = DEFAULT_LAYOUT.panel_ids()
+    state = state.normalized(known)  # drops panels this version no longer has
     current = next((p for p in PRESETS if p.title == preset), None)
     if current is not None:
         hidden_ids = [pid for pid in state.hidden if pid in known]
-        root, anchors = _without_panels(current.root, hidden_ids)
-        saved_root = normalize(state.root, known)
-        if root is not None and (saved_root is None or _shape(root) != _shape(saved_root)):
+        code = _without_panels(current.state, hidden_ids)
+        if _shape(code) != _shape(state):
             log.info("The %s layout changed since it was saved; using the new one", preset)
-            return LayoutState(root, anchors)
-    root = normalize(state.root, known)  # drops panels this version no longer has
-    if root is None:
+            return code
+    if not state.panel_ids():
         log.info("Saved layout has none of this version's panels; using the default")
-        return LayoutState(DEFAULT_LAYOUT)
-    shown = set(panel_ids(root))
-    hidden = {pid: a for pid, a in state.hidden.items() if pid in known and pid not in shown}
-    new = {pid for pid in known if pid not in shown and pid not in hidden}
+        return DEFAULT_LAYOUT
+    new = {pid for pid in known if state.area_of(pid) is None and pid not in state.hidden}
     for pid in known:
         if pid in new:  # added in a newer version
-            anchor = default_anchor(pid, panel_ids(root))
             # The tab the user had current stays current.
-            root = insert_panel(root, pid, anchor, default_anchor(pid), make_current=False)
-    return LayoutState(_default_sizes(root, new) if new else root, hidden)
+            state = state.insert(pid, default_anchor(pid, state.panel_ids()),
+                                 default_anchor(pid), make_current=False)
+    if new:
+        state = dataclasses.replace(state, areas={
+            a: _default_sizes(t, new) if t is not None else None
+            for a, t in state.areas.items()})
+    return state
 
 
 def _default_sizes(node: LayoutNode, new: set[str]) -> LayoutNode:
@@ -187,21 +194,25 @@ def _default_sizes(node: LayoutNode, new: set[str]) -> LayoutNode:
         return node
     node = dataclasses.replace(node, children=tuple(_default_sizes(c, new) for c in node.children))
     if any(isinstance(c, PanelNode) and c.panel_id in new for c in node.children):
-        for split in (s for preset in PRESETS for s in _splits(preset.root)):
+        for split in (s for preset in PRESETS for t in preset.state.areas.values()
+                      for s in _splits(t)):
             if _shape(split) == _shape(node):
                 return dataclasses.replace(node, sizes=split.sizes)
     return node
 
 
-def _splits(node: LayoutNode) -> list[SplitNode]:
+def _splits(node: LayoutNode | None) -> list[SplitNode]:
     if not isinstance(node, SplitNode):
         return []
     return [node, *(s for c in node.children for s in _splits(c))]
 
 
-def _shape(node: LayoutNode) -> object:
-    """``node`` without its sizes or current tab."""
+def _shape(node: LayoutNode | LayoutState | None) -> object:
+    """``node`` without its sizes or current tab; a state's arrangement and the
+    shape of each area."""
     match node:
+        case LayoutState():
+            return node.arrangement, tuple(_shape(node.tree(a)) for a in Area)
         case SplitNode():
             return node.orientation, tuple(_shape(c) for c in node.children)
         case TabsNode():
