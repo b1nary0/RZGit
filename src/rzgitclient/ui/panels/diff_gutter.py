@@ -3,7 +3,9 @@
 Drawn like Qt's code-editor example: a widget in the view's left margin that
 paints the visible rows only. From the left: a button on the changed line under
 the pointer and on selected lines (when the panel turns them on), the number
-columns, then the marks. Clicks elsewhere select lines, through the view.
+columns, then the marks. In the whole-file view the mark column also shows
+fold marks: a click there (or anywhere on a fold row) folds or unfolds, through
+the view. Clicks elsewhere select lines, through the view.
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ _BUTTON_MARGIN = 4  # px either side of a line button
 _BUTTON_PADDING = 5  # px between a line button's edge and its label
 # Painted here, not part of the text, so copied text is code only.
 MARKS = {RowKind.ADDED: "+", RowKind.REMOVED: "−"}  # − is as wide as + in most fonts
+FOLD_MARK = "▾"  # on the first row of a stretch that can be folded
+FOLDED_MARK = "▸"  # on a fold row
 
 
 class DiffGutter(QWidget):
@@ -107,7 +111,25 @@ class DiffGutter(QWidget):
         return self.button_width() + self.column_width() * len(self._numbers)
 
     def mark_width(self) -> int:
-        return max(self.fontMetrics().horizontalAdvance(m) for m in MARKS.values())
+        return max(self.fontMetrics().horizontalAdvance(m)
+                   for m in (*MARKS.values(), FOLD_MARK, FOLDED_MARK))
+
+    def mark_rect(self, top: float, height: float) -> QRect:
+        return QRect(self.marks_left(), int(top), self.mark_width(), int(height))
+
+    def fold_at(self, pos: QPoint) -> object | None:
+        """The FoldKey a click at ``pos`` folds or unfolds: a fold row's, or a
+        fold mark's (on the mark itself); None elsewhere."""
+        for n, row, top, height in self._view.visible_rows(self.rect()):
+            if not top <= pos.y() < top + height:
+                continue
+            if row.kind is RowKind.FOLD:
+                return row.fold
+            key = self._view.fold_marks.get(n)
+            if key is not None and self.mark_rect(top, height).contains(pos):
+                return key
+            return None
+        return None
 
     def width_needed(self) -> int:
         """The buttons, the number columns, then the mark column and a gap before the text."""
@@ -157,6 +179,9 @@ class DiffGutter(QWidget):
                 painter.setPen(self._mark_colors[row.kind])
                 painter.drawText(QRect(marks_left, int(top), self.mark_width(), int(height)),
                                  centre, mark)
+            elif row.kind is RowKind.FOLD or n in self._view.fold_marks:
+                painter.drawText(self.mark_rect(top, height), centre,
+                                 FOLDED_MARK if row.kind is RowKind.FOLD else FOLD_MARK)
             shown = n == self._hover or n in self._view.selection
             if self._label and shown and _has_button(row):
                 self._paint_button(painter, self.button_rect(top, height), self._on_button)
@@ -178,7 +203,8 @@ class DiffGutter(QWidget):
         pos = event.position().toPoint()
         if event.buttons() & Qt.MouseButton.LeftButton:
             self._view.selection.drag_to(pos.y())
-        self.set_hover(self._view.row_number_at(pos.y()), self.button_at(pos) is not None)
+        on = self.button_at(pos) is not None or self.fold_at(pos) is not None
+        self.set_hover(self._view.row_number_at(pos.y()), on)
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event: QEvent) -> None:
@@ -189,9 +215,13 @@ class DiffGutter(QWidget):
         if event.button() is not Qt.MouseButton.LeftButton:
             super().mousePressEvent(event)
             return
-        hit = self.button_at(event.position().toPoint())
+        pos = event.position().toPoint()
+        hit = self.button_at(pos)
+        key = self.fold_at(pos)
         if hit is not None:
             self.button_clicked.emit(hit[0])
+        elif key is not None:
+            self._view.fold_clicked.emit(key)
         else:
             self._view.selection.press_at(int(event.position().y()), event.modifiers())
         event.accept()

@@ -672,6 +672,25 @@ class RepoSessionDiffTests(unittest.TestCase):
             wait_idle(self.session)
             self.assertFalse(self.session.diff.too_large)
 
+    def test_whole_reads_the_whole_file_and_says_so(self):
+        """RZG-60: toggling whole sends a result even when the diff is the same."""
+        a = FileSelection("a.txt", FileSource.WORKTREE)
+        self.session.request_diff(a)
+        wait_idle(self.session)
+        self.assertFalse(self.session.diff_whole)
+        self.session.request_diff(a, whole=True)  # a one-line file: the same diff
+        wait_idle(self.session)
+        self.assertEqual(len(self.diffs), 2)
+        self.assertTrue(self.session.diff_whole)
+        (self.path / "a.txt").write_text("".join(f"{n}\n" for n in range(30)))
+        self.session.refresh()  # stays whole
+        wait_idle(self.session)
+        self.assertTrue(self.session.diff_whole)
+        new = [l.new_no for h in self.session.diff.hunks for l in h.lines if l.new_no]
+        self.assertEqual(new, list(range(1, 31)))
+        self.session.request_diff(None)
+        self.assertFalse(self.session.diff_whole)
+
     def test_a_failed_diff_is_an_error_and_none(self):
         gone = FileSelection("gone.txt", FileSource.WORKTREE)
         (self.path / "gone.txt").write_text("x")

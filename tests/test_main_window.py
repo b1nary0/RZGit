@@ -21,7 +21,7 @@ from rzgitclient.ui.layout.layout_model import (
     to_dict,
 )
 from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
-from rzgitclient.ui.app_actions import StashOp
+from rzgitclient.ui.app_actions import HunkHeaders, StashOp
 from rzgitclient.ui.main_window import MainWindow, commit_summary
 from rzgitclient.ui.theme.app_theme import DARK_CB_THEME, DARK_THEME, LIGHT_THEME
 from rzgitclient.ui.theme.theme_manager import ThemeManager, ThemeMode
@@ -179,8 +179,8 @@ class MainWindowTests(unittest.TestCase):
         view = next(a.menu() for a in window.menuBar().actions() if a.text() == "&View")
         self.assertEqual([a.text() for a in view.actions()],
                          ["&Layout", "&Panels", "", "Show Files as &Tree",
-                          "&Side by Side Diff", "&Topological Order", "", "&Theme", "",
-                          "&Reset Layout"])
+                          "&Side by Side Diff", "Show &Whole File", "&Hunk Headers",
+                          "&Topological Order", "", "&Theme", "", "&Reset Layout"])
 
     def test_the_theme_menu_switches_live_and_is_remembered(self):
         self.addCleanup(ThemeManager, self.app, LIGHT_THEME)  # leave the shared app light
@@ -431,6 +431,21 @@ class MainWindowTests(unittest.TestCase):
             ["SplitNode", "PanelNode", "PanelNode"])  # still History beside Diff
         self.quit(third)
         self.assertIsNone(AppSettings(self.settings_path).layout_preset)
+
+    def test_whole_file_and_hunk_headers_are_remembered(self):
+        window = self.start()
+        actions = window.ctx.actions
+        self.assertFalse(actions.whole_file_diff.isChecked())
+        self.assertEqual(actions.hunk_headers_mode(), HunkHeaders.SLIM)
+        actions.whole_file_diff.setChecked(True)
+        actions.hunk_headers[HunkHeaders.FULL].setChecked(True)
+        self.quit(window)
+        again = self.start()
+        self.assertTrue(again.ctx.actions.whole_file_diff.isChecked())
+        self.assertEqual(again.ctx.actions.hunk_headers_mode(), HunkHeaders.FULL)
+        view = next(a.menu() for a in again.menuBar().actions() if a.text() == "&View")
+        headers = next(a.menu() for a in view.actions() if a.text() == "&Hunk Headers")
+        self.assertEqual([a.text() for a in headers.actions()], ["&Full", "&Slim", "&Off"])
 
     def test_side_by_side_diff_is_remembered(self):
         window = self.start()

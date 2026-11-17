@@ -1,8 +1,10 @@
-"""The diff of the selected file, unified or side by side (spec §5.4)."""
+"""The diff of the selected file, unified or side by side, its changes or the
+whole file (spec §5.4)."""
 
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -21,13 +23,20 @@ from rzgitclient.core.diff_patch import Line, can_patch, hunk_lines
 from rzgitclient.core.selection import FileSelection, FileSource
 from rzgitclient.git.git_models import FileDiff, LineKind
 from rzgitclient.ui.panels.diff_rows import (
+    DiffRow,
+    FoldKey,
+    Stretch,
+    fold,
     split_partners,
     split_rows,
+    stretches,
     unified_partners,
     unified_rows,
     whole_file,
+    whole_rows,
+    whole_split_rows,
 )
-from rzgitclient.ui.panels.diff_view import DiffView, Numbers
+from rzgitclient.ui.panels.diff_view import DiffView, Numbers, Place
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.theme.style_roles import Role, set_role
@@ -51,6 +60,8 @@ class DiffPanel(Panel):
     _stack: QStackedWidget
     _message: QLabel
     _show_anyway: QPushButton
+    _changes_only: QPushButton  # a whole file too large: back to the changes
+    _headers: QToolButton  # the whole-file view's hunk headers
     _message_page: QWidget
     # The views are built when first needed: with no file selected (every
     # start) they'd only cost time. The side-by-side pair is _split's.
@@ -64,6 +75,10 @@ class DiffPanel(Panel):
         self._file: FileSelection | None = None  # selected: shown, or on its way
         self._shown: FileSelection | None = None  # whose diff is on screen
         self._diff: FileDiff | None = None
+        self._whole = False  # the shown diff is of the whole file
+        self._folded: set[FoldKey] = set()  # the whole file's folded stretches
+        self._stretches: list[Stretch] = []  # the shown rows' foldable stretches
+        self._place: list[Place] | None = None  # to go back to once the toggled diff is in
         self._unified = self._split = self._left = self._right = None
 
         layout = QVBoxLayout(self)
@@ -84,14 +99,17 @@ class DiffPanel(Panel):
         ctx.selection.file_changed.connect(self._on_file)
         ctx.session.diff_changed.connect(self._on_diff)
         ctx.actions.side_by_side_diff.toggled.connect(lambda _on: self._render())
+        ctx.actions.whole_file_diff.toggled.connect(self._on_whole_toggled)
+        for action in ctx.actions.hunk_headers.values():
+            action.toggled.connect(lambda on: on and self._rerender())
 
         self._file = file = ctx.selection.file
         if file is None:
             self._show_message(NOTHING_SELECTED)
-        elif ctx.session.diff_file == file:
+        elif self._cached(file):
             self._show(file, ctx.session.diff)
         else:
-            ctx.session.request_diff(file)
+            self._request(file)
             self._show_message("")
             self._loading.start()
 
@@ -106,13 +124,21 @@ class DiffPanel(Panel):
         set_role(self._hint, Role.HINT)
         self._hint.hide()
         bar.addWidget(self._hint)
-        toggle = QToolButton()
-        toggle.setDefaultAction(self.ctx.actions.side_by_side_diff)
-        toggle.setAutoRaise(True)
-        toggle.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        toggle.setIconSize(QSize(16, 16))
-        toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonFollowStyle)
-        bar.addWidget(toggle)
+        actions = self.ctx.actions
+        self._headers = _tool_button()
+        self._headers.setIcon(QIcon.fromTheme("view-list-text"))
+        self._headers.setText("Hunk Headers")
+        self._headers.setToolTip("Hunk headers in the whole file")
+        menu = QMenu(self._headers)
+        menu.addActions(list(actions.hunk_headers.values()))
+        self._headers.setMenu(menu)
+        self._headers.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._headers.setVisible(actions.whole_file_diff.isChecked())
+        bar.addWidget(self._headers)
+        for action in (actions.whole_file_diff, actions.side_by_side_diff):
+            toggle = _tool_button()
+            toggle.setDefaultAction(action)
+            bar.addWidget(toggle)
         return bar
 
     def _build_message(self) -> QWidget:
@@ -124,6 +150,11 @@ class DiffPanel(Panel):
         self._message.setWordWrap(True)
         set_role(self._message, Role.PLACEHOLDER)
         box.addWidget(self._message)
+        self._changes_only = QPushButton("Show Changes Only")
+        self._changes_only.clicked.connect(
+            lambda: self.ctx.actions.whole_file_diff.setChecked(False))
+        self._changes_only.hide()
+        box.addWidget(self._changes_only, 0, Qt.AlignmentFlag.AlignHCenter)
         self._show_anyway = QPushButton("Show Anyway")
         self._show_anyway.clicked.connect(self._load_full)
         box.addWidget(self._show_anyway, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -163,6 +194,7 @@ class DiffPanel(Panel):
     def _connect(self, view: DiffView) -> None:
         view.hunk_clicked.connect(self._on_hunk_link)
         view.lines_clicked.connect(self._apply)
+        view.fold_clicked.connect(self._toggle_fold)
         view.customContextMenuRequested.connect(
             lambda pos, view=view: self.menu_for(view, pos).exec(
                 view.viewport().mapToGlobal(pos)))
@@ -177,44 +209,95 @@ class DiffPanel(Panel):
     def _on_file(self, file: FileSelection | None) -> None:
         old, self._file = self._file, file
         session = self.ctx.session
-        session.request_diff(file)
+        self._place = None
         if file is None:
+            session.request_diff(None)
             self._loading.stop()
             self._shown = None
             self._path.setText("")
             self._show_message(NOTHING_SELECTED)
             return
+        self._request(file)
         if old is None or old.path != file.path:
             self.request_activation()  # the user picked another file
-        if session.diff_file == file:  # already read: an equal result won't be sent again
+        if self._cached(file):  # already read: an equal result won't be sent again
             self._show(file, session.diff)
         else:
             self._loading.start()
 
     def _on_diff(self, file: FileSelection | None, diff: FileDiff | None) -> None:
-        if file is not None and file == self._file:
+        if file is not None and file == self._file and self._cached(file):
             self._show(file, diff)
+
+    def _cached(self, file: FileSelection) -> bool:
+        """The session's latest diff is ``file``'s, read the way the panel wants it."""
+        session = self.ctx.session
+        return (session.diff_file == file
+                and session.diff_whole == self.ctx.actions.whole_file_diff.isChecked())
+
+    def _request(self, file: FileSelection, full: bool = False) -> None:
+        whole = self.ctx.actions.whole_file_diff.isChecked()
+        self.ctx.session.request_diff(file, full=full, whole=whole)
 
     def _load_full(self) -> None:
         if self._file is not None:
-            self.ctx.session.request_diff(self._file, full=True)
+            self._request(self._file, full=True)
+            self._loading.start()
+
+    def _on_whole_toggled(self, on: bool) -> None:
+        self._headers.setVisible(on)
+        if self._file is None:
+            return
+        # Find the same lines in the other diff once it's in.
+        shown = self._shown_views() if self._shown == self._file else []
+        self._place = [view.place() for view in shown] or None
+        self._request(self._file)
+        if self._cached(self._file):
+            self._show(self._file, self.ctx.session.diff)
+        else:
             self._loading.start()
 
     def _show(self, file: FileSelection, diff: FileDiff | None) -> None:
         self._loading.stop()
         keep_scroll = file == self._shown
-        self._shown, self._diff = file, diff
+        whole = self.ctx.session.diff_whole
+        if (file, diff, whole) != (self._shown, self._diff, self._whole):
+            self._folded.clear()  # a new diff: its stretches are new
+        self._shown, self._diff, self._whole = file, diff, whole
         self._path.setText(_describe(file, diff))
         if diff is None:
             self._show_message(UNREADABLE)
         elif diff.binary:
             self._show_message(BINARY)
         elif diff.too_large:
-            self._show_message(f"Large diff ({diff.line_count:,} lines).", show_anyway=True)
+            self._show_message(f"Large diff ({diff.line_count:,} lines).", show_anyway=True,
+                               changes_only=whole)
         elif not diff.hunks:
             self._show_message(NO_CHANGES)
         else:
             self._render(keep_scroll)
+            place, self._place = self._place, None
+            if place is not None:
+                views = self._shown_views()
+                if len(views) == len(place):
+                    for view, at in zip(views, place):
+                        view.go_to(at)
+
+    def _shown_views(self) -> list[DiffView]:
+        """The view or views on screen now (side by side, left then right)."""
+        current = self._stack.currentWidget()
+        if current is self._split and self._left is not None and self._right is not None:
+            return [self._left, self._right]
+        return [current] if isinstance(current, DiffView) else []
+
+    def _rerender(self) -> None:
+        """Show the same diff with other rows (headers, folds), staying where it was."""
+        views = self._shown_views()
+        place = [view.place() for view in views]
+        self._render(keep_scroll=True)
+        if self._shown_views() == views:
+            for view, at in zip(views, place):
+                view.go_to(at, show_selection=False)
 
     def _render(self, keep_scroll: bool = False) -> None:
         """Show ``_diff``'s rows in the chosen view (a new view starts at the top)."""
@@ -224,26 +307,49 @@ class DiffPanel(Panel):
         verb, why = self._patching()
         link = f"{verb} Hunk" if verb and not why else ""
         side_by_side = self.ctx.actions.side_by_side_diff.isChecked()
-        whole = whole_file(diff) if side_by_side else None
-        self._hint.setText(f"Unified: whole file {whole}" if whole else "")
-        self._hint.setVisible(bool(whole))
-        if side_by_side and not whole:
-            left_rows, right_rows = split_rows(diff)
+        added = whole_file(diff) if side_by_side else None
+        self._hint.setText(f"Unified: whole file {added}" if added else "")
+        self._hint.setVisible(bool(added))
+        headers = self.ctx.actions.hunk_headers_mode()
+        sides: tuple[tuple[DiffRow, ...], ...]
+        if side_by_side and not added:
+            sides = whole_split_rows(diff, headers) if self._whole else split_rows(diff)
+        else:
+            sides = (whole_rows(diff, headers) if self._whole else unified_rows(diff),)
+        self._stretches = stretches(sides[0]) if self._whole else []
+        folded = [fold(rows, self._stretches, self._folded) for rows in sides]
+        marks = folded[0][1]
+        if len(folded) == 2:
+            (left_rows, _), (right_rows, _) = folded
             left_partners, right_partners = split_partners(left_rows, right_rows)
             left, right = self._split_views()
             for view, rows, partners in ((left, left_rows, left_partners),
                                          (right, right_rows, right_partners)):
                 view.set_line_buttons(verb if link else "")
-                view.set_rows(rows, keep_scroll, partners=partners)
+                view.set_rows(rows, keep_scroll, partners=partners, fold_marks=marks)
                 view.set_hunk_link(link, why or "")
             self._stack.setCurrentWidget(self._split)
         else:
             view = self._unified_view()
             view.set_line_buttons(verb if link else "")
-            rows = unified_rows(diff)
-            view.set_rows(rows, keep_scroll, partners=unified_partners(rows))
+            rows = folded[0][0]
+            view.set_rows(rows, keep_scroll, partners=unified_partners(rows), fold_marks=marks)
             view.set_hunk_link(link, why or "")
             self._stack.setCurrentWidget(view)
+
+    # ---- folding the whole file (spec §5.4) ----------------------------------
+
+    def _toggle_fold(self, key: FoldKey) -> None:
+        self._folded ^= {key}
+        self._rerender()
+
+    def fold_all(self) -> None:
+        self._folded = {s.key for s in self._stretches}
+        self._rerender()
+
+    def unfold_all(self) -> None:
+        self._folded = set()
+        self._rerender()
 
     # ---- hunks and lines (spec §5.4) ---------------------------------------
 
@@ -309,14 +415,24 @@ class DiffPanel(Panel):
                 note = menu.addAction(why)
                 note.setEnabled(False)
             menu.addSeparator()
+        if self._whole:
+            fold_all = menu.addAction("Fold All Unchanged")
+            fold_all.setEnabled(any(s.key not in self._folded for s in self._stretches))
+            fold_all.triggered.connect(self.fold_all)
+            unfold_all = menu.addAction("Unfold All")
+            unfold_all.setEnabled(bool(self._folded))
+            unfold_all.triggered.connect(self.unfold_all)
+            menu.addSeparator()
         copy = menu.addAction("Copy")
         copy.setEnabled(bool(view.selection))
         copy.triggered.connect(view.selection.copy)
         return menu
 
-    def _show_message(self, text: str, show_anyway: bool = False) -> None:
+    def _show_message(self, text: str, show_anyway: bool = False,
+                      changes_only: bool = False) -> None:
         self._message.setText(text)
         self._show_anyway.setVisible(show_anyway)
+        self._changes_only.setVisible(changes_only)
         self._hint.hide()
         self._stack.setCurrentWidget(self._message_page)
 
@@ -327,6 +443,19 @@ def _describe(file: FileSelection, diff: FileDiff | None) -> str:
         path = f"{diff.old_path} → {path}"
     source = _SOURCES.get(file.source) or (file.commit or "")[:8]
     return f"{path}  ·  {source}"
+
+
+def _tool_button() -> QToolButton:
+    button = QToolButton()
+    button.setAutoRaise(True)
+    button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    button.setIconSize(QSize(16, 16))
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonFollowStyle)
+    # Without an icon theme the button shows its text: let it be cut short then,
+    # so the bar never makes the panel wider than its icons would.
+    button.setMinimumWidth(button.sizeHint().height())
+    button.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+    return button
 
 
 def _sync(a: QScrollBar, b: QScrollBar) -> None:

@@ -11,6 +11,7 @@ from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.selection import FileSource
 from rzgitclient.git.git_models import FileDiff, LastCommit
 from rzgitclient.git.repo import GitError, Repo
+from rzgitclient.ui.app_actions import HunkHeaders
 from rzgitclient.ui.branch_dialogs import BranchDialogs
 from rzgitclient.ui.layout.layout_host import LayoutHost
 from rzgitclient.ui.layout.layout_menu import LayoutMenu
@@ -51,6 +52,8 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(geometry)
         # Before the panels are built, so the Diff panel starts in the saved view.
         ctx.actions.side_by_side_diff.setChecked(settings.side_by_side_diff)
+        ctx.actions.whole_file_diff.setChecked(settings.whole_file_diff)
+        ctx.actions.hunk_headers[HunkHeaders(settings.hunk_headers)].setChecked(True)
         ctx.actions.file_tree.setChecked(settings.file_tree)
         ctx.actions.topo_order.setChecked(settings.topo_order)
         self._check_theme_actions()
@@ -105,7 +108,11 @@ class MainWindow(QMainWindow):
         view_menu.addMenu(LayoutMenu(self.layout_host, self.settings, view_menu))
         view_menu.addMenu(PanelsMenu(self.layout_host, view_menu))
         view_menu.addSeparator()
-        view_menu.addActions([actions.file_tree, actions.side_by_side_diff, actions.topo_order])
+        view_menu.addActions([actions.file_tree, actions.side_by_side_diff,
+                              actions.whole_file_diff])
+        headers_menu = view_menu.addMenu("&Hunk Headers")
+        headers_menu.addActions(list(actions.hunk_headers.values()))
+        view_menu.addAction(actions.topo_order)
         view_menu.addSeparator()
         theme_menu = view_menu.addMenu("&Theme")
         for mode, action in actions.theme_modes.items():
@@ -139,6 +146,8 @@ class MainWindow(QMainWindow):
         self.settings.layout_preset = matching_preset(state) if state is not None else None
         self.settings.window_geometry = self.saveGeometry()
         self.settings.side_by_side_diff = self.ctx.actions.side_by_side_diff.isChecked()
+        self.settings.whole_file_diff = self.ctx.actions.whole_file_diff.isChecked()
+        self.settings.hunk_headers = self.ctx.actions.hunk_headers_mode().value
         self.settings.file_tree = self.ctx.actions.file_tree.isChecked()
         self.settings.topo_order = self.ctx.actions.topo_order.isChecked()
         self.settings.theme_mode = self.ctx.theme.mode.value

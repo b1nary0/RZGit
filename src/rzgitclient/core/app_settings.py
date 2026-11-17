@@ -26,6 +26,8 @@ _LAYOUT = "layout"
 _LAYOUT_PRESET = "layout_preset"
 _WINDOW_GEOMETRY = "window/geometry"
 _SIDE_BY_SIDE_DIFF = "diff/side_by_side"
+_WHOLE_FILE_DIFF = "diff/whole_file"
+_HUNK_HEADERS = "diff/hunk_headers"
 _FILE_TREE = "files/tree"
 _TOPO_ORDER = "history/topo_order"
 _THEME_MODE = "theme/mode"
@@ -96,6 +98,26 @@ class AppSettings:
     @side_by_side_diff.setter
     def side_by_side_diff(self, on: bool) -> None:
         self._set(_SIDE_BY_SIDE_DIFF, bool(on))
+
+    @property
+    def whole_file_diff(self) -> bool:
+        """Whether the Diff panel shows the whole file (default: the changes only)."""
+        return self._settings.value(_WHOLE_FILE_DIFF, False, bool)
+
+    @whole_file_diff.setter
+    def whole_file_diff(self, on: bool) -> None:
+        self._set(_WHOLE_FILE_DIFF, bool(on))
+
+    @property
+    def hunk_headers(self) -> str:
+        """The whole-file view's hunk headers: "full", "slim" (default) or "off".
+        Anything else stored reads as "slim"."""
+        value = self._settings.value(_HUNK_HEADERS, "slim", str)
+        return value if value in ("full", "slim", "off") else "slim"
+
+    @hunk_headers.setter
+    def hunk_headers(self, mode: str) -> None:
+        self._set(_HUNK_HEADERS, str(mode))
 
     @property
     def file_tree(self) -> bool:

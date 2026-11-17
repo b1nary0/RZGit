@@ -2,13 +2,14 @@
 
 Plain Python, no Qt: DiffView paints rows by their kind, and these functions
 decide which rows there are, which changed rows pair up, and which of a pair's
-words changed.
+words changed. The whole-file view (RZG-60) also places hunk headers its own
+way and folds long unchanged stretches.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from enum import StrEnum
@@ -25,6 +26,10 @@ class RowKind(StrEnum):
     REMOVED = "removed"
     FILLER = "filler"  # side by side: where the other side has a line
     NOTE = "note"  # "\ No newline at end of file"
+    FOLD = "fold"  # whole file: "⋯ 24 unchanged lines" in place of them
+
+
+FoldKey = tuple[int | None, int | None]  # a stretch's first folded line: its old and new numbers
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,7 @@ class DiffRow:
     # Position, not content, so rows still compare by what they show.
     hunk: int | None = field(default=None, compare=False)
     line: int | None = field(default=None, compare=False)
+    fold: FoldKey | None = field(default=None, compare=False)  # a fold row's stretch
 
 
 _FILLER = DiffRow(RowKind.FILLER)
@@ -110,6 +116,112 @@ def split_rows(diff: FileDiff) -> tuple[tuple[DiffRow, ...], tuple[DiffRow, ...]
                 right.extend(rows)
         flush()
     return tuple(left), tuple(right)
+
+
+# ---- the whole file (RZG-60) -------------------------------------------------
+
+FOLD_MIN_LINES = 20  # an unchanged stretch longer than this can be folded
+FOLD_KEEP = 3  # unchanged lines kept in view next to a change when it is
+_CHANGES = (RowKind.ADDED, RowKind.REMOVED, RowKind.FILLER)
+
+
+def whole_rows(diff: FileDiff, headers: str) -> tuple[DiffRow, ...]:
+    """``unified_rows`` with the hunk headers ``headers`` asks for (``HunkHeaders``,
+    in ``app_actions``): "full", "slim" or "off"."""
+    return _place_headers(headers, unified_rows(diff))[0]
+
+
+def whole_split_rows(diff: FileDiff, headers: str
+                     ) -> tuple[tuple[DiffRow, ...], tuple[DiffRow, ...]]:
+    """``split_rows`` with the hunk headers ``headers`` asks for, on both sides."""
+    left, right = _place_headers(headers, *split_rows(diff))
+    return left, right
+
+
+def _place_headers(headers: str,
+                   *sides: Sequence[DiffRow]) -> list[tuple[DiffRow, ...]]:
+    """Rows of one or two sides that line up: full headers stay; slim ones go
+    before each hunk's first changed row (on either side); off, none."""
+    if headers == "full":
+        return [tuple(rows) for rows in sides]
+    out: list[list[DiffRow]] = [[] for _ in sides]
+    seen: set[int] = set()
+    for n in range(len(sides[0])):
+        if sides[0][n].kind is RowKind.HUNK:
+            continue
+        hunk = next((rows[n].hunk for rows in sides
+                     if rows[n].kind in _CHANGES and rows[n].hunk is not None), None)
+        if headers == "slim" and hunk is not None and hunk not in seen:
+            seen.add(hunk)
+            for rows in out:
+                rows.append(DiffRow(RowKind.HUNK, "", hunk=hunk))
+        for rows, side in zip(out, sides):
+            rows.append(side[n])
+    return [tuple(rows) for rows in out]
+
+
+@dataclass(frozen=True)
+class Stretch:
+    """The foldable part of a long unchanged stretch: rows ``start`` to ``end``
+    (not included), holding ``lines`` unchanged lines (and maybe a header)."""
+
+    key: FoldKey
+    start: int
+    end: int
+    lines: int
+
+
+def stretches(rows: Sequence[DiffRow]) -> list[Stretch]:
+    """The stretches of ``rows`` that can be folded: unchanged runs (hunk headers
+    don't break one) of more than ``FOLD_MIN_LINES`` lines, less ``FOLD_KEEP``
+    lines next to a change on either side. Side by side, either side's rows
+    give the same stretches."""
+    found: list[Stretch] = []
+    context: list[int] = []
+    seen_change = False
+
+    def end_run(at_end: bool) -> None:
+        if len(context) > FOLD_MIN_LINES:
+            keep = context[FOLD_KEEP if seen_change else 0:
+                           len(context) - (0 if at_end else FOLD_KEEP)]
+            first = rows[keep[0]]
+            found.append(Stretch((first.old_no, first.new_no), keep[0], keep[-1] + 1, len(keep)))
+        context.clear()
+
+    for n, row in enumerate(rows):
+        if row.kind is RowKind.CONTEXT:
+            context.append(n)
+        elif row.kind is not RowKind.HUNK:
+            end_run(at_end=row.kind is RowKind.NOTE and _only_notes(rows, n))
+            seen_change = seen_change or row.kind in _CHANGES
+    end_run(at_end=True)
+    return found
+
+
+def _only_notes(rows: Sequence[DiffRow], n: int) -> bool:
+    return all(row.kind is RowKind.NOTE for row in rows[n:])
+
+
+def fold(rows: Sequence[DiffRow], found: Sequence[Stretch], folded: Collection[FoldKey]
+         ) -> tuple[tuple[DiffRow, ...], dict[int, FoldKey]]:
+    """``rows`` with each stretch whose key is in ``folded`` as one fold row,
+    and where the others start (the rows that show a fold mark), by key."""
+    out: list[DiffRow] = []
+    marks: dict[int, FoldKey] = {}
+    starts = {s.start: s for s in found}
+    n = 0
+    while n < len(rows):
+        stretch = starts.get(n)
+        if stretch is not None and stretch.key in folded:
+            out.append(DiffRow(RowKind.FOLD, f"⋯ {stretch.lines:,} unchanged lines",
+                               fold=stretch.key))
+            n = stretch.end
+            continue
+        if stretch is not None:
+            marks[len(out)] = stretch.key
+        out.append(rows[n])
+        n += 1
+    return tuple(out), marks
 
 
 def _rows(line: DiffLine, hunk: int, index: int) -> list[DiffRow]:

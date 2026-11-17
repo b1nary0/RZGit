@@ -55,6 +55,18 @@ class AppSettingsTests(unittest.TestCase):
         self.settings.side_by_side_diff = True
         self.assertTrue(self.reopen().side_by_side_diff)
 
+    def test_whole_file_diff_defaults_to_off_and_survives_a_reopen(self):
+        self.assertFalse(self.settings.whole_file_diff)
+        self.settings.whole_file_diff = True
+        self.assertTrue(self.reopen().whole_file_diff)
+
+    def test_hunk_headers_default_to_slim_and_survive_a_reopen(self):
+        self.assertEqual(self.settings.hunk_headers, "slim")
+        self.settings.hunk_headers = "off"
+        self.assertEqual(self.reopen().hunk_headers, "off")
+        self.settings.hunk_headers = "bogus"
+        self.assertEqual(self.reopen().hunk_headers, "slim")
+
     def test_theme_mode_defaults_to_system_and_survives_a_reopen(self):
         self.assertEqual(self.settings.theme_mode, "system")
         self.settings.theme_mode = "dark"

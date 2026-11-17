@@ -502,29 +502,32 @@ class Repo:
         old_path: str | None = None,
         max_bytes: int | None = None,
         max_lines: int | None = None,
+        context: int | None = None,
     ) -> FileDiff:
         """The changes to ``path`` that ``source`` names.
 
         ``commit`` is needed for ``DiffSource.COMMIT``. ``old_path`` (a staged
         or committed rename's source) lets git show the change as a rename.
         Output over ``max_bytes`` or ``max_lines`` isn't parsed: the result
-        is ``too_large`` and has no hunks.
+        is ``too_large`` and has no hunks. ``context``: lines of context around
+        each change (git's default, 3, when None).
         """
         paths = (old_path, path) if old_path else (path,)
         ok_codes = (0,)
+        options = _DIFF_OPTIONS if context is None else (*_DIFF_OPTIONS, f"--unified={context}")
         match source:
             case DiffSource.WORKTREE:
-                args = ["diff", *_DIFF_OPTIONS, "--", path]
+                args = ["diff", *options, "--", path]
             case DiffSource.INDEX:
-                args = ["diff", "--cached", *_DIFF_OPTIONS, "--", *paths]
+                args = ["diff", "--cached", *options, "--", *paths]
             case DiffSource.UNTRACKED:
                 # --no-index exits with 1 when the files differ, which they do.
-                args = ["diff", "--no-index", *_DIFF_OPTIONS, "--", "/dev/null", path]
+                args = ["diff", "--no-index", *options, "--", "/dev/null", path]
                 ok_codes = (0, 1)
             case DiffSource.COMMIT:
                 if commit is None:
                     raise ValueError("a commit diff needs the commit")
-                args = ["show", "--format=", "--diff-merges=first-parent", *_DIFF_OPTIONS,
+                args = ["show", "--format=", "--diff-merges=first-parent", *options,
                         commit, "--", *paths]
             case _:
                 raise ValueError(f"not a diff source: {source!r}")

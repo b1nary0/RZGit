@@ -5,12 +5,14 @@ so a long diff costs little until it's scrolled to. Row backgrounds are
 painted for the visible rows only, under the text, from each row's kind,
 and so are the changed words of a paired removed and added line.
 Hunk headers can show a link at the right edge. Whole changed lines are
-selected (a LineSelection), not text.
+selected (a LineSelection), not text. In the whole-file view, a click on a fold
+row or on a fold mark in the gutter asks the panel to fold or unfold.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, Signal
@@ -29,7 +31,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QFrame, QPlainTextEdit, QToolTip, QWidget
 
 from rzgitclient.ui.panels.diff_gutter import DiffGutter
-from rzgitclient.ui.panels.diff_rows import DiffRow, RowKind, Spans, word_spans
+from rzgitclient.ui.panels.diff_rows import DiffRow, FoldKey, RowKind, Spans, word_spans
 from rzgitclient.ui.panels.line_selection import LineSelection
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.theme.style_roles import Role, set_role
@@ -49,6 +51,7 @@ class Numbers(Enum):
 class DiffView(QPlainTextEdit):
     hunk_clicked = Signal(int)  # the index of the hunk whose header link was clicked
     lines_clicked = Signal(object)  # frozenset of (hunk, line): a gutter button was clicked
+    fold_clicked = Signal(object)  # the FoldKey of a fold row or fold mark that was clicked
 
     def __init__(self, numbers: Numbers, parent: QWidget | None = None):
         super().__init__(parent)
@@ -64,6 +67,7 @@ class DiffView(QPlainTextEdit):
         self._word_bg: dict[RowKind, QColor] = {}
         self._partners: Mapping[int, str] = {}  # paired row → its partner's text
         self._spans: dict[int, Spans] = {}  # changed words per row, worked out when painted
+        self._fold_marks: Mapping[int, FoldKey] = {}  # row → the stretch it starts
         self.selection = LineSelection(self)
         self.selection.changed.connect(self._selection_changed)
         set_role(self, Role.DIFF_VIEW)
@@ -83,17 +87,24 @@ class DiffView(QPlainTextEdit):
     def rows(self) -> tuple[DiffRow, ...]:
         return self._rows
 
+    @property
+    def fold_marks(self) -> Mapping[int, FoldKey]:
+        return self._fold_marks
+
     def set_rows(self, rows: Sequence[DiffRow], keep_scroll: bool = False, *,
-                 partners: Mapping[int, str] | None = None) -> None:
+                 partners: Mapping[int, str] | None = None,
+                 fold_marks: Mapping[int, FoldKey] | None = None) -> None:
         """Show ``rows``; with ``keep_scroll``, stay where the view was scrolled to (and
         keep the selection, if the rows are the same). ``partners`` maps a paired
-        changed row to the other line's text, for word highlights."""
+        changed row to the other line's text, for word highlights; ``fold_marks``
+        a row that starts a foldable stretch to the stretch."""
         v, h = self.verticalScrollBar().value(), self.horizontalScrollBar().value()
         rows = tuple(rows)
         if not (keep_scroll and rows == self._rows):
             self.selection.clear()
         self._rows = rows
         self._partners = partners or {}
+        self._fold_marks = fold_marks or {}
         self._spans = {}
         self.setPlainText("\n".join(r.text for r in self._rows))
         numbers = [n for r in self._rows for n in (r.old_no, r.new_no) if n is not None]
@@ -103,6 +114,31 @@ class DiffView(QPlainTextEdit):
         if keep_scroll:
             self.verticalScrollBar().setValue(v)
             self.horizontalScrollBar().setValue(h)
+
+    def place(self) -> Place:
+        """Where the view is, by line rather than by row: the selected lines, and
+        the line at the top. ``go_to`` finds them again in other rows."""
+        selected = frozenset(_line_key(self._rows[n]) for n in self.selection.rows)
+        first = self.firstVisibleBlock().blockNumber()
+        top = next((_line_key(r) for r in self._rows[max(first, 0):]
+                    if r.old_no is not None or r.new_no is not None), None)
+        return Place(selected, top)
+
+    def go_to(self, place: Place, show_selection: bool = True) -> None:
+        """Select ``place``'s lines again and, with ``show_selection``, scroll the
+        first of them into the middle; otherwise (or with none) put its top line
+        back at the top, or the nearest line after it."""
+        rows = [n for n, r in enumerate(self._rows)
+                if _line_key(r) in place.selected and self.selection.selectable(n)]
+        if rows:
+            self.selection.set_rows(rows)
+        bar = self.verticalScrollBar()
+        if rows and show_selection:
+            bar.setValue(max(0, rows[0] - bar.pageStep() // 2))
+        elif place.top is not None:
+            n = _nearest(self._rows, place.top)
+            if n is not None:
+                bar.setValue(n)
 
     def set_hunk_link(self, text: str, tooltip: str = "") -> None:
         """Show ``text`` as a link on every hunk header ("" for none), or with
@@ -187,8 +223,11 @@ class DiffView(QPlainTextEdit):
             super().mousePressEvent(event)
             return
         hunk = self.link_at(event.position().toPoint())
+        row = self.row_at(event.position().toPoint())
         if hunk is not None:
             self.hunk_clicked.emit(hunk)
+        elif row is not None and row.kind is RowKind.FOLD:
+            self.fold_clicked.emit(row.fold)
         else:
             self.selection.press_at(int(event.position().y()), event.modifiers())
         event.accept()
@@ -198,7 +237,9 @@ class DiffView(QPlainTextEdit):
         if event.buttons() & Qt.MouseButton.LeftButton:
             self.selection.drag_to(y)
         self.gutter.set_hover(self.row_number_at(y))
-        over = self.link_at(event.position().toPoint()) is not None
+        row = self.row_at(event.position().toPoint())
+        over = (self.link_at(event.position().toPoint()) is not None
+                or (row is not None and row.kind is RowKind.FOLD))
         self.viewport().setCursor(Qt.CursorShape.PointingHandCursor if over
                                   else Qt.CursorShape.ArrowCursor)
         event.accept()
@@ -230,11 +271,13 @@ class DiffView(QPlainTextEdit):
         self._link_color = QColor(c.accent)
         self._backgrounds = {
             RowKind.HUNK: QColor(c.diff_hunk_bg),
+            RowKind.FOLD: QColor(c.diff_hunk_bg),
             RowKind.ADDED: QColor(c.diff_added_bg),
             RowKind.REMOVED: QColor(c.diff_removed_bg),
             RowKind.FILLER: QColor(c.diff_filler_bg),
         }
         self._text_colors = {RowKind.HUNK: QColor(c.diff_hunk_text),
+                             RowKind.FOLD: QColor(c.diff_hunk_text),
                              RowKind.NOTE: QColor(c.text_muted)}
         self._base = QColor(c.content_bg)
         self._selected_bg = {RowKind.ADDED: QColor(c.diff_added_selected_bg),
@@ -324,7 +367,7 @@ class DiffView(QPlainTextEdit):
         painter.end()
 
     def _color_text(self) -> None:
-        """Colour the text of hunk headers and notes (there are few of them)."""
+        """Colour the text of hunk headers, notes and folds (there are few of them)."""
         if not self._rows:
             return
         doc = self.document()
@@ -369,6 +412,37 @@ class DiffView(QPlainTextEdit):
                 self.gutter.set_hover(self.row_number_at(y))
         else:
             self.gutter.update(0, rect.y(), self.gutter.width(), rect.height())
+
+
+LineKey = tuple[RowKind, int | None, int | None]
+
+
+@dataclass(frozen=True)
+class Place:
+    selected: frozenset[LineKey]
+    top: LineKey | None
+
+
+def _line_key(row: DiffRow) -> LineKey:
+    return row.kind, row.old_no, row.new_no
+
+
+def _nearest(rows: Sequence[DiffRow], key: LineKey) -> int | None:
+    """The row of line ``key``; if it isn't shown, the fold row it's in, or the
+    first row after it."""
+    _kind, old, new = key
+    after = None
+    for n, row in enumerate(rows):
+        if _line_key(row) == key:
+            return n
+        if after is None and (
+                (new is not None and row.new_no is not None and row.new_no >= new)
+                or (new is None and old is not None and row.old_no is not None
+                    and row.old_no >= old)):
+            after = n
+    if after and rows[after - 1].kind is RowKind.FOLD:
+        return after - 1
+    return after
 
 
 def _utf16(text: str, i: int) -> int:

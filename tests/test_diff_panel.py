@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication
 
 from rzgitclient.core.diff_patch import hunk_lines
 from rzgitclient.core.selection import FileSelection, FileSource
+from rzgitclient.ui.app_actions import HunkHeaders
 from rzgitclient.ui.panels import diff_panel
 from rzgitclient.ui.panels.diff_panel import DiffPanel
 from rzgitclient.ui.panels.diff_rows import RowKind, unified_rows
@@ -453,3 +454,224 @@ class DiffPanelHunkTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DiffPanelWholeFileTests(unittest.TestCase):
+    """Show Whole File: hunk headers, folding, keeping the place (RZG-60, spec §5.4)."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.repo = make_repo(Path(self._tmp.name) / "repo")
+        base = "".join(f"line {n}\n" for n in range(1, 101))
+        commit_file(self.repo, "a.txt", base, "first")
+        # Two changes, far apart: lines 30 and 70.
+        changed = base.replace("line 30\n", "THIRTY\n").replace("line 70\n", "SEVENTY\n")
+        (self.repo / "a.txt").write_text(changed)
+        self.ctx = make_panel_context()
+        self.actions = self.ctx.actions
+        self.session = self.ctx.session
+        self.session.open(self.repo)
+        wait_idle(self.session)
+        self.panel = DiffPanel(self.ctx)
+        self.addCleanup(self.panel.deleteLater)
+        self.panel.resize(700, 300)
+        self.panel.show()
+        self.select(A)
+
+    def tearDown(self):
+        self.session.shutdown()
+        self._tmp.cleanup()
+
+    def settle(self):
+        wait_idle(self.session)
+        QCoreApplication.processEvents()
+
+    def select(self, file):
+        self.ctx.selection.file = file
+        self.settle()
+
+    def whole(self, on=True):
+        self.actions.whole_file_diff.setChecked(on)
+        self.settle()
+
+    def view(self):
+        return self.panel._unified
+
+    def kinds(self, view=None):
+        return [r.kind for r in (view or self.view()).rows]
+
+    def test_it_shows_every_line_and_off_shows_the_hunks_again(self):
+        hunks_rows = self.view().rows
+        self.assertTrue(self.panel._headers.isHidden())
+        self.whole()
+        self.assertFalse(self.panel._headers.isHidden())
+        self.assertTrue(self.session.diff_whole)
+        rows = self.view().rows
+        self.assertEqual([r.new_no for r in rows if r.new_no], list(range(1, 101)))
+        # Slim headers by default: one empty header row above each change.
+        headers = [n for n, r in enumerate(rows) if r.kind is RowKind.HUNK]
+        self.assertEqual([rows[n].text for n in headers], ["", ""])
+        self.assertEqual([rows[n + 1].text for n in headers], ["line 30", "line 70"])
+        self.assertEqual(self.view()._link, "Stage Hunk")
+        self.whole(False)
+        self.assertTrue(self.panel._headers.isHidden())
+        self.assertEqual(self.view().rows, hunks_rows)
+
+    def test_hunk_headers_full_slim_and_off(self):
+        self.whole()
+        header_texts = {}
+        for mode in HunkHeaders:
+            self.actions.hunk_headers[mode].setChecked(True)
+            header_texts[mode] = [r.text for r in self.view().rows if r.kind is RowKind.HUNK]
+        self.assertEqual(header_texts[HunkHeaders.FULL],
+                         [h.header for h in self.session.diff.hunks])
+        self.assertEqual(header_texts[HunkHeaders.SLIM], ["", ""])
+        self.assertEqual(header_texts[HunkHeaders.OFF], [])
+        self.assertEqual([a.text() for a in self.panel._headers.menu().actions()],
+                         ["&Full", "&Slim", "&Off"])
+
+    def test_stage_hunk_stages_one_change_of_the_whole_file(self):
+        self.whole()
+        self.view().hunk_clicked.emit(1)
+        self.settle()
+        index = git(self.repo, "show", ":a.txt")
+        self.assertIn("SEVENTY", index)
+        self.assertNotIn("THIRTY", index)
+        self.assertTrue(self.session.diff_whole)  # still whole after the reload
+        self.assertEqual([r.new_no for r in self.view().rows if r.new_no], list(range(1, 101)))
+
+    def visible(self, view, n):
+        first = view.firstVisibleBlock().blockNumber()
+        return first <= n < first + view.verticalScrollBar().pageStep()
+
+    def test_toggling_keeps_the_selected_line_selected_and_in_view(self):
+        view = self.view()
+        added = next(n for n, r in enumerate(view.rows) if r.text == "SEVENTY")
+        view.selection.set_rows([added])
+        self.whole()
+        rows = view.rows
+        (n,) = view.selection.rows
+        self.assertEqual((rows[n].kind, rows[n].text, rows[n].new_no),
+                         (RowKind.ADDED, "SEVENTY", 70))
+        self.assertGreater(n, view.verticalScrollBar().pageStep())  # it had to scroll
+        self.assertTrue(self.visible(view, n))
+        self.whole(False)
+        (n,) = view.selection.rows
+        self.assertEqual(view.rows[n].text, "SEVENTY")
+        self.assertTrue(self.visible(view, n))
+
+    def top(self, view):
+        return view.rows[view.firstVisibleBlock().blockNumber()]
+
+    def test_with_nothing_selected_the_top_line_stays(self):
+        view = self.view()
+        self.whole()
+        view.verticalScrollBar().setValue(next(n for n, r in enumerate(view.rows)
+                                               if r.new_no == 50))
+        self.actions.hunk_headers[HunkHeaders.FULL].setChecked(True)
+        self.assertEqual(self.top(view).new_no, 50)
+        view.fold_clicked.emit((1, 1))  # above it
+        self.assertEqual(self.top(view).new_no, 50)
+        view.fold_clicked.emit((34, 34))  # around it: the fold row is at the top
+        self.assertEqual(self.top(view).fold, (34, 34))
+        view.fold_clicked.emit((34, 34))
+        view.verticalScrollBar().setValue(next(n for n, r in enumerate(view.rows)
+                                               if r.new_no == 68))
+        self.whole(False)  # the hunks view is short: line 68 can't be at the top
+        self.assertTrue(self.visible(view, next(n for n, r in enumerate(view.rows)
+                                                if r.new_no == 68)))
+
+    def fold_rows(self, view=None):
+        return [r for r in (view or self.view()).rows if r.kind is RowKind.FOLD]
+
+    def test_folding_a_stretch_and_unfolding_it(self):
+        self.whole()
+        view = self.view()
+        self.assertEqual(sorted(view.fold_marks.values()), [(1, 1), (34, 34), (74, 74)])
+        view.fold_clicked.emit((34, 34))
+        self.assertEqual([r.text for r in self.fold_rows()], ["⋯ 33 unchanged lines"])
+        self.assertNotIn((34, 34), view.fold_marks.values())
+        # Folding is for viewing: Stage Hunk still stages the whole change block.
+        view.fold_clicked.emit((34, 34))
+        self.assertEqual(self.fold_rows(), [])
+
+    def test_fold_all_and_unfold_all_from_the_menu(self):
+        self.whole()
+        view = self.view()
+        menu = self.panel.menu_for(view, QPoint(30, 5))
+        self.addCleanup(menu.deleteLater)
+        entries = {a.text(): a for a in menu.actions()}
+        self.assertTrue(entries["Fold All Unchanged"].isEnabled())
+        self.assertFalse(entries["Unfold All"].isEnabled())
+        entries["Fold All Unchanged"].trigger()
+        self.assertEqual(len(self.fold_rows()), 3)
+        self.assertEqual(len(view.rows), 100 + 2 + 2 - 26 - 33 - 27 + 3)
+        menu = self.panel.menu_for(view, QPoint(30, 5))
+        self.addCleanup(menu.deleteLater)
+        entries = {a.text(): a for a in menu.actions()}
+        self.assertFalse(entries["Fold All Unchanged"].isEnabled())
+        entries["Unfold All"].trigger()
+        self.assertEqual(self.fold_rows(), [])
+
+    def test_the_hunks_view_has_no_fold_entries_or_marks(self):
+        menu = self.panel.menu_for(self.view(), QPoint(30, 5))
+        self.addCleanup(menu.deleteLater)
+        self.assertNotIn("Fold All Unchanged", [a.text() for a in menu.actions()])
+        self.assertEqual(self.view().fold_marks, {})
+
+    def test_folds_survive_header_and_view_changes_and_a_new_diff_resets_them(self):
+        self.whole()
+        self.panel.fold_all()
+        self.actions.hunk_headers[HunkHeaders.FULL].setChecked(True)
+        self.assertEqual(len(self.fold_rows()), 3)
+        self.actions.side_by_side_diff.setChecked(True)
+        left, right = self.panel._left, self.panel._right
+        self.assertEqual(len(self.fold_rows(left)), 3)
+        self.assertEqual([n for n, r in enumerate(left.rows) if r.kind is RowKind.FOLD],
+                         [n for n, r in enumerate(right.rows) if r.kind is RowKind.FOLD])
+        self.actions.side_by_side_diff.setChecked(False)
+        (self.repo / "a.txt").write_text((self.repo / "a.txt").read_text() + "more\n")
+        self.session.refresh()
+        self.settle()
+        self.assertEqual(self.fold_rows(), [])
+
+    def test_a_click_on_a_fold_mark_or_a_fold_row_folds_and_unfolds(self):
+        self.whole()
+        view = self.view()
+        gutter = view.gutter
+        view.verticalScrollBar().setValue(0)
+        QCoreApplication.processEvents()
+        (_n, _row, top, height), *_ = view.visible_rows(view.viewport().rect())
+        mark = gutter.mark_rect(top, height).center()
+        QTest.mouseClick(gutter, Qt.MouseButton.LeftButton, pos=mark)
+        self.assertIs(view.rows[0].kind, RowKind.FOLD)
+        QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(40, 2))
+        self.assertEqual(self.fold_rows(), [])
+        self.assertEqual(view.rows[0].new_no, 1)
+
+    def test_a_whole_file_too_large_offers_the_changes_only(self):
+        with mock.patch("rzgitclient.core.diff_request.DIFF_MAX_LINES", 50):
+            self.whole()
+            self.assertEqual(self.panel._stack.currentWidget(), self.panel._message_page)
+            self.assertFalse(self.panel._changes_only.isHidden())
+            self.assertFalse(self.panel._show_anyway.isHidden())
+            self.panel._changes_only.click()
+            self.settle()
+        self.assertFalse(self.actions.whole_file_diff.isChecked())
+        self.assertIs(self.panel._stack.currentWidget(), self.view())
+
+    def test_a_whole_added_file_still_shows_unified_side_by_side(self):
+        """RZG-61's rule holds in the whole-file view."""
+        (self.repo / "new.txt").write_text("".join(f"n {i}\n" for i in range(40)))
+        self.session.refresh()
+        self.settle()
+        self.actions.side_by_side_diff.setChecked(True)
+        self.whole()
+        self.select(FileSelection("new.txt", FileSource.WORKTREE))
+        self.assertIs(self.panel._stack.currentWidget(), self.view())
+        self.assertEqual(self.panel._hint.text(), "Unified: whole file added")
+        self.assertEqual(len([r for r in self.view().rows if r.kind is RowKind.ADDED]), 40)

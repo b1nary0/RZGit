@@ -37,6 +37,14 @@ class StashOp(StrEnum):
     DROP = "drop"
 
 
+class HunkHeaders(StrEnum):
+    """The whole-file diff's hunk headers (spec §5.4, §8)."""
+
+    FULL = "full"  # the "@@" rows, where the hunks meet
+    SLIM = "slim"  # a row with no text directly above each hunk's first change
+    OFF = "off"  # none
+
+
 class WorktreeOp(StrEnum):
     """A worktree operation the Worktrees or Branches panel asks for (spec §8)."""
 
@@ -82,6 +90,17 @@ class AppActions(QObject):
         self.reset_layout = self._action("view-restore", "&Reset Layout")
         self.side_by_side_diff = self._action("view-split-left-right", "&Side by Side Diff")
         self.side_by_side_diff.setCheckable(True)
+        # The whole file, not only the changes (spec §8); its hunk headers are one of three.
+        self.whole_file_diff = self._action("document-preview", "Show &Whole File")
+        self.whole_file_diff.setCheckable(True)
+        self._hunk_headers_group = QActionGroup(self)
+        self.hunk_headers: dict[HunkHeaders, QAction] = {}
+        for headers, text in ((HunkHeaders.FULL, "&Full"), (HunkHeaders.SLIM, "&Slim"),
+                              (HunkHeaders.OFF, "&Off")):
+            action = QAction(text, self._hunk_headers_group)
+            action.setCheckable(True)
+            self.hunk_headers[headers] = action
+        self.hunk_headers[HunkHeaders.SLIM].setChecked(True)
         self.file_tree = self._action("view-list-tree", "Show Files as &Tree")
         self.file_tree.setCheckable(True)
         self.file_tree.setChecked(True)
@@ -205,6 +224,10 @@ class AppActions(QObject):
     def selected(self, source: FileSource) -> tuple[str, ...]:
         """Paths of the selected rows from ``source`` (Stage, Unstage, Discard)."""
         return tuple(f.path for f in self._selection.files if f.source is source)
+
+    def hunk_headers_mode(self) -> HunkHeaders:
+        """The checked one of ``hunk_headers``."""
+        return next((h for h, a in self.hunk_headers.items() if a.isChecked()), HunkHeaders.SLIM)
 
     def _action(
         self, icon: str, text: str, shortcut: QKeySequence.StandardKey | str | None = None

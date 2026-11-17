@@ -186,7 +186,8 @@ class RepoSession(QObject):
     def refresh(self, parts: Refresh = Refresh.ALL) -> None   # Flag: HEAD|BRANCHES|HISTORY|STATUS|STASHES|COUNT
     def load_more_history(self) -> None   # the next page of history, in the background
     def set_history_order(self, order: HistoryOrder) -> None   # DATE or TOPO; reloads history
-    def request_diff(self, file: FileSelection | None, full: bool = False) -> None
+    def request_diff(self, file: FileSelection | None, full: bool = False,
+                     whole: bool = False) -> None
     def request_commit_files(self, sha: str | None) -> None   # the files a commit changed
     def request_commit_details(self, sha: str | None) -> None # its message, people, parents, refs
 
@@ -217,7 +218,7 @@ class RepoSession(QObject):
 
     # Latest values, so a panel created later renders at once (read-only properties):
     repo, head, head_sha, branches, history, history_order, status, stashes, commit_count, history_complete,
-    diff_file, diff,
+    diff_file, diff, diff_whole,
     commit_files_sha, commit_files, commit_details_sha, commit_details, last_commit
 ```
 
@@ -328,6 +329,16 @@ class RepoSession(QObject):
   - **Size limit:** a diff of more than `DIFF_MAX_BYTES` (1 MB) or `DIFF_MAX_LINES`
     (20,000 lines) comes back as `FileDiff(too_large=True)` with no hunks, and isn't parsed.
     `request_diff(file, full=True)` reads it whole; the target keeps `full` across refreshes.
+  - **The whole file** (RZG-60): `request_diff(file, whole=True)` reads the diff with
+    `--unified=WHOLE_CONTEXT` (10⁹ lines), so git returns every line of the file in one hunk.
+    `split_whole(diff)` (`diff_request.py`, plain Python) then cuts each hunk in the middle
+    of every unchanged run longer than 6 lines (twice git's 3 lines of context). The pieces
+    cover the file without gaps, each with its own `@@ -a,b +c,d @@` header, so a hunk is
+    still one changed block: Stage Hunk and the patches of `diff_patch.py` work as in the
+    hunks view. On a `-U3` diff it changes nothing. The size limit applies to the
+    whole-file output as to any other. The target keeps `whole` across refreshes, and
+    `diff_whole` says whether the latest `diff_changed` was read whole; it is part of what
+    makes a result differ, so toggling always emits.
 - **A commit's files are asked for** too, like a diff: `request_commit_files(sha)` makes
   `sha` the **commit files target**, and the result arrives as `commit_files_changed(sha,
   files)`, after the parts of its job. A newer request, `open()` and `close()` make older
@@ -1278,9 +1289,37 @@ than rebuilding them.
   disabled, saying why.
   Discards go through `AppActions.request_discard_lines`: the window confirms (§8). The diff
   that comes back keeps the scroll position.
+- **Show Whole File** (RZG-60): the checkable **Show Whole File** action (§8), from the View
+  menu or the panel's own button beside Side by Side Diff, asks for the diff with
+  `whole=True` (§4.1): every line of the file, the changes highlighted where they are, in
+  unified and side by side alike (a whole added or deleted file still shows unified, as
+  above). Line numbers, marks, word highlights, line buttons and the hunk actions work as
+  in the hunks view, on the hunks `split_whole` made.
+  - **Hunk headers** in the whole-file view are one of three (`HunkHeaders`, in
+    `app_actions.py`; from a drop-down button in the bar, shown only while the whole file
+    is, and from View → Hunk Headers): **Full**, the `@@` rows where the hunks meet; **Slim** (the default), a
+    header row with no text directly above each hunk's first changed line, there for its
+    Stage Hunk link; **Off**, none (Stage Hunk is in the context menu). `whole_rows(diff,
+    headers)` and `whole_split_rows(diff, headers)` in `diff_rows.py` place them. The
+    hunks view always has full headers.
+  - **Folding:** every unchanged stretch (a run of context rows) longer than
+    `FOLD_MIN_LINES` (20) can be folded: all but `FOLD_KEEP` (3) lines next to each change
+    collapse into one `FOLD` row, "⋯ N unchanged lines", in the hunk colours with no line
+    numbers. The stretch's first foldable row shows a fold mark (`▾`) in the gutter's
+    mark column, and a fold row shows `▸`: a click on the mark folds, and a click on a
+    fold row unfolds. Right-click adds **Fold All Unchanged** and **Unfold All**. `stretches(rows)` and `fold(rows, folded)`
+    (`diff_rows.py`) do it; a stretch is known by the old and new numbers of its first
+    line, so side by side folds both sides at the same rows. Folds are for viewing only:
+    they aren't saved, they survive switching views and header modes, and a new diff
+    resets them. Fold rows are never selected.
+  - **Keeping the place:** toggling it keeps the selected lines selected (matched by
+    their kind and old and new numbers) and in view; with nothing selected, the line at
+    the top of the view stays at the top.
 - **States:** "Select a file to see its diff", "No changes to show", "Binary file", "Large
   diff (N lines) [Show anyway]" and "Couldn't read this diff" are a muted message instead
   of the view (`Role.PLACEHOLDER`). If a diff takes more than 150 ms, "Loading…" is shown.
+  A whole file over the size limit also offers **Show Changes Only**, which unchecks Show
+  Whole File.
 - **Updates:** a new diff of the same file keeps the scroll position; another file starts
   at the top. Selecting a file at another path calls `request_activation()`, so the Diff
   tab comes to the front; a refresh never does.
@@ -1784,9 +1823,13 @@ Per-widget sheets are slow to apply and scatter the rules.
   with the layout, so panels never touch settings. The Diff panel may show a whole added or
   deleted file unified while it is on (§5.4); that never unchecks or changes it. **Show Files as Tree** works the same
   way (`AppSettings.file_tree`, on by default): every `FileList` follows its `toggled`.
-  Both are in the **View** menu. **Topological Order** (RZG-58, `AppSettings.topo_order`,
-  off by default) too: AppActions sets the session's `history_order` (§4.1) on `toggled`.
-  It is also in History's header menu.
+  **Show Whole File** (`AppSettings.whole_file_diff`, off by default) is a third such
+  toggle, and **Hunk Headers** (`AppActions.hunk_headers`, by `HunkHeaders`: Full, Slim,
+  Off) is an exclusive group like Theme, saved as `AppSettings.hunk_headers` (`"slim"` by
+  default); neither has a shortcut. All are in the **View** menu.
+  **Topological Order** (RZG-58, `AppSettings.topo_order`, off by default) too: AppActions
+  sets the session's `history_order` (§4.1) on `toggled`. It is also in History's header
+  menu.
 - **Theme** (View → Theme): **Light**, **Dark** and **System**, three checkable actions in
   one exclusive group (`AppActions.theme_modes`, by `ThemeMode`). MainWindow checks the
   current mode, calls `ctx.theme.set_mode` when one is triggered, and saves it on close

@@ -105,7 +105,8 @@ class RepoSession(QObject):
         self._diff_request: DiffRequest | None = None
         self._diff_generation = 0
         self._diff_pending = False  # the target waits for the next job
-        self._diff: tuple[FileSelection | None, FileDiff | None] = (None, None)
+        # The latest result: its file, its diff, and whether it was read whole.
+        self._diff: tuple[FileSelection | None, FileDiff | None, bool] = (None, None, False)
         # The commit files target, the same way (spec §4.1).
         self._files_sha: str | None = None
         self._files_generation = 0
@@ -204,6 +205,11 @@ class RepoSession(QObject):
     def diff(self) -> FileDiff | None:
         """The latest diff, of ``diff_file``; None if it couldn't be read."""
         return self._diff[1]
+
+    @property
+    def diff_whole(self) -> bool:
+        """Whether the latest diff was read as the whole file (spec §4.1)."""
+        return self._diff[2]
 
     @property
     def commit_files_sha(self) -> str | None:
@@ -322,15 +328,17 @@ class RepoSession(QObject):
         self._history_order = order
         self.refresh(Refresh.HISTORY)
 
-    def request_diff(self, file: FileSelection | None, full: bool = False) -> None:
+    def request_diff(self, file: FileSelection | None, full: bool = False,
+                     whole: bool = False) -> None:
         """Make ``file`` the diff target and read its diff in the background.
 
         The result comes as ``diff_changed``; results of older requests are
         dropped. ``None`` clears the target. ``full`` reads a diff over the
-        size limit whole. Jobs that load the status read the target again.
+        size limit anyway; ``whole`` reads the whole file, not only the changes.
+        Jobs that load the status read the target again.
         """
         self._diff_generation += 1
-        self._diff_request = DiffRequest(file, full) if file is not None else None
+        self._diff_request = DiffRequest(file, full, whole) if file is not None else None
         self._diff_pending = file is not None and self._repo is not None
         if file is None:
             self._store_diff(None, None)
@@ -571,7 +579,8 @@ class RepoSession(QObject):
             # After the parts: a listener of status_changed may have changed the target.
             if result.diff_generation == self._diff_generation and self._diff_request:
                 if result.diff_read:
-                    self._store_diff(self._diff_request.file, result.diff)
+                    self._store_diff(self._diff_request.file, result.diff,
+                                     self._diff_request.whole)
                 elif result.diff_wanted:  # an earlier part failed: read it by itself
                     self._diff_pending = True
             if result.error is not None:
@@ -617,10 +626,11 @@ class RepoSession(QObject):
         else:
             self._signals[part].emit(value)
 
-    def _store_diff(self, file: FileSelection | None, diff: FileDiff | None) -> None:
-        if (file, diff) == self._diff:
+    def _store_diff(self, file: FileSelection | None, diff: FileDiff | None,
+                    whole: bool = False) -> None:
+        if (file, diff, whole) == self._diff:
             return
-        self._diff = (file, diff)
+        self._diff = (file, diff, whole)
         self.diff_changed.emit(file, diff)
 
     def _store_commit_files(self, sha: str | None,

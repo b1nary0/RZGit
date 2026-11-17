@@ -6,13 +6,20 @@ from rzgitclient.ui.panels.diff_rows import (
     WORD_MAX_LENGTH,
     DiffRow,
     RowKind,
+    FOLD_KEEP,
+    FOLD_MIN_LINES,
+    fold,
     split_partners,
     split_rows,
+    stretches,
     unified_partners,
     unified_rows,
     whole_file,
+    whole_rows,
+    whole_split_rows,
     word_spans,
 )
+from rzgitclient.core.diff_request import split_whole
 
 C, A, R = LineKind.CONTEXT, LineKind.ADDED, LineKind.REMOVED
 K = RowKind
@@ -103,6 +110,91 @@ class WholeFileTests(unittest.TestCase):
         mixed = FileDiff("m", (Hunk("@@ -0,0 +1,2 @@", 0, 1, (
             DiffLine(A, None, 1, "a"), DiffLine(R, 1, None, "b"))),))
         self.assertIsNone(whole_file(mixed))
+
+
+def whole_diff(n, changed):
+    """A whole-file diff of ``n`` lines, the lines numbered in ``changed`` (from 1)
+    replaced, cut into hunks as the worker does."""
+    lines = []
+    for i in range(1, n + 1):
+        if i in changed:
+            lines += [DiffLine(R, i, None, f"old {i}"), DiffLine(A, None, i, f"new {i}")]
+        else:
+            lines.append(DiffLine(C, i, i, f"line {i}"))
+    return split_whole(FileDiff("f", (Hunk(f"@@ -1,{n} +1,{n} @@", 1, 1, tuple(lines)),)))
+
+
+class WholeRowsTests(unittest.TestCase):
+    """RZG-60: the whole file's hunk headers and folds."""
+
+    DIFF = whole_diff(80, {30, 60})  # two hunks, cut at line 45/46
+
+    def headers(self, rows):
+        return [(n, r.text, r.hunk) for n, r in enumerate(rows) if r.kind is K.HUNK]
+
+    def test_full_headers_are_where_the_hunks_meet(self):
+        rows = whole_rows(self.DIFF, "full")
+        self.assertEqual(rows, unified_rows(self.DIFF))
+        self.assertEqual([h[1] for h in self.headers(rows)],
+                         [h.header for h in self.DIFF.hunks])
+
+    def test_slim_headers_have_no_text_and_sit_above_each_first_change(self):
+        rows = whole_rows(self.DIFF, "slim")
+        found = self.headers(rows)
+        self.assertEqual([(t, h) for _n, t, h in found], [("", 0), ("", 1)])
+        for n, _t, _h in found:
+            self.assertIs(rows[n + 1].kind, K.REMOVED)
+            self.assertIs(rows[n - 1].kind, K.CONTEXT)
+
+    def test_off_has_no_headers_and_every_line(self):
+        rows = whole_rows(self.DIFF, "off")
+        self.assertEqual(self.headers(rows), [])
+        self.assertEqual(len(rows), 82)
+
+    def test_side_by_side_sides_get_the_same_headers(self):
+        for headers in ("full", "slim", "off"):
+            left, right = whole_split_rows(self.DIFF, headers)
+            self.assertEqual(len(left), len(right))
+            self.assertEqual(self.headers(left), self.headers(right))
+        left, right = whole_split_rows(self.DIFF, "slim")
+        n = self.headers(left)[0][0]
+        self.assertEqual((left[n + 1].kind, right[n + 1].kind), (K.REMOVED, K.ADDED))
+
+    def test_long_unchanged_stretches_keep_three_lines_next_to_a_change(self):
+        rows = whole_rows(self.DIFF, "slim")
+        found = stretches(rows)
+        # Lines 1-29 (at the top: none kept above), 31-59 and 61-80 (at the end).
+        self.assertEqual([s.key for s in found], [(1, 1), (34, 34)])
+        self.assertEqual([s.lines for s in found], [29 - FOLD_KEEP, 29 - 2 * FOLD_KEEP])
+        self.assertEqual(rows[found[0].end].new_no, 27)
+        self.assertLessEqual(80 - 61 + 1, FOLD_MIN_LINES)  # so the last one can't fold
+
+    def test_a_header_inside_a_stretch_doesnt_break_it(self):
+        full = stretches(whole_rows(self.DIFF, "full"))
+        self.assertEqual([(s.key, s.lines) for s in full],
+                         [(s.key, s.lines) for s in stretches(whole_rows(self.DIFF, "slim"))])
+
+    def test_fold_and_unfold(self):
+        rows = whole_rows(self.DIFF, "off")
+        found = stretches(rows)
+        folded, marks = fold(rows, found, {(34, 34)})
+        self.assertEqual(len(folded), len(rows) - found[1].lines + 1)
+        row = next(r for r in folded if r.kind is K.FOLD)
+        self.assertEqual((row.text, row.fold, row.old_no, row.new_no),
+                         (f"⋯ {found[1].lines} unchanged lines", (34, 34), None, None))
+        self.assertEqual(marks, {0: (1, 1)})  # the other stretch can still be folded
+        self.assertEqual(fold(rows, found, set()), (rows, {0: (1, 1), found[1].start: (34, 34)}))
+
+    def test_side_by_side_folds_both_sides_at_the_same_rows(self):
+        left, right = whole_split_rows(self.DIFF, "full")
+        found = stretches(left)
+        self.assertEqual(found, stretches(right))
+        keys = {s.key for s in found}
+        (a, marks_a), (b, marks_b) = fold(left, found, keys), fold(right, found, keys)
+        self.assertEqual(len(a), len(b))
+        self.assertEqual([n for n, r in enumerate(a) if r.kind is K.FOLD],
+                         [n for n, r in enumerate(b) if r.kind is K.FOLD])
+        self.assertEqual(marks_a, {})
 
 
 if __name__ == "__main__":
