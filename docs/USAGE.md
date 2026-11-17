@@ -173,6 +173,10 @@ HEAD, newest first. Its columns are **Graph**, **Subject**, **Author**, **Date**
   "+N" count for the rest. Hover over the label to see all of them. A local branch and its
   remote branch on the same commit share one label, such as "main ⇄ origin". The current
   branch's label is in bold. To hide the labels, hide the Graph column.
+- **The Graph column's width** fits the widest graph and label among the loaded commits,
+  so it doesn't change while you scroll. It widens or narrows as branches and tags come
+  and go. Once you resize it yourself, your width is kept; double-click its edge or
+  choose **Reset Column Widths** to fit it again.
 - **Column labels** (3) resize, hide and show columns as described in
   [Columns](#the-window-its-panels-and-its-layout). History always keeps the order of the
   commits, so its labels don't sort.

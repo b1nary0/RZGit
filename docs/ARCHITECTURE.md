@@ -1390,18 +1390,25 @@ theme when Qt asks, so a theme change is one `dataChanged`.
     of the theme's lane colours that no open lane has, and keeps it down to where it
     ends. On RZE (2,422 commits) the graph is at most 6 lanes wide in date order and 33 in
     topological order (a run of merges from one branch), as wide as git's own.
-  - **Built as it's drawn.** Rows are worked out when first asked for, and kept, so the
-    first page costs only the rows in view. An appended page adds commits to the same
-    `CommitGraph`, which carries on with its open lanes: rows already shown don't change.
-    A reset builds a new one.
+  - **Built a page at a time.** Rows are worked out when first asked for, and kept. Fitting
+    the column (below) asks for every loaded row, so a page's rows are built when it
+    loads: about 4 ms for 500 commits on RZE, 10 ms for all 2,422. An appended page adds
+    commits to the same `CommitGraph`, which carries on with its open lanes: rows already
+    shown don't change. A reset builds a new one.
   - **Drawing:** the delegate draws the graph over the cell's stripe, hover and selection,
     antialiased: straight lines down a lane, a short curve where a line changes lane,
     and a dot at the commit. Uncommitted changes has a hollow dot above HEAD's, in its
     lane, joined to it (in the pinned row too). The sizes are `graph_*` metrics and the
     colours `graph.lanes` (§7.1).
-  - **Width:** the column fits the widest row in view (`set_fitted`, unless the user sized
-    it): its lanes, up to `GRAPH_MAX_LANES` (8), after the inset for the ref labels, or a
-    label and its `+N` (RZG-86) where they reach further. A row with more lanes is cut off there and its
+  - **Width (RZG-92):** the column fits every loaded commit, not only the rows in view
+    (`set_fitted`, unless the user sized it): the most lanes any row has, up to
+    `GRAPH_MAX_LANES` (8), after the inset for the ref labels, or the widest label and its
+    `+N` (RZG-86) where they reach further. So the width stays put while scrolling, and a
+    label is never cut off by the column's edge. It is fitted again when a page loads,
+    the labels change and the theme or font changes, and it shrinks as well as grows: a
+    deleted branch's label gives its room back. A width the user drags is kept (saved in
+    `ctx.columns`, §5.2) and fitting stops; double-clicking its separator or **Reset Column
+    Widths** fits it again. A row with more lanes is cut off there and its
     last lane fades out (a gradient to transparent, so nothing past it shows). The graph
     is clipped to its cell, for a column made narrower.
   - **Cost:** a graph cell that isn't selected, hovered or current skips the style's item
@@ -1453,12 +1460,12 @@ theme when Qt asks, so a theme change is one `dataChanged`.
     - **Where:** centred on the dot (a row past the lane cap: on the last lane drawn),
       vertically centred, always. Where a label's left half wouldn't fit left of its dot
       (with `ref_label_gap`), the lanes move right: the graph's **inset**, the most any
-      row in view needs, so every row's lanes still line up. It is worked out with the
-      column's width, so it changes as labels scroll in and out of view. The `+N` pill
+      loaded commit needs, so every row's lanes still line up. It is worked out with the
+      column's width (RZG-92), so it doesn't change while scrolling. The `+N` pill
       (its border and text `text_muted`) follows `ref_label_gap` to its right.
   - **Width:** a pill is at most `ref_label_max_width` (160 px); a longer name is
-    shortened in the middle. The Graph column widens to fit the rows in view, inset and
-    labels included. In a column the user made narrower, the label and `+N` move left to
+    shortened in the middle. The Graph column fits every loaded commit, inset and labels
+    included (RZG-92). In a column the user made narrower, the label and `+N` move left to
     fit (no further than the left edge), and then the label is shortened.
   - **Turning them off:** hide the Graph column; the labels go with it.
   - **Updates:** the panel rebuilds the labels when `refs_changed`, `stashes_changed`,

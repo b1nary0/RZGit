@@ -557,7 +557,7 @@ class HistoryGraphTests(unittest.TestCase):
         self.assertEqual(len(merge.lower), 2)  # to both parents
         self.assertEqual([self.model.graph_row(r).lane for r in range(1, 6)], [0, 1, 0, 1, 0])
 
-    def test_the_column_fits_the_widest_row_in_view(self):
+    def test_the_column_fits_the_widest_loaded_commit(self):
         graph, refs = self.panel._graph, self.panel._refs
         rows = [(self.model.ref_labels(r), graph.lane_x(self.model.graph_row(r).lane))
                 for r in (1, 2)]  # main and side: the only labels
@@ -970,3 +970,172 @@ class HistoryRefLabelTests(unittest.TestCase):
         image = self.image()
         x = int(rect.left() + self.panel._graph.node_x(self.model.graph_row(3).lane))
         self.assertEqual(image.pixelColor(x, rect.center().y()).name(), self.dot_colour(3))
+
+
+class HistoryGraphFitTests(unittest.TestCase):
+    """The Graph column fits every loaded commit, unless the user sized it (RZG-92,
+    spec §5.4). The panel is short, so the root commit's label is out of view."""
+
+    LONG = "a-rather-long-branch-on-the-root-commit"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = qt_app()
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.repo = make_branched_repo(Path(self._tmp.name) / "repo")
+        self.root = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"], cwd=self.repo,
+                                   check=True, capture_output=True, text=True).stdout.strip()
+        self.ctx = make_panel_context()
+        self.addCleanup(self.ctx.session.shutdown)
+
+    def open_panel(self, page=None):
+        if page is not None:
+            patch = mock.patch("rzgitclient.core.repo_session.HISTORY_PAGE", page)
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.panel = HistoryPanel(self.ctx)
+        self.addCleanup(self.panel.deleteLater)
+        self.view, self.model = self.panel._view, self.panel._model
+        self.header = self.view.horizontalHeader()
+        self.panel.resize(600, 90)
+        self.panel.show()
+        QTest.qWaitForWindowExposed(self.panel)
+        self.ctx.session.open(self.repo)
+        self.settle()
+
+    def settle(self):
+        wait_idle(self.ctx.session)
+        self.app.processEvents()
+
+    def branch(self, *args):
+        subprocess.run(["git", "branch", *args], cwd=self.repo, check=True, capture_output=True)
+        self.ctx.session.refresh()
+        self.settle()
+
+    def width(self):
+        return self.header.sectionSize(GRAPH_COLUMN)
+
+    def needed(self):
+        """The width the root commit's label and its +N need, worked out here."""
+        row = self.model.row_of(self.root)
+        refs, graph = self.panel._refs, self.panel._graph
+        return refs.needed_width(self.model.ref_labels(row),
+                                 graph.inset + graph.lane_x(self.model.graph_row(row).lane))
+
+    def in_view(self, row):
+        return self.view.visualRect(self.model.index(row, SUBJECT_COLUMN)).intersects(
+            self.view.viewport().rect())
+
+    def test_a_label_out_of_view_with_its_plus_n_sets_the_width(self):
+        self.open_panel()
+        before = self.width()
+        self.branch(self.LONG, self.root)
+        self.branch("zz-second", self.root)  # behind the long one: a "+1"
+        row = self.model.row_of(self.root)
+        self.assertEqual([label.text for label in self.model.ref_labels(row)],
+                         [self.LONG, "zz-second"])
+        self.assertFalse(self.in_view(row))
+        self.assertGreater(self.width(), before)
+        self.assertEqual(self.width(), self.needed())
+
+    def test_scrolling_never_changes_the_width_or_the_lanes(self):
+        self.branch(self.LONG, self.root)
+        self.open_panel()
+        width, inset = self.width(), self.panel._graph.inset
+        bar = self.view.verticalScrollBar()
+        self.assertGreater(bar.maximum(), 0)
+        for value in (bar.maximum(), 0, bar.maximum() // 2):
+            bar.setValue(value)
+            self.app.processEvents()
+            self.assertEqual((self.width(), self.panel._graph.inset), (width, inset), value)
+
+    def test_a_longer_label_refits_and_deleting_it_shrinks_the_column(self):
+        self.open_panel()
+        before = self.width()
+        self.branch(self.LONG, self.root)
+        self.assertGreater(self.width(), before)
+        self.branch("-D", self.LONG)
+        self.assertEqual(self.width(), before)
+
+    def test_a_page_that_brings_a_label_refits(self):
+        self.branch(self.LONG, self.root)
+        self.open_panel(page=2)
+        before = self.width()
+        self.assertEqual(self.model.row_of(self.root), -1)  # not loaded yet
+        for _ in range(2):
+            self.ctx.session.load_more_history()
+            self.settle()
+        self.assertGreater(self.model.row_of(self.root), 0)
+        self.assertGreater(self.width(), before)
+        self.assertEqual(self.width(), self.needed())
+
+    def test_a_dragged_width_survives_refreshes_pages_and_a_restart(self):
+        self.open_panel(page=2)
+        drag_column_edge(self.header, GRAPH_COLUMN, -15)
+        dragged = self.width()
+        self.assertTrue(self.header.is_user_sized(GRAPH_COLUMN))
+        self.branch(self.LONG, self.root)
+        for _ in range(2):
+            self.ctx.session.load_more_history()
+            self.settle()
+        self.assertGreater(self.model.row_of(self.root), 0)
+        self.assertEqual(self.width(), dragged)
+        self.panel.close()
+        self.open_panel()  # the same saved columns, a new panel
+        self.assertEqual(self.width(), dragged)
+
+    def test_reset_column_widths_fits_it_again(self):
+        self.branch(self.LONG, self.root)
+        self.open_panel()
+        fitted = self.width()
+        drag_column_edge(self.header, GRAPH_COLUMN, -20)
+        self.assertLess(self.width(), fitted)
+        self.header.reset_widths()
+        self.assertEqual(self.width(), fitted)
+
+    def test_a_theme_with_wider_labels_refits(self):
+        self.branch(self.LONG, self.root)
+        self.open_panel()
+        before = self.width()
+        metrics = dataclasses.replace(LIGHT_THEME.metrics, ref_label_max_width=240)
+        self.panel.apply_theme(dataclasses.replace(LIGHT_THEME, metrics=metrics))
+        self.assertGreater(self.width(), before)
+        self.assertEqual(self.width(), self.needed())
+
+    def test_a_larger_list_font_refits(self):
+        self.branch("feature", self.root)  # short: under the label limit at both sizes
+        self.open_panel()
+        before = self.width()
+        theme = self.ctx.theme.current
+        self.addCleanup(self.ctx.theme.set_theme, theme)
+        fonts = dataclasses.replace(theme.fonts, list_point_size=16)
+        self.ctx.theme.set_theme(dataclasses.replace(theme, fonts=fonts))
+        self.app.processEvents()
+        self.assertGreater(self.width(), before)
+        self.assertEqual(self.width(), self.needed())
+
+    def test_lanes_out_of_view_set_the_width_where_they_reach_further(self):
+        repo = make_repo(Path(self._tmp.name) / "wide")
+        commit_file(repo, "a.txt", "a", "root")
+        for n in range(5):  # five side branches, open side by side, merged one by one
+            subprocess.run(["git", "switch", "-q", "-c", f"s{n}", "main"], cwd=repo, check=True)
+            commit_file(repo, f"s{n}.txt", "s", f"side {n}")
+        subprocess.run(["git", "switch", "-q", "main"], cwd=repo, check=True)
+        for n in range(5):
+            subprocess.run(["git", "merge", "-q", "--no-ff", "-m", f"merge {n}", f"s{n}"],
+                           cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "branch", "-q", "-D", f"s{n}"], cwd=repo, check=True)
+        for n in range(8):  # a straight run on top, so the wide rows are out of view
+            commit_file(repo, "a.txt", str(n), f"top {n}")
+        self.repo = repo
+        self.open_panel()
+        lanes = max(self.model.graph_row(r).width for r in range(1, self.model.rowCount()))
+        self.assertGreater(lanes, 3)
+        wide = next(r for r in range(1, self.model.rowCount())
+                    if self.model.graph_row(r).width == lanes)
+        self.assertFalse(self.in_view(wide))
+        graph = self.panel._graph
+        self.assertEqual(self.width(), graph.inset + graph.width(lanes))

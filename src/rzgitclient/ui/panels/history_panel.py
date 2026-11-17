@@ -27,7 +27,7 @@ from rzgitclient.core.ref_labels import labels_by_commit
 from rzgitclient.core.repo_session import HISTORY_PAGE
 from rzgitclient.git.git_models import Commit, Stash
 from rzgitclient.ui.panels.back_to_top_button import BackToTopButton
-from rzgitclient.ui.panels.graph_painter import GraphPainter
+from rzgitclient.ui.panels.graph_painter import GRAPH_MAX_LANES, GraphPainter
 from rzgitclient.ui.panels.history_model import (DATE_FORMAT, GRAPH_COLUMN, MUTED_COLUMNS,
                                                  SUBJECT_COLUMN, HistoryModel)
 from rzgitclient.ui.panels.panel import Panel
@@ -70,8 +70,6 @@ class HistoryPanel(Panel):
         bar = self._view.verticalScrollBar()
         bar.valueChanged.connect(self._load_more_near_the_end)
         bar.rangeChanged.connect(self._load_more_near_the_end)
-        bar.valueChanged.connect(self._fit_graph)
-        bar.rangeChanged.connect(self._fit_graph)  # also when the view's height changes
         bar.valueChanged.connect(self._forget_new_commits_at_the_top)
         self._model.rowsInserted.connect(self._fit_graph)
         self.set_header_actions([self.ctx.actions.topo_order])
@@ -181,25 +179,26 @@ class HistoryPanel(Panel):
         self._fit_graph()
 
     def _fit_graph(self, *_args: object) -> None:
-        """Size the graph column to the widest row in view (``set_fitted``: unless
-        the user sized it): its lanes, up to the cap, or its ref label where that
-        reaches further (RZG-86). A label is centred on its dot: where its left half
-        wouldn't fit, the lanes move right (the graph's inset). Only rows in view are
-        worked out."""
+        """Size the graph column to every loaded commit (RZG-92; ``set_fitted``:
+        unless the user sized it): the most lanes, up to the cap, or the widest ref
+        label and its ``+N`` where that reaches further (RZG-86). A label is centred
+        on its dot: where its left half wouldn't fit, the lanes move right (the
+        graph's inset). Not the rows in view, so scrolling never changes it."""
         view, model, graph, refs = self._view, self._model, self._graph, self._refs
-        rows = model.rowCount()
         lanes, inset, shown = 1, 0.0, []
-        if rows:
+        if model.rowCount():
             view.ensurePolished()  # the stylesheet's list font
             refs.set_font(view.font())
-            first = max(view.rowAt(0), 0)
-            last = view.rowAt(view.viewport().height() - 1)
-            for row in range(first, (last if last >= 0 else rows - 1) + 1):
+            by_sha, commits = model.labels, model.commits
+            first = model.rowCount() - len(commits)  # after Uncommitted changes
+            for row, commit in enumerate(commits, first):
+                labels = by_sha.get(commit.sha)
+                if lanes >= GRAPH_MAX_LANES and not labels:
+                    continue  # the lanes are at the cap: only labels can widen it
                 graph_row = model.graph_row(row)
                 if graph_row is None:
                     continue
                 lanes = max(lanes, graph_row.width)
-                labels = model.ref_labels(row)
                 if labels:
                     x = graph.lane_x(graph_row.lane)
                     inset = max(inset, refs.left_reach(labels) - x)
