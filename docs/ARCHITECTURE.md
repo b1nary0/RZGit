@@ -1136,7 +1136,9 @@ theme when Qt asks, so a theme change is one `dataChanged`.
   `row_alt_bg` (§7.1), counted from the first commit. The model answers the stripe as
   the cell's `BackgroundRole` (every second commit), not through Qt's alternating rows,
   which would count the Uncommitted changes row. Hover and selection are the
-  stylesheet's and are drawn over it. Uncommitted changes is never striped.
+  stylesheet's and are drawn over it. Uncommitted changes is never striped. The stripe is
+  clearly visible, about ΔE 4 from the background, and hover stays clear of both row
+  backgrounds (RZG-66; the minimums are in §7.1).
 - **Uncommitted changes is pinned** (RZG-63). While the table is scrolled, a strip at the
   top of the rows (`_PinnedRow`, a child of the view's viewport) draws row 0 with the
   view's own delegate, hover and selection, with a `border_light` line under it. The
@@ -1672,7 +1674,8 @@ back where the user had it. The default place is only the fallback.
 class ThemeColors:   menubar_bg: str; toolbar_bg: str; tab_bg: str; header_bg: str; sidebar_bg: str; content_bg: str; border: str; tree_guide: str;
                      column_header_bg, column_header_text, column_header_text_hover,
                      column_header_separator, column_header_border: str   # ColumnHeader (§5.2)
-                     row_alt_bg: str   # every second row of a striped list (History, RZG-63); at least ΔE 1.5 from content_bg and content_hover
+                     row_alt_bg: str   # every second row of a striped list (History, RZG-63); ΔE ≥ 3.5 from content_bg and ≥ 5 from content_selection (RZG-66)
+                     content_hover: str   # hover in content lists: ΔE ≥ 3 from content_bg, row_alt_bg and content_selection (RZG-66)
                      text: str; text_muted: str; hover: str; selection: str; content_selection: str;
                      accent: str; button_*: str; scroll_*: str; diff_*: str (incl. diff_hunk_bg, diff_hunk_text, diff_line_button*, diff_*_selected_bg, diff_*_word); …
 @dataclass(frozen=True)
