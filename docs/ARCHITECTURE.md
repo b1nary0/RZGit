@@ -86,11 +86,13 @@ src/rzgitclient/
     repo_watcher.py             RepoWatcher: refreshes the session when the repository changes on disk
     inotify_watcher.py          InotifyWatcher: Linux inotify on a QSocketNotifier (folders → named events)
     worktree_reader.py          WorktreeReader: a repository's worktrees and their state, kept up to date
+    recent_repos.py             RecentRepos: the repositories and worktrees opened recently (§6.3)
     app_settings.py             AppSettings: typed wrapper over QSettings (last_repo, layout, …)
   ui/
     main_window.py              MainWindow: thin shell (menus, status bar, LayoutHost)
     app_windows.py              AppWindows: the open main windows; open a window on a path, or raise it
     settings_window.py          SettingsWindow: the app's one Settings window (§8.2)
+    recent_repos_menu.py        RecentReposMenu: File → Recent Repositories (§8)
     app_actions.py              AppActions: every QAction, defined once; BranchOp, StashOp, WorktreeOp
     branch_dialogs.py           BranchDialogs: the confirmations and name boxes of branch operations
     stash_dialogs.py            StashDialogs: Stash Changes… and the Drop confirmation
@@ -1941,6 +1943,37 @@ repository, and the Worktrees panel is the way back to a worktree. A window sets
 when it opens a repository and when it becomes the active window, so with several
 windows it's the repository of the one focused last.
 
+**Recent repositories** (`RecentRepos`, `core/recent_repos.py`, RZG-87) is the one record
+of what was opened when: File → Recent Repositories (§8) lists from it, and the Worktrees
+panel's recently-used sort (RZG-50) reads it. One for the app, made by app.py from
+`AppSettings` (in memory without it, for tests) and given to every window as
+`PanelContext.recent`.
+
+```python
+class RecentRepos(QObject):
+    changed = Signal()
+    LIMIT = 10
+    def touch(self, repo: Repo) -> None             # opened now: its worktree root and main root
+    def repositories(self) -> tuple[Path, ...]      # main roots, newest first, at most LIMIT
+    def last_opened(self, root) -> float | None     # a worktree root's time (epoch seconds)
+    def remove(self, main_root) -> None             # a repository and its worktrees
+    def clear(self) -> None
+```
+
+- An entry is a worktree root (canonical), its main root and when it was opened. The
+  list is newest first; touching an entry moves it to the front. A main repository's
+  time is its newest worktree's, so opening a linked worktree moves its main repository
+  to the top.
+- Only the worktrees of the `LIMIT` newest main repositories are kept.
+- `recent_repos` is JSON, `[{"root": …, "main": …, "opened": 1763400000.0}]`, newest
+  first. Malformed entries are dropped (logged). Each change is written at once and
+  emits `changed`.
+- `MainWindow` touches it on every `repo_changed`, so every route counts: Open, Open in
+  New Window, a worktree window, a recent entry, the last repository on start, the
+  command line. Becoming the active window doesn't.
+- A folder that no longer exists is kept (its drive may be back); the menu shows it as
+  missing (§8).
+
 It is reopened at startup by `MainWindow.open_last_repo()`, quietly:
 if it was moved, deleted or is no longer a repository, the window starts with none, the
 status bar says "Last repository not found: <path>", and the setting is kept (the drive
@@ -2403,6 +2436,19 @@ Per-widget sheets are slow to apply and scatter the rules.
   nothing; a folder that isn't a repository shows the error and opens no window.
   `last_repo` follows as for any window opening a repository. **File → Quit** closes every
   window (`QApplication.closeAllWindows`).
+- **File → Recent Repositories** (RZG-87, `RecentReposMenu`, `ui/recent_repos_menu.py`,
+  after the two Open actions) lists `ctx.recent.repositories()` (§6.3), rebuilt each time
+  it opens (`aboutToShow`), so every window shows the same list. No shortcuts.
+  - **An entry** is the folder name (`&` doubled), with the full path as its tooltip.
+    Entries with the same folder name each add their parent folder, home as `~`:
+    `RZE — ~/dev`. A folder that doesn't exist (checked as the menu opens) reads
+    "*RZE* (missing)".
+  - **Its submenu:** **Open in Current Window** (`open_repo`) and **Open in New Window**
+    (`open_in_window`), each raising the window that already shows the repository, as
+    the Open actions do (§8.1), and disabled for a missing folder; then **Remove from
+    List**. A folder that is no longer a repository shows the error.
+  - After a separator, **Clear Recent Repositories**. An empty list shows only a disabled
+    "No Recent Repositories".
 - **Commit count text** (`commit_summary`): the exact `commit_count` with separators
   ("2,421 commits", "1 commit"). Until it arrives, or if it failed, the loaded count, with a
   plus while more history is unloaded ("500+ commits").
@@ -2442,7 +2488,7 @@ The app can have several main windows open, each on its own repository or worktr
 (RZG-47). **`AppWindows`** (`ui/app_windows.py`), made once by app.py, holds them.
 
 - **Shared by every window:** `AppSettings`, `ThemeManager`, `CommitDrafts` (§5.4),
-  `ColumnPrefs` (§6.3) and `Preferences` (§8.2): one of each, made by app.py and passed to
+  `ColumnPrefs` (§6.3), `RecentRepos` (§6.3) and `Preferences` (§8.2): one of each, made by app.py and passed to
   `AppWindows`, which also holds the one `SettingsWindow`.
   **Each window's own:** `RepoSession`, `RepoWatcher`, `WorktreeReader`, `Selection`,
   `AppActions`, its `PanelContext` and its `MainWindow`. Staging, committing and switching in one window

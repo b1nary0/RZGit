@@ -160,6 +160,22 @@ class AppSettingsTests(unittest.TestCase):
         self.settings._settings.setValue("sort/prefs", "[1, 2]")
         self.assertEqual(self.settings.sort_prefs, {})
 
+    def test_recent_repos_survive_a_reopen(self):
+        """RZG-87: the recently opened worktrees, as RecentRepos writes them."""
+        self.assertEqual(self.settings.recent_repos, [])
+        entries = [{"root": "/a", "main": "/a", "opened": 1.5}]
+        self.settings.recent_repos = entries
+        self.assertEqual(self.reopen().recent_repos, entries)
+        self.settings.recent_repos = []
+        self.assertEqual(self.reopen().recent_repos, [])
+
+    def test_recent_repos_that_are_not_valid_are_ignored(self):
+        self.settings._settings.setValue("recent/repos", "{not json")
+        with self.assertLogs("rzgitclient.core.app_settings", "WARNING"):
+            self.assertEqual(self.settings.recent_repos, [])
+        self.settings._settings.setValue("recent/repos", '{"a": 1}')
+        self.assertEqual(self.settings.recent_repos, [])
+
     def test_layout_preset_survives_a_reopen(self):
         self.assertIsNone(self.settings.layout_preset)
         self.settings.layout_preset = "Standard"

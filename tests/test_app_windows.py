@@ -91,6 +91,73 @@ class AppWindowsTests(unittest.TestCase):
         window.ctx.actions.request_open_worktree(str(self.one))
         self.assertEqual(len(self.windows.windows()), 2)  # raised, not opened again
 
+    # ---- recent repositories (spec §6.3, §8, RZG-87) -----------------------------
+
+    def recent_menu(self, window):
+        from rzgitclient.ui.recent_repos_menu import RecentReposMenu
+        menu = window.findChild(RecentReposMenu)
+        menu.aboutToShow.emit()
+        return menu
+
+    def recent_item(self, window, name, text):
+        menu = self.recent_menu(window)
+        sub = next(a.menu() for a in menu.actions() if a.text() == name)
+        return next(a for a in sub.actions() if a.text() == text)
+
+    def test_every_window_shares_the_recent_list(self):
+        a, b = self.open(self.one), self.open(self.two)
+        self.assertIs(a.ctx.recent, b.ctx.recent)
+        self.assertEqual(a.ctx.recent.repositories(), (self.two, self.one))
+        names = [x.text() for x in self.recent_menu(a).actions() if not x.isSeparator()]
+        self.assertEqual(names[:2], ["two", "one"])
+
+    def test_a_worktree_window_moves_its_main_repository_to_the_top(self):
+        linked = self.tmp / "one-linked"
+        git(self.one, "worktree", "add", "-q", "-b", "linked", str(linked))
+        window = self.open(self.one)
+        self.open(self.two)
+        window.ctx.actions.request_open_worktree(str(linked))
+        wait_idle(self.windows.window_for(linked).session)
+        recent = window.ctx.recent
+        self.assertEqual(recent.repositories(), (self.one, self.two))
+        self.assertGreater(recent.last_opened(linked), recent.last_opened(self.one))
+
+    def test_a_recent_entry_opens_in_a_new_window_or_raises_the_one_showing_it(self):
+        window = self.open(self.one)
+        window.session.open(self.two)
+        wait_idle(window.session)
+        self.recent_item(window, "one", "Open in &New Window").trigger()
+        other = self.windows.window_for(self.one)
+        self.assertIsNotNone(other)
+        self.assertIsNot(other, window)
+        wait_idle(other.session)
+        self.assertEqual(window.ctx.recent.repositories(), (self.one, self.two))
+        with mock.patch.object(other, "bring_to_front") as raised:
+            self.recent_item(window, "one", "Open in &New Window").trigger()
+            self.recent_item(window, "one", "Open in &Current Window").trigger()
+        self.assertEqual(raised.call_count, 2)
+        self.assertEqual(len(self.windows.windows()), 2)
+        self.assertEqual(window.session.repo.root, self.two)  # unchanged
+
+    def test_a_recent_entry_opens_in_the_current_window(self):
+        window = self.open(self.one)
+        window.session.open(self.two)
+        wait_idle(window.session)
+        self.recent_item(window, "one", "Open in &Current Window").trigger()
+        wait_idle(window.session)
+        self.assertEqual(window.session.repo.root, self.one)
+        self.assertEqual(self.windows.windows(), (window,))
+
+    def test_a_recent_folder_that_is_no_longer_a_repository_shows_the_error(self):
+        window = self.open(self.one)
+        plain = self.tmp / "plain"
+        plain.mkdir()
+        window.ctx.recent.touch(mock.Mock(root=plain, main_root=plain))
+        with mock.patch("rzgitclient.ui.app_windows.QMessageBox.warning") as warning:
+            self.recent_item(window, "plain", "Open in &New Window").trigger()
+        warning.assert_called_once()
+        self.assertEqual(self.windows.windows(), (window,))
+
     def test_new_worktree_with_open_it_opens_it_in_a_window_of_its_own(self):
         window = self.open(self.one)
         path = self.tmp / "one-topic"
@@ -279,8 +346,10 @@ class AppWindowsTests(unittest.TestCase):
         a = self.open(self.one)
         file_menu = a.menuBar().actions()[0].menu()
         actions = a.ctx.actions
-        self.assertEqual(file_menu.actions()[:3],
-                         [actions.open_repo, actions.open_repo_new_window, actions.refresh])
+        # Then Recent Repositories (RZG-87) and Refresh.
+        self.assertEqual(file_menu.actions()[:2],
+                         [actions.open_repo, actions.open_repo_new_window])
+        self.assertIs(file_menu.actions()[3], actions.refresh)
 
     # ---- closing and quitting -----------------------------------------------
 

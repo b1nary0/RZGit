@@ -4,8 +4,8 @@ The only code that touches QSettings. Values are plain Python types; the
 layout is stored as a JSON string so its format is ours, not a QVariant tree.
 
 It holds options, settings and general app state (preferences, layout and theme
-customisation, the last repository, window geometry). State a feature explicitly
-preserves as its own result, such as the commit drafts, is in files of its own.
+customisation, the last and the recent repositories, window geometry). State a feature
+explicitly preserves as its own result, such as the commit drafts, is in files of its own.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ _COMMIT_DRAFTS = "commit/drafts"  # older versions only; moved to files
 _SAVED_LAYOUTS = "layouts/saved"
 _COLUMN_PREFS = "columns/prefs"
 _SORT_PREFS = "sort/prefs"
+_RECENT_REPOS = "recent/repos"
 _PREFS = "prefs/"  # the Settings window's settings, by key (spec §8.2)
 
 
@@ -237,6 +238,22 @@ class AppSettings:
     @sort_prefs.setter
     def sort_prefs(self, prefs: dict[str, dict[str, Any]]) -> None:
         self._set(_SORT_PREFS, json.dumps(prefs) if prefs else None)
+
+    @property
+    def recent_repos(self) -> list[Any]:
+        """The recently opened worktrees, newest first, as ``RecentRepos`` wrote them
+        ([] if none, or not a JSON list; spec §6.3). ``RecentRepos`` checks the entries."""
+        raw = self._settings.value(_RECENT_REPOS, "", str)
+        try:
+            data = json.loads(raw) if raw else []
+        except ValueError as exc:
+            log.warning("Saved recent repositories aren't valid JSON (%s); ignoring them", exc)
+            return []
+        return data if isinstance(data, list) else []
+
+    @recent_repos.setter
+    def recent_repos(self, entries: list[dict[str, Any]]) -> None:
+        self._set(_RECENT_REPOS, json.dumps(entries) if entries else None)
 
     def pref(self, key: str) -> object | None:
         """The stored value of the setting ``key`` (spec §8.2), as QSettings gives it

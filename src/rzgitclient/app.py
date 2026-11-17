@@ -9,6 +9,7 @@ from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.column_prefs import ColumnPrefs
 from rzgitclient.core.commit_drafts import CommitDrafts, drafts_folder
 from rzgitclient.core.preferences import Preferences
+from rzgitclient.core.recent_repos import RecentRepos
 from rzgitclient.core.sort_prefs import SortPrefs
 from rzgitclient.ui.app_icon import app_icon
 from rzgitclient.ui.app_windows import AppWindows
@@ -31,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     # Shared by every window (spec §8.1); drafts saved by older versions move to files.
     drafts = CommitDrafts(drafts_folder(), legacy=settings)
     windows = AppWindows(app, settings, theme, drafts, ColumnPrefs(settings),
-                         SortPrefs(settings), prefs=prefs)
+                         SortPrefs(settings), prefs=prefs, recent=RecentRepos(settings))
 
     window = windows.new_window()
     window.show()

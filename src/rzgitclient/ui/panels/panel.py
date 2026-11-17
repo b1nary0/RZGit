@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QWidget
 from rzgitclient.core.column_prefs import ColumnPrefs
 from rzgitclient.core.commit_drafts import CommitDrafts
 from rzgitclient.core.preferences import Preferences
+from rzgitclient.core.recent_repos import RecentRepos
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import Selection
 from rzgitclient.core.sort_prefs import SortPrefs
@@ -37,6 +38,7 @@ class PanelContext:
     sorts: SortPrefs  # each panel's sort order (SortMenu, spec §5.1)
     worktrees: WorktreeReader | None = None  # the Worktrees window's (spec §4.4)
     prefs: Preferences = field(default_factory=Preferences)  # the app's settings (§8.2)
+    recent: RecentRepos = field(default_factory=RecentRepos)  # opened recently (§6.3)
 
 
 class Panel(QWidget):

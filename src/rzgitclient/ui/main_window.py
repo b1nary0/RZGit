@@ -23,6 +23,7 @@ from rzgitclient.ui.panels.history_panel import HistoryPanel
 from rzgitclient.ui.panels.panel import PanelContext
 from rzgitclient.ui.panels.worktrees_panel import WorktreesPanel
 from rzgitclient.ui.pull_dialogs import PullDialogs
+from rzgitclient.ui.recent_repos_menu import RecentReposMenu
 from rzgitclient.ui.settings_window import SettingsWindow, show_window
 from rzgitclient.ui.stash_dialogs import StashDialogs
 from rzgitclient.ui.worktree_dialogs import WorktreeDialogs
@@ -86,7 +87,10 @@ class MainWindow(QMainWindow):
         actions.quit.triggered.connect(QApplication.closeAllWindows)  # every window (§8.1)
 
         file_menu = self.menuBar().addMenu("&File")
-        file_menu.addActions([actions.open_repo, actions.open_repo_new_window, actions.refresh])
+        file_menu.addActions([actions.open_repo, actions.open_repo_new_window])
+        file_menu.addMenu(RecentReposMenu(self.ctx.recent, self.open_repo,  # spec §8
+                                          self.open_in_window, file_menu))
+        file_menu.addAction(actions.refresh)
         file_menu.addSeparator()
         file_menu.addAction(actions.settings)  # spec §8.2
         actions.settings.triggered.connect(self.show_settings)
@@ -332,6 +336,7 @@ class MainWindow(QMainWindow):
         else:
             self.setWindowTitle(f"{repo.worktree_name} — RZGitClient")
             self._save_last_repo()
+            self.ctx.recent.touch(repo)  # every route to opening one (§6.3)
         self._update_status_bar()
 
     def _show_error(self, message: str) -> None:

@@ -2,7 +2,7 @@
 
 Made once by app.py. Each main window gets its own RepoSession, RepoWatcher,
 WorktreeReader, Selection and AppActions; the settings, theme, commit drafts, column
-choices and sort orders are shared.
+choices, sort orders and recent repositories are shared.
 A worktree is shown in at most one window: opening it again raises that one.
 """
 
@@ -18,6 +18,7 @@ from rzgitclient.core.app_settings import AppSettings
 from rzgitclient.core.column_prefs import ColumnPrefs
 from rzgitclient.core.commit_drafts import CommitDrafts
 from rzgitclient.core.preferences import Preferences
+from rzgitclient.core.recent_repos import RecentRepos
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.repo_watcher import RepoWatcher
 from rzgitclient.core.selection import Selection
@@ -55,10 +56,13 @@ class _Window:
 class AppWindows(QObject):
     def __init__(self, app: QApplication, settings: AppSettings, theme: ThemeManager,
                  drafts: CommitDrafts, columns: ColumnPrefs, sorts: SortPrefs,
-                 parent: QObject | None = None, *, prefs: Preferences | None = None):
-        """``prefs``: the app's settings (§8.2); in memory if not given (tests)."""
+                 parent: QObject | None = None, *, prefs: Preferences | None = None,
+                 recent: RecentRepos | None = None):
+        """``prefs``: the app's settings (§8.2); ``recent``: the repositories opened
+        recently (§6.3). Each is in memory if not given (tests)."""
         super().__init__(parent)
         self._prefs = prefs if prefs is not None else Preferences(parent=self)
+        self._recent = recent if recent is not None else RecentRepos(parent=self)
         self._settings_window: SettingsWindow | None = None
         self._app = app
         self._settings = settings
@@ -114,7 +118,8 @@ class AppWindows(QObject):
         actions = AppActions(session, selection)
         ctx = PanelContext(session=session, selection=selection, theme=self._theme,
                            actions=actions, drafts=self._drafts, columns=self._columns,
-                           sorts=self._sorts, worktrees=worktrees, prefs=self._prefs)
+                           sorts=self._sorts, worktrees=worktrees, prefs=self._prefs,
+                           recent=self._recent)
         window = MainWindow(ctx, self._settings, self, restore_geometry=anchor is None)
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         # Its own objects are deleted with it (after its panels, which are connected

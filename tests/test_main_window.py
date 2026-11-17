@@ -100,6 +100,30 @@ class MainWindowTests(unittest.TestCase):
         window.open_last_repo()
         self.assertEqual(window.session.repo.root, repo.resolve())
 
+    def test_opening_by_any_route_moves_it_to_the_top_of_the_recent_list(self):
+        """RZG-87: the last repository on start, Open… and a session open all count."""
+        one, two = make_repo(self.tmp / "one"), make_repo(self.tmp / "two")
+        AppSettings(self.settings_path).last_repo = one
+        window = self.start()
+        recent = window.ctx.recent
+        window.open_last_repo()
+        self.assertEqual(recent.repositories(), (one.resolve(),))
+        with mock.patch("rzgitclient.ui.main_window.QFileDialog.getExistingDirectory",
+                        return_value=str(two)):
+            window.ctx.actions.open_repo.trigger()
+        self.assertEqual(recent.repositories(), (two.resolve(), one.resolve()))
+        window.session.open(one)
+        self.assertEqual(recent.repositories(), (one.resolve(), two.resolve()))
+
+    def test_recent_repositories_follow_the_open_actions_in_the_file_menu(self):
+        window = self.start()
+        file_menu = window.menuBar().actions()[0].menu()
+        texts = [a.text() for a in file_menu.actions()]
+        start = texts.index("&Open Repository…")
+        self.assertEqual(texts[start:start + 4],
+                         ["&Open Repository…", "Open Repository in &New Window…",
+                          "Re&cent Repositories", "&Refresh"])
+
     def test_a_last_repository_that_is_gone_is_skipped_quietly(self):
         (self.tmp / "plain").mkdir()
         for missing in (self.tmp / "moved", self.tmp / "plain"):  # gone; no longer a repo
