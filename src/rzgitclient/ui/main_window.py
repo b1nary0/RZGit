@@ -23,6 +23,7 @@ from rzgitclient.ui.panels.history_panel import HistoryPanel
 from rzgitclient.ui.panels.panel import PanelContext
 from rzgitclient.ui.panels.worktrees_panel import WorktreesPanel
 from rzgitclient.ui.pull_dialogs import PullDialogs
+from rzgitclient.ui.push_dialogs import PushDialogs
 from rzgitclient.ui.recent_repos_menu import RecentReposMenu
 from rzgitclient.ui.settings_window import SettingsWindow, show_window
 from rzgitclient.ui.stash_dialogs import StashDialogs
@@ -109,8 +110,9 @@ class MainWindow(QMainWindow):
         repo_menu.addSeparator()
         repo_menu.addAction(actions.stash_changes)
         repo_menu.addSeparator()
-        repo_menu.addActions([actions.fetch, actions.pull])
+        repo_menu.addActions([actions.fetch, actions.pull, actions.push])
         self.pull_dialogs = PullDialogs(self, self.session, actions)
+        self.push_dialogs = PushDialogs(self, self.session, actions)
         repo_menu.addSeparator()
         repo_menu.addActions([actions.worktrees, actions.new_worktree])
         actions.worktrees.triggered.connect(self.show_worktrees)
@@ -166,8 +168,9 @@ class MainWindow(QMainWindow):
     # ---- behaviour ----------------------------------------------------
 
     def _on_network_changed(self, command: object) -> None:
-        pulling = getattr(command, "kind", None) is NetworkKind.PULL
-        self._network_label.setText("Pulling…" if pulling else "Fetching…")
+        kind = getattr(command, "kind", None)
+        self._network_label.setText({NetworkKind.PULL: "Pulling…",
+                                     NetworkKind.PUSH: "Pushing…"}.get(kind, "Fetching…"))
         self._network_label.setVisible(command is not None)
 
     def reset_layout(self) -> None:

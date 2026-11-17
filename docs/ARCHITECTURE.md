@@ -67,14 +67,14 @@ into each other.
 src/rzgitclient/
   app.py                        composition root
   git/
-    git_models.py               Commit, HistoryOrder, Stash, Branch, Ref, FileStatus, FileDiff, Hunk, DiffLine, Worktree, WorktreeState
+    git_models.py               Commit, HistoryOrder, Stash, Branch, Ref, Remotes, FileStatus, FileDiff, Hunk, DiffLine, Worktree, WorktreeState
     repo.py                     Repo: runs git, returns models; canonical_path; worktree_state
   core/
     repo_session.py             RepoSession: the open repo, its data, git commands
     diff_request.py             DiffRequest, the size limit, load_diff (the worker side of diffs)
     diff_patch.py               build_patch: a patch of chosen lines of a FileDiff (plain Python)
     git_commands.py             GitCommand, run_command (the worker side of commands: stage, commit, …)
-    network_worker.py           NetworkWorker, NetworkCommand: remote commands (fetch, pull's fetch) on a thread of their own
+    network_worker.py           NetworkWorker, NetworkCommand: remote commands (fetch, pull's fetch, push) on a thread of their own
     commit_drafts.py            CommitDrafts: the unfinished commit message of each repository (a file each)
     column_prefs.py             ColumnPrefs: each panel's column choices (hidden columns, widths)
     sort_options.py             SortOption, SortOptions, SortOrder: a panel's sort orders (plain Python)
@@ -97,6 +97,7 @@ src/rzgitclient/
     branch_dialogs.py           BranchDialogs: the confirmations and name boxes of branch operations
     stash_dialogs.py            StashDialogs: Stash Changes… and the Drop confirmation
     pull_dialogs.py             PullDialogs: Pull's boxes (changes, diverged)
+    push_dialogs.py             PushDialogs: Push's box (push and track)
     worktree_dialogs.py         WorktreeDialogs, NewWorktreeDialog: New Worktree…, Remove, Prune; folder, terminal
     app_icon.py                 app_icon(): the app's QIcon, built from assets/icon (app.py sets it)
     assets/                     image files shipped as package data (no modules)
@@ -194,7 +195,7 @@ class RepoSession(QObject):
     error_occurred   = Signal(str)
     notice_occurred  = Signal(str)   # a command worked, but not quite as asked
     busy_changed     = Signal(bool)  # True while git work is queued or running
-    remotes_changed  = Signal(object)  # tuple[str, ...]  (the remotes' names, RZG-62)
+    remotes_changed  = Signal(object)  # tuple[str, ...]  (the remotes' names, RZG-62; also on a new push_default)
     refs_changed     = Signal(object)  # tuple[Ref, ...]  (branches and tags, RZG-77)
     network_changed  = Signal(object)  # NetworkCommand | None  (the one running)
     network_progress = Signal(str)     # its latest progress line
@@ -240,11 +241,13 @@ class RepoSession(QObject):
     def fetch(self) -> NetworkCommand | None   # git fetch --all --prune; None: no repo, or one running
     def pull(self, stash=False) -> NetworkCommand | GitCommand | None   # fetch, then integrate (RZG-71)
     def pull_integrate(self, mode, stash=False) -> GitCommand | None   # after pull_diverged
+    def push(self, remote=None) -> NetworkCommand | None   # the current branch; remote: track it there (RZG-72)
     def cancel_network(self) -> None           # kill the running one, if any
     network: NetworkCommand | None             # the one running
 
     # Latest values, so a panel created later renders at once (read-only properties):
     repo, head, head_sha, branches, history, history_order, status, stashes, commit_count, remotes,
+    push_default,
     history_complete, diff_file, diff, diff_whole,
     commit_files_sha, commit_files, commit_details_sha, commit_details, last_commit
 ```
@@ -560,7 +563,10 @@ class RepoSession(QObject):
 - **Worktrees** aren't a session part: each window's `WorktreeReader` reads them (§4.4).
 - **Remotes** (RZG-62) are a part, `Refresh.REMOTES`, in `Refresh.ALL`, after the count:
   `Repo.remotes()` (`git remote`) gives their names, in git's order, as
-  `remotes_changed(tuple[str, ...])`. Fetch is enabled by them (§8).
+  `remotes_changed(tuple[str, ...])`. Fetch is enabled by them (§8). The same load reads
+  `remote.pushDefault` (RZG-72; `Repo.push_default()`, None if unset): the value is a
+  `Remotes(names, push_default)`, and `remotes_changed` sends the names when either
+  changes. `session.remotes` is the names, `session.push_default` the other.
 - **Refs** (RZG-77) are a part, `Refresh.REFS`, in `Refresh.ALL`, after the branches:
   `Repo.refs()` (`git for-each-ref refs/heads refs/remotes refs/tags`) gives each
   branch and tag as a `Ref(name, sha)` (`git_models.py`): its full name
@@ -574,10 +580,11 @@ class RepoSession(QObject):
   second worker, **`NetworkWorker`** (`core/network_worker.py`), owned by the session,
   so status, diffs and history keep loading and refreshing on the first one meanwhile.
   - **One at a time.** A `NetworkCommand` (frozen, compared by identity, like
-    `GitCommand`) has a `kind` (`NetworkKind.FETCH`, `PULL`; Push comes with RZG-72). `fetch()` returns None while one runs. `network` is the running command;
+    `GitCommand`) has a `kind` (`NetworkKind.FETCH`, `PULL`, `PUSH`). `fetch()` returns None while one runs. `network` is the running command;
     `network_changed` sends it when it starts and None when it ends.
   - **No clash with the first worker:** a network command writes only remote-tracking
-    refs, `FETCH_HEAD` and objects, never the working tree or the index, and git retries
+    refs, `FETCH_HEAD`, objects and (Push's `-u`) the branch's upstream config, never the
+    working tree or the index, and git retries
     a locked `packed-refs` itself (`core.packedRefsTimeout`).
   - **Fetch:** `git fetch --all --prune --progress`: every remote, dropping
     remote-tracking branches that are gone. When it ends, ok or not (some remotes may have
@@ -590,6 +597,25 @@ class RepoSession(QObject):
     (a local branch) skips the fetch: `pull()` queues the command at once and returns it.
     `pull()` returns None with no repository, on a detached HEAD, without an upstream
     (or one that is gone), or while a network command runs.
+  - **Push** (RZG-72) pushes the current branch *X*; never forced, and no tags. The
+    `NetworkCommand` carries the remote, the branch and `track`.
+    - **To its upstream:** `push()` with no remote, when *X* has an upstream on a remote
+      that isn't gone (`Branch.remote` not `.`, `ahead` not None). The worker first reads
+      `branch.X.merge` (`Repo.config_value`, on its thread), then runs `git push
+      --progress -- <remote> refs/heads/X:<merge>`: an explicit refspec, so `push.default`
+      and `branch.X.pushRemote` don't change where it goes.
+    - **To track it:** `push(remote)`: `git push -u --progress -- <remote>
+      refs/heads/X:refs/heads/X`, which sets (or replaces) *X*'s upstream to
+      *remote*/*X*. That is how a branch with no upstream, a gone one or one on `.` is
+      pushed.
+    - **Rejected** (`[rejected]` with `(fetch first)` or `(non-fast-forward)` in git's
+      output): the error starts "*remote* has commits that *X* doesn't. Pull first, then
+      push.", then git's output. Any other failure (a hook, a protected branch) is git's
+      output, as for Fetch.
+    - When it ends, ok or not, the session refreshes `BRANCHES` (the ↑n), as for Fetch.
+    - `push()` returns None with no repository, while a network command runs, with no
+      remote, on a detached HEAD or before the first commit (*X* isn't in `branches`),
+      and with no remote given when *X* has no upstream to push to.
   - **Git runs through `Popen`**, not `run_git`, so it can be read while it runs and
     killed: `Repo.start_network_git(*args)`, with `network_env()`, stdin closed, stderr
     into stdout, and `start_new_session=True`.
@@ -1054,7 +1080,7 @@ The first three are extracted from the original `main_window.py` with the same b
 
 | Panel | id | Default area | Shows | Writes |
 |---|---|---|---|---|
-| ControlsPanel | `controls` | Controls | Open, Refresh, Fetch, Pull (`ctx.actions`), the branch button | switches and makes branches, through `actions.request_branch`; fetches and pulls, through `actions.fetch` and `actions.pull`; (later: push) |
+| ControlsPanel | `controls` | Controls | Open, Refresh, Fetch, Pull, Push (`ctx.actions`), the branch button | switches and makes branches, through `actions.request_branch`; fetches, pulls and pushes, through `actions.fetch`, `actions.pull` and `actions.push` |
 | BranchesPanel | `branches` | Sidebar | branches, current in bold; by name or last commit | branch operations, through `actions.request_branch` |
 | StashPanel | `stash` | Sidebar | "Stashes": message, branch and age of each, newest first | `selection.commit` (a `Stash`); stash operations, through `actions.request_stash` |
 | HistoryPanel | `history` | Main pane | Uncommitted changes, then the commit table; no row while a stash is selected | `selection.commit` |
@@ -2477,7 +2503,7 @@ Per-widget sheets are slow to apply and scatter the rules.
   plus while more history is unloaded ("500+ commits").
 - **No toolbar:** its buttons are the **Controls panel** (§5.4), placed by the layout across
   the top and styled like the toolbar was. Remote controls join it as those commands
-  come: Fetch and Pull now, Push with RZG-72. The branch button switches
+  come: Fetch, Pull and Push. The branch button switches
   branches, as the Branches panel does.
 - **Fetch** (RZG-62, `actions.fetch`, in the Repository menu after Stash Changes…, and
   on the Controls panel after Refresh) calls `session.fetch()`. It is enabled when the
@@ -2504,6 +2530,23 @@ Per-widget sheets are slow to apply and scatter the rules.
     default (§4.1), and a conflict aborts either. Then `session.pull_integrate(mode,
     stash)`, with the first answer's `stash`; nothing is fetched again.
   - Already up to date: no box; the ↓n goes when the branches reload.
+- **Push** (RZG-72, `actions.push`, in the Repository menu and on the Controls panel after
+  Pull) reads **Push ↑n** when the current branch is n commits ahead of an upstream it
+  pushes to (§4.1), else **Push**. It is enabled when the repository has a remote, HEAD
+  is on a branch with commits, and no network command runs. While it runs it reads
+  **Pushing** (the menu **Pushing…**), "Click to cancel", and triggering it cancels;
+  Fetch and Pull are disabled meanwhile, and Push while they run. The status bar label
+  reads "Pushing…" until progress comes. Triggered otherwise, it sends
+  `push_requested`, which **`PushDialogs`** (`ui/push_dialogs.py`, made by MainWindow)
+  handles:
+  - **With an upstream to push to:** `session.push()` at once, no box. Ahead 0 pushes
+    anyway, with no notice.
+  - **Without one:** "Push *X* to *remote* and track it?" with **Push** (the default) and
+    **Cancel**, then `session.push(remote)`. The remote: the only one; with several,
+    `session.push_default` if it is one of them, else `origin` if there is one, else the
+    box offers them in a list, in git's order. With an upstream on `.` the box says
+    tracking replaces it.
+  - A rejected push is an error (§4.1): it never forces, and offers no Pull.
 
 ### 8.1 Windows
 
@@ -2537,8 +2580,9 @@ The app can have several main windows open, each on its own repository or worktr
   A `MainWindow` made without it (tests) opens everything in itself.
 - **Where a new window appears:** the first window restores the saved geometry. A window
   opened from another (`from_window`, else the active window) is half the width and half
-  the height of the screen's available area (a quarter of a maximized window), and its
-  top-left is the other window's, moved down and right by a title bar's height
+  the height of the screen's available area (a quarter of a maximized window), or its
+  minimum size if that is larger (RZG-72: the Controls panel's buttons need about 440 px),
+  and its top-left is the other window's, moved down and right by a title bar's height
   (`QStyle.PM_TitleBarHeight`), kept on the screen. Where the platform doesn't let the
   app place windows (Wayland), only the size applies.
 - **The layout:** every window starts from the one saved layout, view toggles (Side by

@@ -92,6 +92,14 @@ class Branch:
 
 
 @dataclass(frozen=True)
+class Remotes:
+    """The remotes' names, in git's order, and ``remote.pushDefault`` (spec §4.1)."""
+
+    names: tuple[str, ...] = ()
+    push_default: str | None = None  # where a branch with no upstream is pushed first (RZG-72)
+
+
+@dataclass(frozen=True)
 class Ref:
     """A branch or tag, for History's labels (spec §4.1, RZG-77)."""
 

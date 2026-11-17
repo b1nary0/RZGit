@@ -22,6 +22,7 @@ from enum import StrEnum
 
 from PySide6.QtCore import QObject, QThreadPool, Signal
 
+from rzgitclient.git.git_models import Branch
 from rzgitclient.git.repo import GitError, Repo
 
 PROGRESS_INTERVAL = 0.1  # s: at most this often a progress line goes out
@@ -39,10 +40,11 @@ log = logging.getLogger(__name__)
 
 
 class NetworkKind(StrEnum):
-    """What a network command does (Push comes with RZG-72)."""
+    """What a network command does."""
 
     FETCH = "fetch"
     PULL = "pull"  # its fetch: the upstream's remote; the session then integrates
+    PUSH = "push"  # the current branch: to its upstream, or to a remote it then tracks
 
 
 _ARGS = {
@@ -55,15 +57,31 @@ class NetworkCommand:
     """One network command; compared by identity, like ``GitCommand``."""
 
     kind: NetworkKind
-    remote: str = ""  # PULL's: the remote to fetch
-    branch: str = ""  # PULL's: the branch to pull into, once fetched
+    remote: str = ""  # PULL's: the remote to fetch; PUSH's: the one to push to
+    branch: str = ""  # PULL's: the branch to pull into, once fetched; PUSH's: the one pushed
     stash: bool = False  # PULL's: stash the changes while integrating
+    track: bool = False  # PUSH's: push to remote/branch and make it the upstream (-u)
 
-    @property
-    def args(self) -> tuple[str, ...]:
+    def git_args(self, repo: Repo) -> tuple[str, ...]:
+        """Git's arguments; a push to an upstream reads where it goes (on the
+        worker thread). Raises GitError."""
         if self.kind is NetworkKind.PULL:
             return ("fetch", "--prune", "--progress", "--", self.remote)
+        if self.kind is NetworkKind.PUSH:
+            source = f"refs/heads/{self.branch}"
+            if self.track:
+                return ("push", "-u", "--progress", "--", self.remote, f"{source}:{source}")
+            merge = repo.config_value(f"branch.{self.branch}.merge")
+            if not merge:
+                raise GitError(f"{self.branch} has no upstream to push to.")
+            return ("push", "--progress", "--", self.remote, f"{source}:{merge}")
         return _ARGS[self.kind]
+
+
+def pushes_to_upstream(branch: Branch) -> bool:
+    """Whether Push sends ``branch`` to its upstream (spec §4.1): one on a remote
+    (not ``.``) that isn't gone. Otherwise it is pushed to a remote it then tracks."""
+    return bool(branch.remote) and branch.remote != "." and branch.ahead is not None
 
 
 @dataclass(frozen=True)
@@ -169,7 +187,7 @@ def _run(repo: Repo, command: NetworkCommand, process: _Process,
          relay: _Relay) -> NetworkResult:
     """The worker side: run ``command``, sending its progress as it comes."""
     try:
-        popen = repo.start_network_git(*command.args)
+        popen = repo.start_network_git(*command.git_args(repo))
     except GitError as exc:
         return NetworkResult(command, False, error=str(exc))
     process.attach(popen)
@@ -188,8 +206,17 @@ def _run(repo: Repo, command: NetworkCommand, process: _Process,
         return NetworkResult(command, False, cancelled=True)
     if code == 0:
         return NetworkResult(command, True)
-    return NetworkResult(command, False,
-                         error=error_message(lines, f"git {command.kind} failed ({code})"))
+    error = error_message(lines, f"git {command.kind} failed ({code})")
+    if command.kind is NetworkKind.PUSH and push_rejected(lines):
+        error = (f"{command.remote} has commits that {command.branch} doesn't. "
+                 f"Pull first, then push.\n\n{error}")
+    return NetworkResult(command, False, error=error)
+
+
+def push_rejected(lines: list[str]) -> bool:
+    """Whether git's push output says the remote has commits the branch doesn't."""
+    return any("[rejected]" in line and ("(fetch first)" in line or "(non-fast-forward)" in line)
+               for line in lines)
 
 
 def _read(popen: subprocess.Popen[bytes], progress) -> list[str]:

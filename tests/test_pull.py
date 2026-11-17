@@ -224,7 +224,8 @@ class SessionPullTests(Clones, unittest.TestCase):
         command = self.session.pull()
         self.assertEqual((command.kind, command.remote, command.branch, command.stash),
                          (NetworkKind.PULL, "origin", "main", False))
-        self.assertEqual(command.args, ("fetch", "--prune", "--progress", "--", "origin"))
+        self.assertEqual(command.git_args(self.session.repo),
+                         ("fetch", "--prune", "--progress", "--", "origin"))
         self.assertIsNone(self.session.pull())  # one at a time
         self.assertIsNone(self.session.fetch())
         wait_network(self.session)

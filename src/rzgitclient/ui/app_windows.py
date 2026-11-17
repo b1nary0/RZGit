@@ -178,11 +178,13 @@ class AppWindows(QObject):
 
 def place_beside(window: MainWindow, anchor: MainWindow) -> None:
     """Half the width and height of the screen's available area (a quarter of a
-    maximized window), down and right of ``anchor`` by a title bar's height, kept
-    on the screen. Where windows can't be placed (Wayland) only the size applies."""
+    maximized window), or the window's minimum size if larger, down and right of
+    ``anchor`` by a title bar's height, kept on the screen. Where windows can't be
+    placed (Wayland) only the size applies."""
     screen = anchor.screen()
     area = screen.availableGeometry()
-    size = QSize(area.width() // 2, area.height() // 2)
+    # No smaller than its minimum, which applies once shown: keep that on the screen.
+    size = QSize(area.width() // 2, area.height() // 2).expandedTo(window.minimumSizeHint())
     window.resize(size)
     step = anchor.style().pixelMetric(QStyle.PixelMetric.PM_TitleBarHeight)
     pos = anchor.pos() + QPoint(step, step)

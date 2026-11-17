@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent, QRect, Qt
+from PySide6.QtGui import QScreen
 from PySide6.QtWidgets import QStyle
 
 from rzgitclient.core.app_settings import AppSettings
@@ -21,6 +22,10 @@ from rzgitclient.ui.worktree_dialogs import REMOVE, NewWorktree
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
 from rzgitclient.ui.theme.theme_manager import ThemeManager, ThemeMode
 from tests.support import commit_file, git, make_repo, qt_app, wait_idle
+
+# A screen area wide enough that half of it is more than a window's minimum width
+# (the Controls panel's buttons need more than half of the 800 px offscreen screen).
+WIDE_AREA = QRect(0, 0, 1600, 1000)
 
 
 class AppWindowsTests(unittest.TestCase):
@@ -450,9 +455,9 @@ class AppWindowsTests(unittest.TestCase):
         first.close()
         again = self.open(self.one)
         self.assertEqual(again.size().toTuple(), (600, 420))
-        other = self.open(self.two)
-        area = again.screen().availableGeometry()
-        self.assertEqual(other.size().toTuple(), (area.width() // 2, area.height() // 2))
+        with mock.patch.object(QScreen, "availableGeometry", return_value=WIDE_AREA):
+            other = self.open(self.two)
+        self.assertEqual(other.size().toTuple(), (800, 500))
 
     def test_a_new_window_isnt_maximized_like_the_saved_one(self):
         first = self.open(self.one)
@@ -469,11 +474,11 @@ class AppWindowsTests(unittest.TestCase):
 
     def test_a_new_window_is_a_quarter_of_the_screen_beside_the_one_it_came_from(self):
         a = self.open(self.one)
-        area = a.screen().availableGeometry()
-        a.move(area.left() + 40, area.top() + 30)
-        b = self.open(self.two, from_window=a)
+        a.move(40, 30)
+        with mock.patch.object(QScreen, "availableGeometry", return_value=WIDE_AREA):
+            b = self.open(self.two, from_window=a)
         step = a.style().pixelMetric(QStyle.PixelMetric.PM_TitleBarHeight)
-        self.assertEqual(b.size().toTuple(), (area.width() // 2, area.height() // 2))
+        self.assertEqual(b.size().toTuple(), (800, 500))
         self.assertEqual(b.pos().toTuple(), (a.pos().x() + step, a.pos().y() + step))
 
     def test_a_new_window_stays_on_the_screen(self):

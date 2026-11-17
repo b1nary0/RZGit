@@ -193,6 +193,10 @@ class Repo:
         """The remotes' names, in git's order (spec §4.1)."""
         return self.git("remote").split()
 
+    def push_default(self) -> str | None:
+        """``remote.pushDefault``: the remote to push to by default; None if unset."""
+        return self.config_value("remote.pushDefault") or None
+
     def refs(self) -> list[Ref]:
         """The branches, remote-tracking branches and tags, each with the commit it
         points at (an annotated tag peeled), in git's order (spec §4.1, RZG-77)."""

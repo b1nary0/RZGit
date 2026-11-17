@@ -12,7 +12,7 @@ from enum import StrEnum
 from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 
-from rzgitclient.core.network_worker import NetworkKind
+from rzgitclient.core.network_worker import NetworkKind, pushes_to_upstream
 from rzgitclient.core.repo_session import RepoSession
 from rzgitclient.core.selection import FileSource, Selection
 from rzgitclient.git.git_models import FileDiff, HistoryOrder, LastCommit, Stash
@@ -23,6 +23,8 @@ FETCH_TEXT = "&Fetch"
 FETCHING_TEXT = "Fetching…"
 PULL_TEXT = "&Pull"
 PULLING_TEXT = "Pulling…"
+PUSH_TEXT = "Pus&h"  # P, u and s are taken in the Repository menu; Stas&h shares h
+PUSHING_TEXT = "Pushing…"
 
 
 class BranchOp(StrEnum):
@@ -82,6 +84,8 @@ class AppActions(QObject):
     worktree_requested = Signal(object, str)  # WorktreeOp, path or branch ("" for none)
     # Pull, when not cancelling one; PullDialogs asks about changes, then pulls (spec §8).
     pull_requested = Signal()
+    # Push, when not cancelling one; PushDialogs asks where if need be, then pushes (spec §8).
+    push_requested = Signal()
 
     def __init__(self, session: RepoSession, selection: Selection,
                  parent: QObject | None = None):
@@ -163,6 +167,9 @@ class AppActions(QObject):
         # Pull (spec §8): the current branch's upstream; while its fetch runs, it cancels it.
         self.pull = self._action("vcs-pull", PULL_TEXT)
         self.pull.triggered.connect(self._on_pull)
+        # Push (spec §8): the current branch; while it runs, it cancels it.
+        self.push = self._action("vcs-push", PUSH_TEXT)
+        self.push.triggered.connect(self._on_push)
 
         # triggered(bool) would land in refresh's `parts` argument.
         self.refresh.triggered.connect(lambda: session.refresh())
@@ -218,6 +225,13 @@ class AppActions(QObject):
             self._session.cancel_network()
         elif network is None:
             self.pull_requested.emit()
+
+    def _on_push(self) -> None:
+        network = self._session.network
+        if network is not None and network.kind is NetworkKind.PUSH:
+            self._session.cancel_network()
+        elif network is None:
+            self.push_requested.emit()
 
     def move(self, paths: tuple[str, ...], to: FileSource) -> None:
         """Stage ``paths`` (``to`` the index) or unstage them, and have their new
@@ -288,6 +302,8 @@ class AppActions(QObject):
         self.fetch.setToolTip("Fetching… Click to cancel" if fetching else "Fetch every remote")
         self._update_pull(network is not None and network.kind is NetworkKind.PULL,
                           network is None)
+        self._update_push(network is not None and network.kind is NetworkKind.PUSH,
+                          network is None)
         worktree = bool(self.selected(FileSource.WORKTREE))
         self.stage.setEnabled(worktree)
         self.discard.setEnabled(worktree)
@@ -323,3 +339,25 @@ class AppActions(QObject):
         else:
             self.pull.setText(PULL_TEXT)
             self.pull.setToolTip("Pull: the current branch has no upstream")
+
+    def _update_push(self, pushing: bool, idle: bool) -> None:
+        """Push's text and state (spec §8): ↑n when ahead; Pushing… while it runs."""
+        session = self._session
+        branch = next((b for b in session.branches if b.is_current), None)
+        if session.repo is None or branch is None or branch.name != session.head:
+            branch = None  # detached, or before the first commit
+        can_push = branch is not None and bool(session.remotes)
+        self.push.setEnabled(pushing or (idle and can_push))
+        if pushing:
+            self.push.setText(PUSHING_TEXT)
+            self.push.setToolTip("Pushing… Click to cancel")
+        elif branch is not None and pushes_to_upstream(branch):
+            ahead = branch.ahead
+            self.push.setText(f"{PUSH_TEXT} ↑{ahead}" if ahead else PUSH_TEXT)
+            self.push.setToolTip(f"Push {branch.name} to {branch.upstream}")
+        elif can_push:
+            self.push.setText(PUSH_TEXT)
+            self.push.setToolTip(f"Push {branch.name} to a remote and track it")  # type: ignore[union-attr]
+        else:
+            self.push.setText(PUSH_TEXT)
+            self.push.setToolTip("Push: no remote, or no branch with commits")

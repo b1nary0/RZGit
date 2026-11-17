@@ -27,6 +27,7 @@ from rzgitclient.core.network_worker import (
     NetworkKind,
     NetworkResult,
     NetworkWorker,
+    pushes_to_upstream,
 )
 from rzgitclient.core.selection import FileSelection
 from rzgitclient.git.git_models import (
@@ -38,6 +39,7 @@ from rzgitclient.git.git_models import (
     HistoryOrder,
     LastCommit,
     Ref,
+    Remotes,
     Stash,
 )
 from rzgitclient.git.repo import GitError, Repo
@@ -57,7 +59,7 @@ class Refresh(Flag):
     STATUS = auto()
     COUNT = auto()  # commits reachable from HEAD; never in the same job as HISTORY
     STASHES = auto()
-    REMOTES = auto()  # the remotes' names (spec §4.1)
+    REMOTES = auto()  # the remotes' names and remote.pushDefault (spec §4.1)
     ALL = HEAD | BRANCHES | REFS | HISTORY | STATUS | STASHES | COUNT | REMOTES
     LAST_COMMIT = auto()  # HEAD's message, for amending: only when asked for, not in ALL
 
@@ -77,7 +79,7 @@ _EMPTY: dict[Refresh, object] = {
     Refresh.STATUS: (),
     Refresh.STASHES: (),
     Refresh.COUNT: None,
-    Refresh.REMOTES: (),
+    Refresh.REMOTES: Remotes(),
     Refresh.LAST_COMMIT: None,
 }
 
@@ -222,7 +224,12 @@ class RepoSession(QObject):
     @property
     def remotes(self) -> tuple[str, ...]:
         """The remotes' names, in git's order."""
-        return self._values[Refresh.REMOTES]  # type: ignore[return-value]
+        return self._values[Refresh.REMOTES].names  # type: ignore[attr-defined]
+
+    @property
+    def push_default(self) -> str | None:
+        """``remote.pushDefault``, or None if unset (RZG-72)."""
+        return self._values[Refresh.REMOTES].push_default  # type: ignore[attr-defined]
 
     @property
     def network(self) -> NetworkCommand | None:
@@ -380,6 +387,30 @@ class RepoSession(QObject):
             return None
         return self._command(GitCommand(CommandKind.PULL, branch=self.head, mode=mode,
                                         stash=stash), Refresh.ALL)
+
+    def push(self, remote: str | None = None) -> NetworkCommand | None:
+        """Push the current branch in the background (spec §4.1): with no
+        ``remote``, to its upstream; with one, to ``remote``/branch, which it
+        then tracks (``-u``). Never forced. None with no repository, while a
+        network command runs, with no remotes, no current branch with commits,
+        or with no ``remote`` and no upstream to push to."""
+        branch = next((b for b in self.branches if b.is_current), None)
+        if (self._repo is None or self._network.running is not None or branch is None
+                or branch.name != self.head):
+            return None
+        if remote is None:
+            if not pushes_to_upstream(branch):
+                return None
+            command = NetworkCommand(NetworkKind.PUSH, remote=branch.remote or "",
+                                     branch=branch.name)
+        elif remote in self.remotes:
+            command = NetworkCommand(NetworkKind.PUSH, remote=remote, branch=branch.name,
+                                     track=True)
+        else:
+            return None
+        self._network_generation = self._generation
+        self._network.start(self._repo, command)
+        return command
 
     def cancel_network(self) -> None:
         """Kill the running network command, if any; it reports no error."""
@@ -737,6 +768,8 @@ class RepoSession(QObject):
             for i, signal in enumerate((self.head_changed, self.head_sha_changed)):
                 if forced or old[i] != value[i]:  # type: ignore[index]
                     signal.emit(value[i])  # type: ignore[index]
+        elif part is Refresh.REMOTES:
+            self.remotes_changed.emit(value.names)  # type: ignore[attr-defined]
         else:
             self._signals[part].emit(value)
 
@@ -916,7 +949,7 @@ def _load(repo: Repo, part: Refresh) -> object:
     if part is Refresh.COUNT:
         return repo.commit_count()
     if part is Refresh.REMOTES:
-        return tuple(repo.remotes())
+        return Remotes(tuple(repo.remotes()), repo.push_default())
     if part is Refresh.LAST_COMMIT:
         return repo.last_commit()
     raise ValueError(f"not a single part: {part!r}")
