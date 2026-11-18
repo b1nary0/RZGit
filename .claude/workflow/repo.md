@@ -13,7 +13,7 @@ differs between repositories. It's per repository and never synced.
 | Lane worktree      | `/home/JPOD/dev/RZGit-RZG-N`, branch `RZG-N`                 |
 | Small-items lane   | worktree `/home/JPOD/dev/RZGit-small`, tab `RZG-small`, hook name `small` |
 | Lanes by default   | yes: lanes is the default way to work an RZG issue          |
-| Peer repository    | `/home/JPOD/dev/RZE` (for `sync-workflow`)                   |
+| Local settings     | `~/dev/RZGit.local.json`, this machine's only (the `local-settings` skill: `test-repo`) |
 
 `<main>` in the shared skills means the main checkout above.
 
@@ -36,5 +36,5 @@ Issues that edit these overlap and must rebase carefully:
 ## Rules every lane carries (they're in `lane-prompt.md`; keep them in sync)
 
 - Python from the shared venv, with the lane's own src first: `PYTHONPATH=src /home/JPOD/dev/RZGit/.venv/bin/python …`. The editable install points at the main checkout.
-- Anything that writes to a repository uses a scratch clone of RZE, never `/home/JPOD/dev/RZE` itself. Timings are noisy while other lanes run.
+- The test repository comes from the local settings (`local_settings.py get test-repo`); if it isn't set, ask the user. Anything that writes to a repository uses a scratch clone of it, never the test repository itself. Timings are noisy while other lanes run.
 - The user's standing rules: short replies; no `rm -rf` on variable paths; the Linear section is "Notes"; an epic goes In Progress with its child; no images in Linear; never print the Linear API key; no hard-coded colours outside `ui/theme`; layering git/ → core/ → ui/.

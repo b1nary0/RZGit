@@ -35,8 +35,9 @@ Then:
      - Make a temporary worktree of `{{BASE}}`: `git worktree add --detach <fresh mktemp -d path>/head {{BASE}}`.
      - Use a fresh `mktemp -d` settings folder (XDG_CONFIG_HOME).
      - Remove the worktree afterwards with `git worktree remove <literal path>`.
-   - A real Wayland launch (QT_QPA_PLATFORM=wayland) against /home/JPOD/dev/RZE, with startup timing. Other lanes may be running launches and test suites at the same time, so say the timings are noisy.
-   - Anything that writes to a repository uses your own scratch clone: `git clone --no-hardlinks /home/JPOD/dev/RZE <mktemp -d path>/rze`. Never write to /home/JPOD/dev/RZE itself.
+   - **The test repository** is this machine's local setting: `TEST_REPO=$(python3 /home/JPOD/dev/RZGit/.claude/skills/local-settings/local_settings.py get test-repo)`. If that fails, stop and ask the user for the path, then set it with `/local-settings set test-repo <path>` (or the `set` command it prints). Never guess one.
+   - A real Wayland launch (QT_QPA_PLATFORM=wayland) against the test repository, with startup timing. Other lanes may be running launches and test suites at the same time, so say the timings are noisy.
+   - Anything that writes to a repository uses your own scratch clone: `git clone --no-hardlinks "$TEST_REPO" <mktemp -d path>/test-repo`. Never write to the test repository itself.
    - Mutation checks: break each key piece and confirm a test fails. Restore from a scratchpad copy, never with `git checkout`.
 5. **Report:** set the issue In Review and add a "**Result (date, uncommitted):**" note.
 6. **Commit** only when the user says yes. Then:
