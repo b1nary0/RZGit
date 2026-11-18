@@ -5,10 +5,10 @@ from PySide6.QtCore import QCoreApplication, QPoint, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
-from rzgitclient.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
-from rzgitclient.ui.theme.style_roles import ROLE_PROPERTY, Role, Surface, set_surface
-from rzgitclient.ui.theme.theme_manager import ThemeManager
-from rzgitclient.ui.widgets.panel_segment import PanelSegment, PanelSegments
+from rzgit.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
+from rzgit.ui.theme.style_roles import ROLE_PROPERTY, Role, Surface, set_surface
+from rzgit.ui.theme.theme_manager import ThemeManager
+from rzgit.ui.widgets.panel_segment import PanelSegment, PanelSegments
 from tests.support import qt_app
 
 

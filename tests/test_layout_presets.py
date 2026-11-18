@@ -1,7 +1,7 @@
 import dataclasses
 import unittest
 
-from rzgitclient.ui.layout.layout_model import (
+from rzgit.ui.layout.layout_model import (
     Anchor,
     Area,
     Arrangement,
@@ -16,7 +16,7 @@ from rzgitclient.ui.layout.layout_model import (
     remove_panel,
     to_dict,
 )
-from rzgitclient.ui.layout.layout_presets import (
+from rzgit.ui.layout.layout_presets import (
     DEFAULT_LAYOUT,
     PRESETS,
     default_anchor,
@@ -25,7 +25,7 @@ from rzgitclient.ui.layout.layout_presets import (
     matching_preset,
     restore_layout,
 )
-from rzgitclient.ui.panels.panel_registry import PANEL_TYPES
+from rzgit.ui.panels.panel_registry import PANEL_TYPES
 
 H, V = Orientation.HORIZONTAL, Orientation.VERTICAL
 P = PanelNode
@@ -137,7 +137,7 @@ class RestoreLayoutTests(unittest.TestCase):
         for data in ({"version": 99, "root": {}}, {"version": 1, "root": {"type": "?"}}, {},
                      {**to_dict(CUSTOM), "arrangement": "?"}):
             with self.subTest(saved=data):
-                with self.assertLogs("rzgitclient.ui.layout.layout_presets", "WARNING"):
+                with self.assertLogs("rzgit.ui.layout.layout_presets", "WARNING"):
                     self.assertEqual(restore_layout(data), DEFAULT_LAYOUT)
 
     def test_a_hidden_panel_stays_hidden(self):

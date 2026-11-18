@@ -4,11 +4,11 @@ from unittest import mock
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QCheckBox, QLineEdit, QMessageBox, QWidget
 
-from rzgitclient.core.repo_session import RepoSession
-from rzgitclient.core.selection import Selection
-from rzgitclient.git.git_models import Branch, FileStatus
-from rzgitclient.ui.app_actions import AppActions, BranchOp
-from rzgitclient.ui.branch_dialogs import BRING, STASH, BranchDialogs
+from rzgit.core.repo_session import RepoSession
+from rzgit.core.selection import Selection
+from rzgit.git.git_models import Branch, FileStatus
+from rzgit.ui.app_actions import AppActions, BranchOp
+from rzgit.ui.branch_dialogs import BRING, STASH, BranchDialogs
 from tests.support import qt_app
 
 
@@ -63,7 +63,7 @@ class BranchDialogsTests(unittest.TestCase):
         _title, _text, info, labels, default, _warn = self.asked[0]
         self.assertEqual((labels, default), ([STASH, BRING], STASH))
         self.assertIn("2 changed files", info)
-        self.assertIn("RZGitClient: before switching to done", info)
+        self.assertIn("RZGit: before switching to done", info)
         self.assertIn("Stashes panel", info)
 
         self.session.reset_mock()

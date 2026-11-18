@@ -4,11 +4,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from rzgitclient.core import git_commands
-from rzgitclient.core.diff_patch import hunk_lines
-from rzgitclient.core.git_commands import CommandKind, GitCommand, run_command
-from rzgitclient.git.git_models import DiffSource
-from rzgitclient.git.repo import GitError, Repo
+from rzgit.core import git_commands
+from rzgit.core.diff_patch import hunk_lines
+from rzgit.core.git_commands import CommandKind, GitCommand, run_command
+from rzgit.git.git_models import DiffSource
+from rzgit.git.repo import GitError, Repo
 from tests.support import commit_file, git, make_repo
 
 
@@ -212,7 +212,7 @@ class SwitchCommandTests(unittest.TestCase):
         self.switch(stash=True)
         self.assertEqual(self.repo.current_branch(), "other")
         self.assertEqual(self.repo.status(), [])
-        self.assertEqual(self.stashes(), ["On main: RZGitClient: before switching to other"])
+        self.assertEqual(self.stashes(), ["On main: RZGit: before switching to other"])
 
     def test_switch_without_a_stash_carries_changes_over(self):
         (self.path / "new.txt").write_text("new")
@@ -247,7 +247,7 @@ class SwitchCommandTests(unittest.TestCase):
                 mock.patch.object(Repo, "stash_pop", side_effect=GitError("pop failed", 1)):
             with self.assertRaises(GitError) as caught:
                 self.switch(stash=True)
-        self.assertIn("RZGitClient: before switching to other", str(caught.exception))
+        self.assertIn("RZGit: before switching to other", str(caught.exception))
         self.assertIn("pop failed", str(caught.exception))
 
     def test_branch_commands_reach_the_repo(self):

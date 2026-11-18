@@ -8,11 +8,11 @@ from PySide6.QtCore import QCoreApplication, QEvent, QItemSelectionModel, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QTreeWidgetItemIterator
 
-from rzgitclient.core.selection import FileSelection, FileSource
-from rzgitclient.ui.panels.files_panel import FilesPanel
-from rzgitclient.ui.panels.staged_panel import StagedPanel
-from rzgitclient.ui.theme.app_theme import LIGHT_THEME
-from rzgitclient.ui.widgets.column_header import ColumnHeader
+from rzgit.core.selection import FileSelection, FileSource
+from rzgit.ui.panels.files_panel import FilesPanel
+from rzgit.ui.panels.staged_panel import StagedPanel
+from rzgit.ui.theme.app_theme import LIGHT_THEME
+from rzgit.ui.widgets.column_header import ColumnHeader
 from tests.support import (click_column_label, commit_file, drag_column_edge, git,
                            make_panel_context, make_repo, qt_app, wait_idle)
 
@@ -651,7 +651,7 @@ class FilesPanelTests(unittest.TestCase):
         self.assertIsNone(self.ctx.sorts.order("files"))
 
     def test_headings_take_the_theme(self):
-        from rzgitclient.ui.theme.app_theme import DARK_THEME
+        from rzgit.ui.theme.app_theme import DARK_THEME
         self.make_sortable_changes()
         self.open()
         self.unstaged.sort.set_group("status")

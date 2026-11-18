@@ -3,9 +3,9 @@ import unittest
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QLabel
 
-from rzgitclient.ui.layout.panel_frame import PanelFrame
-from rzgitclient.ui.panels.panel import Panel
-from rzgitclient.ui.theme.style_roles import ROLE_PROPERTY, Role, Surface
+from rzgit.ui.layout.panel_frame import PanelFrame
+from rzgit.ui.panels.panel import Panel
+from rzgit.ui.theme.style_roles import ROLE_PROPERTY, Role, Surface
 from tests.support import make_panel_context, qt_app
 
 
@@ -51,7 +51,7 @@ class PanelFrameTests(unittest.TestCase):
         self.assertEqual(frame.property("surface"), "sidebar")
 
     def test_renders_header_on_its_own_background_above_the_surface(self):
-        from rzgitclient.ui.theme.app_theme import LIGHT_THEME
+        from rzgit.ui.theme.app_theme import LIGHT_THEME
 
         frame = PanelFrame(self.panel, Surface.SIDEBAR)
         frame.resize(200, 100)

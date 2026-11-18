@@ -8,8 +8,8 @@ from pathlib import Path
 from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 
-from rzgitclient.core.app_settings import AppSettings
-from rzgitclient.ui.main_window import MainWindow
+from rzgit.core.app_settings import AppSettings
+from rzgit.ui.main_window import MainWindow
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 GUIDE = Path(__file__).resolve().parents[1] / "docs" / "USAGE.md"

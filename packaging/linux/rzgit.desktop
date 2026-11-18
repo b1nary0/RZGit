@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=RZGit
+GenericName=Git Client
+Comment=Stage, commit and browse the history of git repositories
+Exec="@EXEC@" %f
+Icon=rzgit
+Terminal=false
+Categories=Development;RevisionControl;
+Keywords=git;version control;repository;
+StartupNotify=true
+StartupWMClass=rzgit

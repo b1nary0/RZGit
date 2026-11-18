@@ -7,13 +7,13 @@ from PySide6.QtCore import QCoreApplication, QEvent, QPoint, Qt, QThread
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from rzgitclient.core.diff_patch import hunk_lines
-from rzgitclient.core.selection import FileSelection, FileSource
-from rzgitclient.ui.app_actions import HunkHeaders
-from rzgitclient.ui.panels import diff_panel
-from rzgitclient.ui.panels.diff_panel import DiffPanel
-from rzgitclient.ui.panels.diff_rows import RowKind, TextPos, unified_rows
-from rzgitclient.ui.theme.app_theme import LIGHT_THEME
+from rzgit.core.diff_patch import hunk_lines
+from rzgit.core.selection import FileSelection, FileSource
+from rzgit.ui.app_actions import HunkHeaders
+from rzgit.ui.panels import diff_panel
+from rzgit.ui.panels.diff_panel import DiffPanel
+from rzgit.ui.panels.diff_rows import RowKind, TextPos, unified_rows
+from rzgit.ui.theme.app_theme import LIGHT_THEME
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 A = FileSelection("a.txt", FileSource.WORKTREE)

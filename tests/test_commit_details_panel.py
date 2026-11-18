@@ -8,9 +8,9 @@ from PySide6.QtCore import QCoreApplication, QEvent, QPoint
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QWidget
 
-from rzgitclient.ui.panels import commit_details_panel
-from rzgitclient.ui.panels.commit_details_panel import CommitDetailsPanel, format_date, full_date
-from rzgitclient.ui.theme.app_theme import DARK_THEME
+from rzgit.ui.panels import commit_details_panel
+from rzgit.ui.panels.commit_details_panel import CommitDetailsPanel, format_date, full_date
+from rzgit.ui.theme.app_theme import DARK_THEME
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 
@@ -115,7 +115,7 @@ class CommitDetailsPanelTests(unittest.TestCase):
         self.assertEqual(self.selection.commit, self.second)
 
     def test_a_parent_history_hasnt_loaded_is_plain_text(self):
-        with mock.patch("rzgitclient.core.repo_session.HISTORY_PAGE", 2):
+        with mock.patch("rzgit.core.repo_session.HISTORY_PAGE", 2):
             self.session.open(self.repo)  # one page: third and second
             wait_idle(self.session)
         self.assertEqual(len(self.session.history), 2)

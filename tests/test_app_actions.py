@@ -5,12 +5,12 @@ from unittest import mock
 
 from PySide6.QtGui import QKeySequence
 
-from rzgitclient.core.network_worker import NetworkCommand, NetworkKind
-from rzgitclient.core.repo_session import RepoSession
-from rzgitclient.core.selection import FileSelection, FileSource, Selection
-from rzgitclient.git.git_models import HistoryOrder
-from rzgitclient.ui.app_actions import AppActions, BranchOp, WorktreeOp
-from rzgitclient.ui.theme.theme_manager import ThemeMode
+from rzgit.core.network_worker import NetworkCommand, NetworkKind
+from rzgit.core.repo_session import RepoSession
+from rzgit.core.selection import FileSelection, FileSource, Selection
+from rzgit.git.git_models import HistoryOrder
+from rzgit.ui.app_actions import AppActions, BranchOp, WorktreeOp
+from rzgit.ui.theme.theme_manager import ThemeMode
 from tests.support import commit_file, git, make_repo, qt_app, wait_idle
 
 W, I = FileSource.WORKTREE, FileSource.INDEX
@@ -272,7 +272,7 @@ class AppActionsTests(unittest.TestCase):
         self.assertFalse(self.actions.amend.isEnabled())
 
     def test_confirm_amend_asks_the_confirmer(self):
-        from rzgitclient.git.git_models import LastCommit
+        from rzgit.git.git_models import LastCommit
         last = LastCommit("abc", "m", True)
         self.assertTrue(self.actions.confirm_amend(last))  # none set
         seen = []

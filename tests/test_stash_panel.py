@@ -8,11 +8,11 @@ from pathlib import Path
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtTest import QTest
 
-from rzgitclient.git.git_models import Stash
-from rzgitclient.ui.app_actions import StashOp
-from rzgitclient.ui.panels import stash_panel
-from rzgitclient.ui.panels.stash_panel import StashPanel, age
-from rzgitclient.ui.widgets.column_header import ColumnHeader
+from rzgit.git.git_models import Stash
+from rzgit.ui.app_actions import StashOp
+from rzgit.ui.panels import stash_panel
+from rzgit.ui.panels.stash_panel import StashPanel, age
+from rzgit.ui.widgets.column_header import ColumnHeader
 from tests.support import click_column_label, commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 

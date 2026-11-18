@@ -8,11 +8,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rzgitclient.ui.app_icon import ICON_SIZES, icon_file
+from rzgit.ui.app_icon import ICON_SIZES, icon_file
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "packaging" / "linux" / "install-desktop.sh"
-TEMPLATE = ROOT / "packaging" / "linux" / "rzgitclient.desktop"
+TEMPLATE = ROOT / "packaging" / "linux" / "rzgit.desktop"
 
 
 class InstallDesktopTests(unittest.TestCase):
@@ -34,10 +34,10 @@ class InstallDesktopTests(unittest.TestCase):
 
     @property
     def entry(self):
-        return self.data / "applications" / "rzgitclient.desktop"
+        return self.data / "applications" / "rzgit.desktop"
 
     def icon(self, size):
-        return self.data / "icons" / "hicolor" / f"{size}x{size}" / "apps" / "rzgitclient.png"
+        return self.data / "icons" / "hicolor" / f"{size}x{size}" / "apps" / "rzgit.png"
 
     def installed_files(self):
         return sorted(p for p in self.data.rglob("*") if p.is_file())
@@ -47,7 +47,7 @@ class InstallDesktopTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         text = self.entry.read_text()
         self.assertIn(f'Exec="{self.exec_path}" %f\n', text)
-        self.assertIn("Icon=rzgitclient\n", text)
+        self.assertIn("Icon=rzgit\n", text)
         self.assertNotIn("@EXEC@", text)
         for size in ICON_SIZES:
             self.assertEqual(self.icon(size).read_bytes(), icon_file(size).read_bytes(), size)
@@ -59,7 +59,7 @@ class InstallDesktopTests(unittest.TestCase):
         stale = self.icon(18)
         stale.parent.mkdir(parents=True)
         stale.write_bytes(b"old")
-        manifest = self.data / "applications" / ".rzgitclient-installed"
+        manifest = self.data / "applications" / ".rzgit-installed"
         manifest.write_text(manifest.read_text() + f"{stale}\n")
         moved = self.exec_path.parent / "rzgit-moved"
         shutil.copy2(self.exec_path, moved)
@@ -77,6 +77,26 @@ class InstallDesktopTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.installed_files(), [keep])
 
+    def test_install_removes_the_old_names_install(self):
+        # An install from when the app was RZGitClient (RZG-59): its entry and icons go,
+        # through its own manifest, and other files are left alone.
+        apps = self.data / "applications"
+        old_entry = apps / "rzgitclient.desktop"
+        old_icon = self.data / "icons" / "hicolor" / "64x64" / "apps" / "rzgitclient.png"
+        keep = apps / "other.desktop"
+        old_icon.parent.mkdir(parents=True)
+        apps.mkdir()
+        for path in (old_entry, old_icon, keep):
+            path.write_text("old")
+        (apps / ".rzgitclient-installed").write_text(f"{old_entry}\n{old_icon}\n{keep}\n")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(old_entry.exists())
+        self.assertFalse(old_icon.exists())
+        self.assertFalse((apps / ".rzgitclient-installed").exists())
+        self.assertTrue(keep.exists())
+        self.assertTrue(self.entry.exists())
+
     def test_uninstall_with_nothing_installed(self):
         self.assertEqual(self.run_script("--uninstall").returncode, 0)
 
@@ -84,7 +104,7 @@ class InstallDesktopTests(unittest.TestCase):
         self.run_script()
         other = self.data / "applications" / "other.desktop"
         other.write_text("[Desktop Entry]\n")
-        manifest = self.data / "applications" / ".rzgitclient-installed"
+        manifest = self.data / "applications" / ".rzgit-installed"
         manifest.write_text(manifest.read_text() + f"{other}\n")
         self.run_script("--uninstall")
         self.assertTrue(other.exists())

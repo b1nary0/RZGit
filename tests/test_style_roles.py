@@ -3,9 +3,9 @@ import unittest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QWidget
 
-from rzgitclient.ui.theme.app_theme import LIGHT_THEME
-from rzgitclient.ui.theme.style_roles import Role, Surface, set_role, set_surface
-from rzgitclient.ui.theme.theme_manager import ThemeManager
+from rzgit.ui.theme.app_theme import LIGHT_THEME
+from rzgit.ui.theme.style_roles import Role, Surface, set_role, set_surface
+from rzgit.ui.theme.theme_manager import ThemeManager
 from tests.support import qt_app
 
 

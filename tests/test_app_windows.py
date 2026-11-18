@@ -9,18 +9,18 @@ from PySide6.QtCore import QCoreApplication, QEvent, QRect, Qt
 from PySide6.QtGui import QScreen
 from PySide6.QtWidgets import QStyle
 
-from rzgitclient.core.app_settings import AppSettings
-from rzgitclient.core.column_prefs import ColumnPrefs
-from rzgitclient.core.commit_drafts import CommitDrafts
-from rzgitclient.core.recent_repos import RecentRepos
-from rzgitclient.core.sort_prefs import SortPrefs
-from rzgitclient.ui.app_actions import WorktreeOp
-from rzgitclient.ui.app_windows import AppWindows
-from rzgitclient.ui.layout.layout_model import Area, to_dict
-from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
-from rzgitclient.ui.worktree_dialogs import REMOVE, NewWorktree
-from rzgitclient.ui.theme.app_theme import LIGHT_THEME
-from rzgitclient.ui.theme.theme_manager import ThemeManager, ThemeMode
+from rzgit.core.app_settings import AppSettings
+from rzgit.core.column_prefs import ColumnPrefs
+from rzgit.core.commit_drafts import CommitDrafts
+from rzgit.core.recent_repos import RecentRepos
+from rzgit.core.sort_prefs import SortPrefs
+from rzgit.ui.app_actions import WorktreeOp
+from rzgit.ui.app_windows import AppWindows
+from rzgit.ui.layout.layout_model import Area, to_dict
+from rzgit.ui.layout.layout_presets import DEFAULT_LAYOUT
+from rzgit.ui.worktree_dialogs import REMOVE, NewWorktree
+from rzgit.ui.theme.app_theme import LIGHT_THEME
+from rzgit.ui.theme.theme_manager import ThemeManager, ThemeMode
 from tests.support import commit_file, git, make_repo, qt_app, wait_idle
 
 # A screen area wide enough that half of it is more than a window's minimum width
@@ -102,7 +102,7 @@ class AppWindowsTests(unittest.TestCase):
     # ---- recent repositories (spec §6.3, §8, RZG-87) -----------------------------
 
     def recent_menu(self, window):
-        from rzgitclient.ui.recent_repos_menu import RecentReposMenu
+        from rzgit.ui.recent_repos_menu import RecentReposMenu
         menu = window.findChild(RecentReposMenu)
         menu.aboutToShow.emit()
         return menu
@@ -161,7 +161,7 @@ class AppWindowsTests(unittest.TestCase):
         plain = self.tmp / "plain"
         plain.mkdir()
         window.ctx.recent.touch(mock.Mock(root=plain, main_root=plain))
-        with mock.patch("rzgitclient.ui.app_windows.QMessageBox.warning") as warning:
+        with mock.patch("rzgit.ui.app_windows.QMessageBox.warning") as warning:
             self.recent_item(window, "plain", "Open in &New Window").trigger()
         warning.assert_called_once()
         self.assertEqual(self.windows.windows(), (window,))
@@ -258,7 +258,7 @@ class AppWindowsTests(unittest.TestCase):
     def test_a_folder_that_isnt_a_repository_opens_no_window(self):
         a = self.open(self.one)
         (self.tmp / "plain").mkdir()
-        with mock.patch("rzgitclient.ui.app_windows.QMessageBox") as box:
+        with mock.patch("rzgit.ui.app_windows.QMessageBox") as box:
             self.assertIsNone(self.windows.open(self.tmp / "plain", from_window=a))
         box.warning.assert_called_once()
         self.assertIs(box.warning.call_args.args[0], a)
@@ -305,7 +305,7 @@ class AppWindowsTests(unittest.TestCase):
     # ---- File → Open Repository in New Window… (RZG-52) -------------------------
 
     def choose_in_new_window(self, window, path):
-        with mock.patch("rzgitclient.ui.main_window.QFileDialog.getExistingDirectory",
+        with mock.patch("rzgit.ui.main_window.QFileDialog.getExistingDirectory",
                         return_value=str(path)) as dialog:
             window.ctx.actions.open_repo_new_window.trigger()
         dialog.assert_called_once()
@@ -344,7 +344,7 @@ class AppWindowsTests(unittest.TestCase):
         self.assertEqual(len(self.windows.windows()), 1)
         plain = self.tmp / "plain"
         plain.mkdir()
-        with mock.patch("rzgitclient.ui.app_windows.QMessageBox.warning") as warning:
+        with mock.patch("rzgit.ui.app_windows.QMessageBox.warning") as warning:
             self.choose_in_new_window(a, plain)
         warning.assert_called_once()
         self.assertEqual(len(self.windows.windows()), 1)
@@ -406,8 +406,8 @@ class AppWindowsTests(unittest.TestCase):
         git(self.one, "worktree", "add", "-b", "lane", str(self.tmp / "lane-7"))
         a = self.open(self.two)
         b = self.open(self.tmp / "lane-7")
-        self.assertEqual(b.windowTitle(), "lane-7 — RZGitClient")
-        self.assertEqual(a.windowTitle(), "two — RZGitClient")
+        self.assertEqual(b.windowTitle(), "lane-7 — RZGit")
+        self.assertEqual(a.windowTitle(), "two — RZGit")
         self.assertEqual(self.settings.last_repo, str(self.one))  # not the worktree
         a.changeEvent(QEvent(QEvent.Type.ActivationChange))  # not active: no change
         self.assertEqual(self.settings.last_repo, str(self.one))

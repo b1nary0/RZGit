@@ -5,9 +5,9 @@ from PySide6.QtGui import QColor, QMouseEvent, QStandardItem, QStandardItemModel
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QTreeView
 
-from rzgitclient.core.column_prefs import ColumnPrefs
-from rzgitclient.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
-from rzgitclient.ui.widgets.column_header import (PADDING_X, RESET_WIDTHS, ColumnHeader,
+from rzgit.core.column_prefs import ColumnPrefs
+from rzgit.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
+from rzgit.ui.widgets.column_header import (PADDING_X, RESET_WIDTHS, ColumnHeader,
                                                    short_label)
 from tests.support import click_column_label, drag_column_edge, qt_app
 

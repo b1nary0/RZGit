@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rzgitclient.core.diff_patch import build_patch, can_patch, hunk_lines
-from rzgitclient.git.git_models import DiffSource, LineKind
-from rzgitclient.git.repo import GitError, Repo
+from rzgit.core.diff_patch import build_patch, can_patch, hunk_lines
+from rzgit.git.git_models import DiffSource, LineKind
+from rzgit.git.repo import GitError, Repo
 from tests.support import git, make_repo
 
 

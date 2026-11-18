@@ -1,40 +1,49 @@
 #!/usr/bin/env bash
-# Installs RZGitClient's desktop entry and icons for the current user, so app launchers
+# Installs RZGit's desktop entry and icons for the current user, so app launchers
 # and menus list it with its icon. Run it again to reinstall (for example after moving
 # the checkout or changing the icons); --uninstall removes everything it installed.
 #
 #   packaging/linux/install-desktop.sh [--uninstall]
 #
 # Files go under $XDG_DATA_HOME (default ~/.local/share):
-#   applications/rzgitclient.desktop             this folder's template, Exec filled in
-#   icons/hicolor/<N>x<N>/apps/rzgitclient.png   each icon PNG of the app, as it is
-#   applications/.rzgitclient-installed          the list of files above, for the next run
+#   applications/rzgit.desktop             this folder's template, Exec filled in
+#   icons/hicolor/<N>x<N>/apps/rzgit.png   each icon PNG of the app, as it is
+#   applications/.rzgit-installed          the list of files above, for the next run
+#
+# An install made when the app was called RZGitClient (app id rzgitclient) is removed too.
 #
 # Environment:
 #   RZGIT_EXEC              the program the entry starts (default: this checkout's .venv/bin/rzgit)
 #   RZGIT_NO_CACHE_REFRESH  set to skip refreshing the desktop's caches (the tests set it)
 set -euo pipefail
 
-app_id=rzgitclient
+app_id=rzgit
+old_app_id=rzgitclient  # the app's id before RZG-59
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 data="${XDG_DATA_HOME:-$HOME/.local/share}"
-icons="$root/src/rzgitclient/ui/assets/icon"
+icons="$root/src/rzgit/ui/assets/icon"
 entry="$data/applications/$app_id.desktop"
-manifest="$data/applications/.$app_id-installed"
 
-# Removes the files the last install listed, one named file at a time. Only paths under
-# $data that end in this app's entry or icon name are touched.
-remove_installed() {
+# Removes the files the last install of the app id $1 listed, one named file at a time.
+# Only paths under $data that end in that id's entry or icon name are touched.
+remove_listed() {
+    local id="$1"
+    local manifest="$data/applications/.$id-installed"
     [[ -f "$manifest" ]] || return 0
     local path
     while IFS= read -r path; do
         case "$path" in
-            "$data"/applications/"$app_id".desktop | "$data"/icons/hicolor/*/apps/"$app_id".png)
+            "$data"/applications/"$id".desktop | "$data"/icons/hicolor/*/apps/"$id".png)
                 rm -f -- "$path" ;;
         esac
     done < "$manifest"
     rm -f -- "$manifest"
+}
+
+remove_installed() {
+    remove_listed "$app_id"
+    remove_listed "$old_app_id"
 }
 
 refresh_caches() {
@@ -83,7 +92,7 @@ install_all() {
         listed+=("$target")
     done
 
-    printf '%s\n' "${listed[@]}" > "$manifest"
+    printf '%s\n' "${listed[@]}" > "$data/applications/.$app_id-installed"
     refresh_caches
     echo "Installed $entry and ${#listed[@]} files in all. Exec: $exec_path"
 }
@@ -93,7 +102,7 @@ case "${1:-}" in
     --uninstall)
         remove_installed
         refresh_caches
-        echo "Removed RZGitClient's desktop entry and icons from $data." ;;
+        echo "Removed RZGit's desktop entry and icons from $data." ;;
     *)
         echo "usage: $0 [--uninstall]" >&2
         exit 2 ;;

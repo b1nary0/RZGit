@@ -1,6 +1,6 @@
 import unittest
 
-from rzgitclient.ui.panels.commit_message_text import reflow
+from rzgit.ui.panels.commit_message_text import reflow
 
 
 class ReflowTests(unittest.TestCase):

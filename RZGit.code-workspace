@@ -1,0 +1,17 @@
+{
+	// Project settings, launch configs and tasks live in .vscode/ so they
+	// apply whether you open this workspace file or just the folder.
+	"folders": [
+		{
+			"name": "RZGit",
+			"path": "."
+		}
+	],
+	"extensions": {
+		"recommendations": [
+			"ms-python.python",
+			"ms-python.vscode-pylance",
+			"ms-python.debugpy"
+		]
+	}
+}

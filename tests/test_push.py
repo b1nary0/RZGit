@@ -5,18 +5,18 @@ from unittest import mock
 
 from PySide6.QtWidgets import QWidget
 
-from rzgitclient.core.network_worker import (
+from rzgit.core.network_worker import (
     NetworkCommand,
     NetworkKind,
     push_rejected,
     pushes_to_upstream,
 )
-from rzgitclient.core.repo_session import RepoSession
-from rzgitclient.core.selection import Selection
-from rzgitclient.git.git_models import Branch
-from rzgitclient.git.repo import GitError, Repo
-from rzgitclient.ui.app_actions import AppActions
-from rzgitclient.ui.push_dialogs import PushDialogs, default_remote
+from rzgit.core.repo_session import RepoSession
+from rzgit.core.selection import Selection
+from rzgit.git.git_models import Branch
+from rzgit.git.repo import GitError, Repo
+from rzgit.ui.app_actions import AppActions
+from rzgit.ui.push_dialogs import PushDialogs, default_remote
 from tests.support import SignalRecorder, commit_file, git, qt_app
 from tests.test_network_worker import wait_network
 from tests.test_pull import Clones

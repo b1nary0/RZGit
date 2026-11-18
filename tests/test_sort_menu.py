@@ -6,12 +6,12 @@ from PySide6.QtGui import QStandardItemModel
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QTreeView, QWidget
 
-from rzgitclient.core.column_prefs import ColumnPrefs
-from rzgitclient.core.sort_options import GroupOption, SortOption, SortOptions, SortOrder
-from rzgitclient.core.sort_prefs import SortPrefs
-from rzgitclient.ui.theme.app_theme import LIGHT_THEME
-from rzgitclient.ui.widgets.column_header import ColumnHeader
-from rzgitclient.ui.widgets.sort_menu import GROUP_BY, NO_GROUPS, REVERSED, SORT_BY, SortMenu
+from rzgit.core.column_prefs import ColumnPrefs
+from rzgit.core.sort_options import GroupOption, SortOption, SortOptions, SortOrder
+from rzgit.core.sort_prefs import SortPrefs
+from rzgit.ui.theme.app_theme import LIGHT_THEME
+from rzgit.ui.widgets.column_header import ColumnHeader
+from rzgit.ui.widgets.sort_menu import GROUP_BY, NO_GROUPS, REVERSED, SORT_BY, SortMenu
 from tests.support import click_column_label, qt_app
 
 SORTS = SortOptions((

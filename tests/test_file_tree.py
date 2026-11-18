@@ -1,6 +1,6 @@
 import unittest
 
-from rzgitclient.ui.panels.file_tree import FolderNode, build_tree, file_label, sort_tree
+from rzgit.ui.panels.file_tree import FolderNode, build_tree, file_label, sort_tree
 
 
 def shape(node: FolderNode) -> list:
@@ -34,10 +34,10 @@ class FileTreeTests(unittest.TestCase):
         self.assertEqual([f.name for f in root.files], ["A.txt", "b.txt"])
 
     def test_a_chain_of_single_folders_is_one_row(self):
-        root = self.tree("src/rzgitclient/ui/panels/a.py", "src/rzgitclient/ui/b.py")
-        self.assertEqual(shape(root), [("src/rzgitclient/ui", [("panels", ["a.py"]), "b.py"])])
-        self.assertEqual(root.folders[0].path, "src/rzgitclient/ui")
-        self.assertEqual(root.folders[0].folders[0].path, "src/rzgitclient/ui/panels")
+        root = self.tree("src/rzgit/ui/panels/a.py", "src/rzgit/ui/b.py")
+        self.assertEqual(shape(root), [("src/rzgit/ui", [("panels", ["a.py"]), "b.py"])])
+        self.assertEqual(root.folders[0].path, "src/rzgit/ui")
+        self.assertEqual(root.folders[0].folders[0].path, "src/rzgit/ui/panels")
 
     def test_a_folder_with_files_is_not_merged(self):
         root = self.tree("src/a.py", "src/pkg/b.py")

@@ -5,11 +5,11 @@ from unittest import mock
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QCheckBox, QLineEdit, QMessageBox, QWidget
 
-from rzgitclient.core.repo_session import RepoSession
-from rzgitclient.core.selection import Selection
-from rzgitclient.git.git_models import Stash
-from rzgitclient.ui.app_actions import AppActions, StashOp
-from rzgitclient.ui.stash_dialogs import DROP, StashDialogs
+from rzgit.core.repo_session import RepoSession
+from rzgit.core.selection import Selection
+from rzgit.git.git_models import Stash
+from rzgit.ui.app_actions import AppActions, StashOp
+from rzgit.ui.stash_dialogs import DROP, StashDialogs
 from tests.support import qt_app
 
 STASH = Stash("a" * 40, "Test User", datetime(2026, 11, 16, tzinfo=timezone.utc), "wip",

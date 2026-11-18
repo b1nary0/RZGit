@@ -5,9 +5,9 @@ from PySide6.QtGui import QKeyEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QTreeWidgetItem
 
-from rzgitclient.core.sort_options import Group
-from rzgitclient.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
-from rzgitclient.ui.widgets.grouped_tree import GroupedTree, heading_key
+from rzgit.core.sort_options import Group
+from rzgit.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
+from rzgit.ui.widgets.grouped_tree import GroupedTree, heading_key
 from tests.support import qt_app
 
 

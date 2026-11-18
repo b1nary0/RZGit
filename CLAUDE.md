@@ -1,4 +1,4 @@
-# RZGitClient
+# RZGit
 
 A PySide6 git client for Linux. See `README.md` for setup, running and tests.
 

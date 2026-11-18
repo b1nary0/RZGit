@@ -4,9 +4,9 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QLineEdit, QToolButton
 
-from rzgitclient.core.repo_session import Refresh
-from rzgitclient.ui.app_actions import BranchOp
-from rzgitclient.ui.panels.controls_panel import (
+from rzgit.core.repo_session import Refresh
+from rzgit.ui.app_actions import BranchOp
+from rzgit.ui.panels.controls_panel import (
     FILTER_AT, LABEL_WIDTH, MIN_LABEL_WIDTH, ControlsPanel,
 )
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle

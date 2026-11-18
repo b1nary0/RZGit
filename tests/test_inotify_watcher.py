@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rzgitclient.core.inotify_watcher import (
+from rzgit.core.inotify_watcher import (
     IN_CREATE,
     IN_DELETE,
     IN_ISDIR,

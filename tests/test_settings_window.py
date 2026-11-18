@@ -8,18 +8,18 @@ from PySide6.QtCore import QCoreApplication, QEvent, Qt, QTimer
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialogButtonBox,
                                QDoubleSpinBox, QLineEdit, QSpinBox)
 
-from rzgitclient.core.app_settings import AppSettings
-from rzgitclient.core.column_prefs import ColumnPrefs
-from rzgitclient.core.commit_drafts import CommitDrafts
-from rzgitclient.core.preferences import Preferences, Setting
-from rzgitclient.core.sort_prefs import SortPrefs
-from rzgitclient.ui.app_windows import AppWindows
-from rzgitclient.ui.main_window import MainWindow
-from rzgitclient.ui.panels.diff_panel import FOLD_MIN, TAB_SPACES
-from rzgitclient.ui import settings_window
-from rzgitclient.ui.settings_window import APPEARANCE, Restore, SettingsWindow
-from rzgitclient.ui.theme.app_theme import LIGHT_THEME
-from rzgitclient.ui.theme.theme_manager import ThemeManager, ThemeMode
+from rzgit.core.app_settings import AppSettings
+from rzgit.core.column_prefs import ColumnPrefs
+from rzgit.core.commit_drafts import CommitDrafts
+from rzgit.core.preferences import Preferences, Setting
+from rzgit.core.sort_prefs import SortPrefs
+from rzgit.ui.app_windows import AppWindows
+from rzgit.ui.main_window import MainWindow
+from rzgit.ui.panels.diff_panel import FOLD_MIN, TAB_SPACES
+from rzgit.ui import settings_window
+from rzgit.ui.settings_window import APPEARANCE, Restore, SettingsWindow
+from rzgit.ui.theme.app_theme import LIGHT_THEME
+from rzgit.ui.theme.theme_manager import ThemeManager, ThemeMode
 from tests.support import make_panel_context, qt_app
 
 COUNT = Setting("test/count", 20, "Count", page="Diff", minimum=4, maximum=100)
@@ -213,7 +213,7 @@ class OpeningTests(unittest.TestCase):
 
     def test_one_window_for_the_app_closed_with_the_last_main_window(self):
         one, two = self.windows.new_window(), self.windows.new_window()
-        with mock.patch("rzgitclient.ui.app_windows.show_window") as show:
+        with mock.patch("rzgit.ui.app_windows.show_window") as show:
             one.ctx.actions.settings.trigger()
             first = self.windows.settings_window
             two.ctx.actions.settings.trigger()
@@ -237,7 +237,7 @@ class OpeningTests(unittest.TestCase):
     def test_a_main_window_without_app_windows_has_its_own(self):
         ctx = make_panel_context()
         window = MainWindow(ctx, self.settings)
-        with mock.patch("rzgitclient.ui.main_window.show_window"):
+        with mock.patch("rzgit.ui.main_window.show_window"):
             window.show_settings()
         self.assertIsNotNone(window._settings_window)
         self.assertIs(window._settings_window._prefs, ctx.prefs)

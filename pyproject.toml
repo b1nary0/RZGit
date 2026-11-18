@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rzgitclient"
+name = "rzgit"
 version = "0.1.0"
 description = "A Qt-based git client for Linux"
 readme = "README.md"
@@ -11,11 +11,11 @@ requires-python = ">=3.11"
 dependencies = ["PySide6>=6.6"]
 
 [project.scripts]
-rzgit = "rzgitclient.app:main"
+rzgit = "rzgit.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 # The app icon, logo and splash images (spec §3).
 [tool.setuptools.package-data]
-"rzgitclient.ui" = ["assets/*/*"]
+"rzgit.ui" = ["assets/*/*"]

@@ -3,8 +3,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from rzgitclient.core.app_settings import AppSettings
-from rzgitclient.core.recent_repos import RecentRepos
+from rzgit.core.app_settings import AppSettings
+from rzgit.core.recent_repos import RecentRepos
 from tests.support import SignalRecorder, qt_app
 
 
@@ -116,7 +116,7 @@ class RecentReposTests(unittest.TestCase):
         settings = AppSettings(self.path)
         settings.recent_repos = [good, {"root": "x"}, "nope",
                                  {"root": "/b", "main": "/b", "opened": True}, good]
-        with self.assertLogs("rzgitclient.core.recent_repos", "WARNING") as logs:
+        with self.assertLogs("rzgit.core.recent_repos", "WARNING") as logs:
             recent = RecentRepos(settings)
         self.assertEqual(len(logs.records), 3)
         self.assertEqual(recent.repositories(), (self.tmp / "a",))

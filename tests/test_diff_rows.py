@@ -1,7 +1,7 @@
 import unittest
 
-from rzgitclient.git.git_models import DiffLine, FileDiff, Hunk, LineKind
-from rzgitclient.ui.panels.diff_rows import (
+from rzgit.git.git_models import DiffLine, FileDiff, Hunk, LineKind
+from rzgit.ui.panels.diff_rows import (
     NO_NEWLINE,
     WORD_MAX_LENGTH,
     DiffRow,
@@ -22,7 +22,7 @@ from rzgitclient.ui.panels.diff_rows import (
     copy_text,
     touched_rows,
 )
-from rzgitclient.core.diff_request import split_whole
+from rzgit.core.diff_request import split_whole
 
 C, A, R = LineKind.CONTEXT, LineKind.ADDED, LineKind.REMOVED
 K = RowKind

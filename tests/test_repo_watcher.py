@@ -4,9 +4,9 @@ import time
 import unittest
 from pathlib import Path
 
-from rzgitclient.core.repo_session import Refresh, RepoSession
-from rzgitclient.core import repo_watcher
-from rzgitclient.core.repo_watcher import REF_PARTS, RepoWatcher
+from rzgit.core.repo_session import Refresh, RepoSession
+from rzgit.core import repo_watcher
+from rzgit.core.repo_watcher import REF_PARTS, RepoWatcher
 from tests.support import SignalRecorder, commit_file, git, make_repo, pump, qt_app, wait_idle
 
 SETTLE_MS = 80  # quiet time after which nothing more is on its way (delay is 30 ms)

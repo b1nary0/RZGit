@@ -1,6 +1,6 @@
 import unittest
 
-from rzgitclient.core.sort_options import GroupOption, SortOption, SortOptions, SortOrder
+from rzgit.core.sort_options import GroupOption, SortOption, SortOptions, SortOrder
 
 WORDS = ("pear", "Apple", "fig", "apple")
 SORTS = SortOptions((

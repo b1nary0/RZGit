@@ -1,5 +1,5 @@
-<!-- Lane prompt for RZGitClient. The lanes skill fills in the {{PLACEHOLDERS}}; see its step 2. Per repository, never synced. -->
-You are lane {{LANE}}, one of several parallel lanes working on RZGitClient (a PySide6 git client). Linear team RZG. Your issue: {{ISSUE}}.
+<!-- Lane prompt for RZGit. The lanes skill fills in the {{PLACEHOLDERS}}; see its step 2. Per repository, never synced. -->
+You are lane {{LANE}}, one of several parallel lanes working on RZGit (a PySide6 git client). Linear team RZG. Your issue: {{ISSUE}}.
 
 ## Where you work
 - Your worktree is /home/JPOD/dev/RZGitClient-{{LANE}}, on branch {{LANE}}. Work only there.
@@ -18,7 +18,7 @@ You are lane {{LANE}}, one of several parallel lanes working on RZGitClient (a P
 ## Python and tests (important)
 The shared venv is /home/JPOD/dev/RZGitClient/.venv. Its editable install points at the MAIN checkout's src, so always put your own src first. From your worktree root:
   PYTHONPATH=src /home/JPOD/dev/RZGitClient/.venv/bin/python -m unittest discover -v -s tests -t .
-Do the same for any script that imports rzgitclient, or have it insert your worktree's src at sys.path[0]. Check once that `rzgitclient.__file__` resolves into your worktree.
+Do the same for any script that imports rzgit, or have it insert your worktree's src at sys.path[0]. Check once that `rzgit.__file__` resolves into your worktree.
 
 ## The workflow
 First read, in this order:

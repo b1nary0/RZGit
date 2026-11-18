@@ -3,9 +3,9 @@ import unittest
 from PySide6.QtCore import QRect
 from PySide6.QtGui import QColor, QImage, QPainter
 
-from rzgitclient.core.commit_graph import GraphRow
-from rzgitclient.ui.panels.graph_painter import GRAPH_MAX_LANES, PADDING_X, GraphPainter
-from rzgitclient.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
+from rzgit.core.commit_graph import GraphRow
+from rzgit.ui.panels.graph_painter import GRAPH_MAX_LANES, PADDING_X, GraphPainter
+from rzgit.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
 from tests.support import qt_app
 
 HEIGHT = 24

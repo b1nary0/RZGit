@@ -11,12 +11,12 @@ from PySide6.QtGui import QColor, QEnterEvent, QFontMetrics, QHoverEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
 
-from rzgitclient.core.commit_graph import CommitGraph
-from rzgitclient.ui.panels.history_model import (AUTHOR_COLUMN, DATE_COLUMN, GRAPH_COLUMN,
+from rzgit.core.commit_graph import CommitGraph
+from rzgit.ui.panels.history_model import (AUTHOR_COLUMN, DATE_COLUMN, GRAPH_COLUMN,
                                                  HASH_COLUMN, MUTED_COLUMNS, SUBJECT_COLUMN)
-from rzgitclient.ui.panels.history_panel import HistoryPanel
-from rzgitclient.ui.theme.app_theme import LIGHT_THEME
-from rzgitclient.ui.widgets.column_header import ColumnHeader
+from rzgit.ui.panels.history_panel import HistoryPanel
+from rzgit.ui.theme.app_theme import LIGHT_THEME
+from rzgit.ui.widgets.column_header import ColumnHeader
 from tests.support import (SignalRecorder, commit_file, drag_column_edge, make_branched_repo,
                            make_panel_context, make_repo, qt_app, wait_idle)
 
@@ -257,7 +257,7 @@ class DateFormatTests(unittest.TestCase):
 
         from PySide6.QtCore import QLocale
 
-        from rzgitclient.ui.panels.history_model import ISO, ISO_SECONDS, LOCALE, format_date
+        from rzgit.ui.panels.history_model import ISO, ISO_SECONDS, LOCALE, format_date
         when = datetime(2026, 11, 17, 14, 5, 9, tzinfo=timezone(timedelta(hours=-5)))
         self.assertEqual(format_date(when, ISO), "2026-11-17 14:05")
         self.assertEqual(format_date(when, ISO_SECONDS), "2026-11-17 14:05:09")
@@ -273,7 +273,7 @@ class DateFormatTests(unittest.TestCase):
         commit_file(repo, "a.txt", "1", "first")
         ctx = make_panel_context()
         self.addCleanup(ctx.session.shutdown)
-        from rzgitclient.ui.panels.history_model import DATE_COLUMN, DATE_FORMAT, ISO_SECONDS
+        from rzgit.ui.panels.history_model import DATE_COLUMN, DATE_FORMAT, ISO_SECONDS
         ctx.prefs.set(DATE_FORMAT, ISO_SECONDS)
         panel = HistoryPanel(ctx)
         self.addCleanup(panel.deleteLater)
@@ -301,7 +301,7 @@ class HistoryPanelPagingTests(unittest.TestCase):
         self.repo = make_repo(Path(self._tmp.name) / "repo")
         for n in range(1, 11):
             commit_file(self.repo, "a.txt", str(n), f"c{n}")
-        page = mock.patch("rzgitclient.core.repo_session.HISTORY_PAGE", 3)
+        page = mock.patch("rzgit.core.repo_session.HISTORY_PAGE", 3)
         page.start()
         self.addCleanup(page.stop)
         self.ctx = make_panel_context()
@@ -634,7 +634,7 @@ class HistoryGraphPagingTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.repo = make_branched_repo(Path(self._tmp.name) / "repo")
-        page = mock.patch("rzgitclient.core.repo_session.HISTORY_PAGE", 2)
+        page = mock.patch("rzgit.core.repo_session.HISTORY_PAGE", 2)
         page.start()
         self.addCleanup(page.stop)
         self.ctx = make_panel_context()
@@ -729,7 +729,7 @@ class HistoryBackToTopTests(unittest.TestCase):
         pill = self.button.pill_rect()
         self.assertEqual(image.pixelColor(int(pill.left()) + 4, int(pill.center().y())).name(),
                          c.floating_button_bg)
-        from rzgitclient.ui.theme.app_theme import DARK_THEME
+        from rzgit.ui.theme.app_theme import DARK_THEME
         self.panel.apply_theme(DARK_THEME)
         image = self.button.grab().toImage()
         self.assertEqual(image.pixelColor(int(pill.left()) + 4, int(pill.center().y())).name(),
@@ -783,7 +783,7 @@ class HistoryBackToTopTests(unittest.TestCase):
         self.assertFalse(self.button.isVisible())
 
     def test_it_fades_unless_effects_are_off(self):
-        with mock.patch("rzgitclient.ui.panels.back_to_top_button.animations_enabled",
+        with mock.patch("rzgit.ui.panels.back_to_top_button.animations_enabled",
                         return_value=True):
             self.scroll(self.page + 3)
             self.assertTrue(self.button.wanted)
@@ -993,7 +993,7 @@ class HistoryGraphFitTests(unittest.TestCase):
 
     def open_panel(self, page=None):
         if page is not None:
-            patch = mock.patch("rzgitclient.core.repo_session.HISTORY_PAGE", page)
+            patch = mock.patch("rzgit.core.repo_session.HISTORY_PAGE", page)
             patch.start()
             self.addCleanup(patch.stop)
         self.panel = HistoryPanel(self.ctx)

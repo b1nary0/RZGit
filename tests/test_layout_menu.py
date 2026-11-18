@@ -5,10 +5,10 @@ from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent
 
-from rzgitclient.core.app_settings import AppSettings
-from rzgitclient.ui.layout.layout_host import LayoutHost
-from rzgitclient.ui.layout.layout_menu import LayoutMenu
-from rzgitclient.ui.layout.layout_model import (
+from rzgit.core.app_settings import AppSettings
+from rzgit.ui.layout.layout_host import LayoutHost
+from rzgit.ui.layout.layout_menu import LayoutMenu
+from rzgit.ui.layout.layout_model import (
     Area,
     LayoutState,
     Orientation,
@@ -17,7 +17,7 @@ from rzgitclient.ui.layout.layout_model import (
     flatten,
     to_dict,
 )
-from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT, PRESETS, matching_preset
+from rzgit.ui.layout.layout_presets import DEFAULT_LAYOUT, PRESETS, matching_preset
 from tests.support import make_panel_context, qt_app
 
 
@@ -121,7 +121,7 @@ class LayoutMenuTests(unittest.TestCase):
     def test_the_menu_is_rebuilt_after_managing(self):
         self.settings.saved_layouts = [("Review", {})]
         self.menu.rebuild()
-        with mock.patch("rzgitclient.ui.layout.layout_menu.ManageLayoutsDialog") as dialog:
+        with mock.patch("rzgit.ui.layout.layout_menu.ManageLayoutsDialog") as dialog:
             dialog.return_value.exec.side_effect = lambda: setattr(
                 self.settings, "saved_layouts", [("Renamed", {})])
             self.action("&Manage Layouts…").trigger()

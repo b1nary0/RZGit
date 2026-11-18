@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="src/rzgitclient/ui/assets/splash/splash-transparent_dark@2x.png">
-    <img src="src/rzgitclient/ui/assets/splash/splash-transparent_light@2x.png" alt="RZGit" width="640">
+    <source media="(prefers-color-scheme: dark)" srcset="src/rzgit/ui/assets/splash/splash-transparent_dark@2x.png">
+    <img src="src/rzgit/ui/assets/splash/splash-transparent_light@2x.png" alt="RZGit" width="640">
   </picture>
 </p>
 
@@ -58,7 +58,7 @@ packaging/linux/install-desktop.sh --uninstall
 
 ## VS Code
 
-Open `RZGitClient.code-workspace` and install the recommended extensions.
+Open `RZGit.code-workspace` and install the recommended extensions.
 
 - **F5** launches the app on this repo under the debugger. The Run and Debug
   panel also has a "choose repo…" config and a "current test file" config.
@@ -67,7 +67,7 @@ Open `RZGitClient.code-workspace` and install the recommended extensions.
 
 ## Layout
 
-- `src/rzgitclient/git/` — git backend (wraps the `git` CLI)
-- `src/rzgitclient/ui/` — Qt widgets
+- `src/rzgit/git/` — git backend (wraps the `git` CLI)
+- `src/rzgit/ui/` — Qt widgets
 - `tests/` — backend tests against throwaway repos
 - `.vscode/` — shared editor settings, launch configs and tasks

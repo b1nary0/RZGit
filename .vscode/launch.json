@@ -2,19 +2,19 @@
 	"version": "0.2.0",
 	"configurations": [
 		{
-			"name": "RZGitClient (this repo)",
+			"name": "RZGit (this repo)",
 			"type": "debugpy",
 			"request": "launch",
-			"module": "rzgitclient",
+			"module": "rzgit",
 			"args": ["${workspaceFolder}"],
 			"console": "integratedTerminal",
 			"justMyCode": true
 		},
 		{
-			"name": "RZGitClient (choose repo…)",
+			"name": "RZGit (choose repo…)",
 			"type": "debugpy",
 			"request": "launch",
-			"module": "rzgitclient",
+			"module": "rzgit",
 			"args": ["${input:repoPath}"],
 			"console": "integratedTerminal",
 			"justMyCode": true

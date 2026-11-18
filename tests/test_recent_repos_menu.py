@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 from PySide6.QtCore import QCoreApplication, QEvent
 
-from rzgitclient.core.recent_repos import RecentRepos
-from rzgitclient.ui.recent_repos_menu import RecentReposMenu, entry_labels, home_relative
+from rzgit.core.recent_repos import RecentRepos
+from rzgit.ui.recent_repos_menu import RecentReposMenu, entry_labels, home_relative
 from tests.support import qt_app
 
 

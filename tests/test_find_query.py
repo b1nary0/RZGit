@@ -1,7 +1,7 @@
 import unittest
 
-from rzgitclient.ui.panels.diff_rows import DiffRow, RowKind
-from rzgitclient.ui.panels.find_query import FindMatch, FindQuery, find_matches, word_around
+from rzgit.ui.panels.diff_rows import DiffRow, RowKind
+from rzgit.ui.panels.find_query import FindMatch, FindQuery, find_matches, word_around
 
 ROWS = (
     DiffRow(RowKind.HUNK, "@@ -1,3 +1,3 @@ def needle():"),

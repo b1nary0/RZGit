@@ -1,6 +1,6 @@
 import unittest
 
-from rzgitclient.ui.widgets.section_header import SectionHeader
+from rzgit.ui.widgets.section_header import SectionHeader
 from tests.support import qt_app
 
 

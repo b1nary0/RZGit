@@ -7,12 +7,12 @@ from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QThread
 
-from rzgitclient.core import worktree_reader
-from rzgitclient.core.repo_session import RepoSession
-from rzgitclient.core.inotify_watcher import IN_CLOSE_WRITE, IN_CREATE, InotifyEvent
-from rzgitclient.core.worktree_reader import ALL, WorktreeReader
-from rzgitclient.git.git_models import WorktreeState
-from rzgitclient.git.repo import canonical_path
+from rzgit.core import worktree_reader
+from rzgit.core.repo_session import RepoSession
+from rzgit.core.inotify_watcher import IN_CLOSE_WRITE, IN_CREATE, InotifyEvent
+from rzgit.core.worktree_reader import ALL, WorktreeReader
+from rzgit.git.git_models import WorktreeState
+from rzgit.git.repo import canonical_path
 from tests.support import commit_file, git, make_repo, pump, qt_app, wait_idle
 
 

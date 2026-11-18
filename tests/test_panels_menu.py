@@ -2,17 +2,17 @@ import unittest
 
 from PySide6.QtCore import QCoreApplication, QEvent
 
-from rzgitclient.ui.layout.layout_host import LayoutHost
-from rzgitclient.ui.layout.layout_model import (
+from rzgit.ui.layout.layout_host import LayoutHost
+from rzgit.ui.layout.layout_model import (
     Area,
     LayoutState,
     Orientation,
     PanelNode,
     SplitNode,
 )
-from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
-from rzgitclient.ui.layout.panels_menu import PanelsMenu
-from rzgitclient.ui.panels.panel_registry import PANEL_TYPES
+from rzgit.ui.layout.layout_presets import DEFAULT_LAYOUT
+from rzgit.ui.layout.panels_menu import PanelsMenu
+from rzgit.ui.panels.panel_registry import PANEL_TYPES
 from tests.support import make_panel_context, qt_app
 
 

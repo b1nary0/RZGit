@@ -1,8 +1,8 @@
 import unittest
 from datetime import datetime, timezone
 
-from rzgitclient.core.ref_labels import RefKind, RefLabel, labels_by_commit, row_tooltip
-from rzgitclient.git.git_models import Ref, Stash
+from rzgit.core.ref_labels import RefKind, RefLabel, labels_by_commit, row_tooltip
+from rzgit.git.git_models import Ref, Stash
 
 DATE = datetime(2026, 1, 1, tzinfo=timezone.utc)
 

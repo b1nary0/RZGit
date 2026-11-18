@@ -9,9 +9,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QApplication
 
-from rzgitclient.core.sort_options import SortOrder
-from rzgitclient.ui.app_actions import BranchOp, WorktreeOp
-from rzgitclient.ui.panels.branches_panel import BranchesPanel
+from rzgit.core.sort_options import SortOrder
+from rzgit.ui.app_actions import BranchOp, WorktreeOp
+from rzgit.ui.panels.branches_panel import BranchesPanel
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 

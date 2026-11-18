@@ -4,9 +4,9 @@ from unittest import mock
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtTest import QSignalSpy, QTest
 
-from rzgitclient.ui.panels import find_bar
-from rzgitclient.ui.panels.find_bar import FindBar
-from rzgitclient.ui.panels.find_query import FindQuery
+from rzgit.ui.panels import find_bar
+from rzgit.ui.panels.find_bar import FindBar
+from rzgit.ui.panels.find_query import FindQuery
 from tests.support import qt_app
 
 

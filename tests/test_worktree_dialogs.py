@@ -7,12 +7,12 @@ from unittest import mock
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QWidget
 
-from rzgitclient.core.git_commands import CommandKind, GitCommand
-from rzgitclient.core.repo_session import RepoSession
-from rzgitclient.core.selection import Selection
-from rzgitclient.git.git_models import Branch, Worktree, WorktreeState
-from rzgitclient.ui.app_actions import AppActions, WorktreeOp
-from rzgitclient.ui.worktree_dialogs import (
+from rzgit.core.git_commands import CommandKind, GitCommand
+from rzgit.core.repo_session import RepoSession
+from rzgit.core.selection import Selection
+from rzgit.git.git_models import Branch, Worktree, WorktreeState
+from rzgit.ui.app_actions import AppActions, WorktreeOp
+from rzgit.ui.worktree_dialogs import (
     CREATE,
     NOT_ABSOLUTE,
     NOT_EMPTY,
@@ -64,7 +64,7 @@ class TerminalTests(unittest.TestCase):
 
 class FolderTests(unittest.TestCase):
     def test_default_folder_is_beside_the_main_repository(self):
-        self.assertEqual(default_folder("/dev/RZGitClient", "rzg-40"), "/dev/RZGitClient-rzg-40")
+        self.assertEqual(default_folder("/dev/RZGit", "rzg-40"), "/dev/RZGit-rzg-40")
         self.assertEqual(default_folder("/dev/app", "feature/x/y"), "/dev/app-feature-x-y")
         self.assertEqual(default_folder("/dev/app", ""), "")
 

@@ -3,8 +3,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from rzgitclient.core.app_settings import AppSettings
-from rzgitclient.ui.layout.manage_layouts_dialog import ManageLayoutsDialog
+from rzgit.core.app_settings import AppSettings
+from rzgit.ui.layout.manage_layouts_dialog import ManageLayoutsDialog
 from tests.support import qt_app
 
 

@@ -4,10 +4,10 @@ import unittest
 
 from PySide6.QtGui import QColor, QFont, QPalette
 
-from rzgitclient.ui.theme.app_theme import (DARK_CB_THEME, DARK_THEME, LIGHT_CB_THEME,
+from rzgit.ui.theme.app_theme import (DARK_CB_THEME, DARK_THEME, LIGHT_CB_THEME,
                                             LIGHT_THEME, FontKind, colour_blind_theme)
-from rzgitclient.ui.theme.style_roles import Role, Surface
-from rzgitclient.ui.theme.theme_stylesheet import template_values
+from rzgit.ui.theme.style_roles import Role, Surface
+from rzgit.ui.theme.theme_stylesheet import template_values
 from tests.colour_vision import VISIONS, contrast, delta_e, min_delta_e
 from tests.support import qt_app
 

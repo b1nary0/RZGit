@@ -8,9 +8,9 @@ from PySide6.QtGui import QFont, QPalette
 from PySide6.QtWidgets import (QHeaderView, QLabel, QLineEdit, QListWidget, QMenu, QMenuBar,
                                QPlainTextEdit, QPushButton, QStatusBar, QTabBar, QTreeView)
 
-from rzgitclient.ui.theme.app_theme import (DARK_CB_THEME, DARK_THEME, LIGHT_CB_THEME,
+from rzgit.ui.theme.app_theme import (DARK_CB_THEME, DARK_THEME, LIGHT_CB_THEME,
                                             LIGHT_THEME, FontKind)
-from rzgitclient.ui.theme.theme_manager import MONO_FAMILY, MONO_SIZE, ThemeManager, ThemeMode
+from rzgit.ui.theme.theme_manager import MONO_FAMILY, MONO_SIZE, ThemeManager, ThemeMode
 from tests.support import qt_app
 
 
@@ -158,7 +158,7 @@ class MonoFontSettingTests(unittest.TestCase):
     """The monospace font settings (spec §8.2): over the theme's, in every mode."""
 
     def setUp(self):
-        from rzgitclient.core.preferences import Preferences
+        from rzgit.core.preferences import Preferences
         self.app = qt_app()
         self.prefs = Preferences()
         self.prefs.set(MONO_SIZE, 13.0)
@@ -182,7 +182,7 @@ class MonoFontSettingTests(unittest.TestCase):
         self.assertEqual(self.manager.current, DARK_CB_THEME)  # the theme's own again
 
     def test_other_settings_change_nothing(self):
-        from rzgitclient.core.preferences import Setting
+        from rzgit.core.preferences import Setting
         self.prefs.set(Setting("test/x", 1, "X"), 2)
         self.assertEqual(self.emitted, [])
 

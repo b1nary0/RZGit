@@ -3,13 +3,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from rzgitclient.core import diff_request
-from rzgitclient.core.diff_patch import build_patch, hunk_lines
-from rzgitclient.core.diff_request import DiffRequest, load_diff, split_whole
-from rzgitclient.core.selection import FileSelection, FileSource
-from rzgitclient.git.git_models import DiffLine, DiffSource, FileDiff, Hunk, LineKind
-from rzgitclient.git.repo import Repo
-from rzgitclient.ui.panels.diff_rows import whole_file
+from rzgit.core import diff_request
+from rzgit.core.diff_patch import build_patch, hunk_lines
+from rzgit.core.diff_request import DiffRequest, load_diff, split_whole
+from rzgit.core.selection import FileSelection, FileSource
+from rzgit.git.git_models import DiffLine, DiffSource, FileDiff, Hunk, LineKind
+from rzgit.git.repo import Repo
+from rzgit.ui.panels.diff_rows import whole_file
 from tests.support import commit_file, git, make_repo
 
 

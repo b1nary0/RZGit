@@ -225,7 +225,7 @@ track yet, and **!** for a conflict. Hover over a file to see the full word.
 
 **Files as a tree.** **View → Show Files as Tree**, which is on by default, shows the files
 under their folders. A chain of folders that each hold only one folder is shown as one
-row, such as `src/rzgitclient/ui`. Click a folder's arrow to fold it, and it stays folded
+row, such as `src/rzgit/ui`. Click a folder's arrow to fold it, and it stays folded
 while RZGit runs. Selecting a folder selects every file under it, so you can stage or
 unstage a whole folder at once. Turn the option off to see one full path per row instead.
 Each of the three file panels can be sorted by **Name** or **Status**, and grouped by

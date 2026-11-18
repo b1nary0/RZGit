@@ -1,4 +1,4 @@
-# RZGitClient Architecture
+# RZGit Architecture
 
 How the app is put together: **Panels** that each provide one feature, arranged by a
 **Layout** described as data, all styled by one shared **AppTheme**.
@@ -64,7 +64,7 @@ into each other.
 ## 3. Package layout
 
 ```
-src/rzgitclient/
+src/rzgit/
   app.py                        composition root
   git/
     git_models.py               Commit, HistoryOrder, Stash, Branch, Ref, Remotes, FileStatus, FileDiff, Hunk, DiffLine, Worktree, WorktreeState
@@ -88,6 +88,7 @@ src/rzgitclient/
     worktree_reader.py          WorktreeReader: a repository's worktrees and their state, kept up to date
     recent_repos.py             RecentRepos: the repositories and worktrees opened recently (§6.3)
     app_settings.py             AppSettings: typed wrapper over QSettings (last_repo, layout, …)
+    old_name_migration.py       migrate_old_name: copies the settings and drafts of the old name (RZGitClient) once (§6.3)
   ui/
     main_window.py              MainWindow: thin shell (menus, status bar, LayoutHost)
     app_windows.py              AppWindows: the open main windows; open a window on a path, or raise it
@@ -156,7 +157,7 @@ tests/
   test_<module>.py              one file per module, named after it (test_layout_model.py, …)
 packaging/
   linux/
-    rzgitclient.desktop         the desktop entry; install-desktop.sh fills in its Exec
+    rzgit.desktop               the desktop entry; install-desktop.sh fills in its Exec
     install-desktop.sh          installs the entry and the icon PNGs for the current user
                                 (re-running is a clean reinstall); --uninstall removes them
 ```
@@ -456,7 +457,7 @@ class RepoSession(QObject):
     one is git's error. Branch names never start with `-` (git refuses them), so they are
     passed as they are.
     - **Switch** (`git switch -q`) reloads `HEAD | BRANCHES | HISTORY | STATUS | COUNT`.
-      With `stash`, it first runs `git stash push -q --include-untracked -m "RZGitClient:
+      With `stash`, it first runs `git stash push -q --include-untracked -m "RZGit:
       before switching to <branch>"`: staged, unstaged and untracked changes, not ignored
       files. If the switch then fails, the stash is popped back (`stash pop -q --index`), so
       the repository is as it was; if even that fails, the error says the changes are in
@@ -503,7 +504,7 @@ class RepoSession(QObject):
     - **Rebase default:** `branch.<name>.rebase`, else `pull.rebase`: any value but
       `false` (`true`, `merges`, `interactive`) means Rebase; unset or `false`, Merge.
       `pull.ff` isn't read: a diverged branch always asks.
-    - **With `stash`**, the changes are stashed first, as Switch does ("RZGitClient:
+    - **With `stash`**, the changes are stashed first, as Switch does ("RZGit:
       before pulling <branch>"), only once the checks pass. If the integration fails, the
       stash is popped back. If it worked, the stash is put back as Pop does (with
       `--index`, then without, rolled back if both fail). If that fails, the pull stays,
@@ -638,7 +639,7 @@ class RepoSession(QObject):
     `SSH_ASKPASS_REQUIRE=prefer`, unless set, so ssh uses it without `DISPLAY`). Without
     one, the prompt fails, and an error that shows one ("terminal prompts disabled",
     "could not read Username", `ssh_askpass`, "Host key verification failed",
-    "Permission denied (publickey") starts with "RZGitClient can't ask for credentials:
+    "Permission denied (publickey") starts with "RZGit can't ask for credentials:
     use an SSH agent, a credential helper or an askpass program."
 
 ### 4.3 RepoWatcher
@@ -1321,7 +1322,7 @@ can't collapse), it shows the placeholder "No commit selected".
   `FileList` shows its files under their folders, as in VS Code: a file row is the file's
   name and status letter, a rename shows both names (`old.py → new.py`, or the old path when the
   folder changed), and a chain of folders that each hold one folder is one row
-  (`src/rzgitclient/ui`). Folders come first, then files, each by name. With it off, the
+  (`src/rzgit/ui`). Folders come first, then files, each by name. With it off, the
   list is flat, one full path per row, as before. The tree is built by `file_tree.py`,
   plain Python tested without Qt.
   - **Sort By** (RZG-43), in each of the three panels' header menu, saved per panel:
@@ -1755,7 +1756,7 @@ RZG-26).
   **One `CommitDrafts`** is shared by every window (app.py makes it; §8.1). It keeps
   **one file per repository** in its folder (app.py gives it `drafts_folder()`:
   `commit-drafts/` in `QStandardPaths.AppDataLocation`, e.g.
-  `~/.local/share/RZGitClient/RZGitClient/commit-drafts/`). The file is named by the SHA-1
+  `~/.local/share/RZGit/RZGit/commit-drafts/`). The file is named by the SHA-1
   of the key and holds `{"root": key, "text": draft}` as JSON. It holds no copy in memory:
   `get` reads the file, and `set` replaces it atomically (a temporary file in the same
   folder, then a rename) or deletes it for a blank draft, and doesn't write an unchanged
@@ -1998,6 +1999,17 @@ typed accessors (`last_repo`, `layout`, `layout_preset`, `window_geometry`,
 One `AppSettings` is shared by every window. What panels save goes through a small object
 in `ctx` that holds only that: the commit draft through `CommitDrafts` (§5.4), column
 choices through `ColumnPrefs`, sort orders through `SortPrefs`.
+
+**Where they are stored** (RZG-59): `app.py` names the app `RZGit` (organisation and
+application), so `QSettings` is `~/.config/RZGit/RZGit.conf` and the app's data folder
+(`AppDataLocation`) is `~/.local/share/RZGit/RZGit/`. The desktop file name is `rzgit`.
+The app used to be called RZGitClient. Before `AppSettings` is created,
+`migrate_old_name()` (`core/old_name_migration.py`) copies what that name left behind:
+`~/.config/RZGitClient/RZGitClient.conf` and the `commit-drafts/` folder of
+`~/.local/share/RZGitClient/RZGitClient/`. Each one is copied only when the new one doesn't
+exist yet, so this happens once. The old files are never changed or deleted, and a failed
+copy is logged and the app starts without it. The function works on file paths. It
+doesn't open `QSettings`, which stays `AppSettings`' alone.
 
 **What goes where** (RZG-47): `AppSettings` holds options, settings and general app state:
 preferences, layout and theme customisation (column choices among them), `last_repo`,
@@ -2529,8 +2541,8 @@ Per-widget sheets are slow to apply and scatter the rules.
   bar summary (from session signals: path · branch · commits · changed files), error dialogs (from `error_occurred`), and a
   `LayoutHost` as the central widget. The Open, Quit and Reset Layout handlers live here
   because they need dialogs or the window. Target: around 100 lines.
-- **Title:** `<worktree name> — RZGitClient` (`Repo.worktree_name`: git's name for a linked
-  worktree, the folder's name for the main one), or `RZGitClient` with none open.
+- **Title:** `<worktree name> — RZGit` (`Repo.worktree_name`: git's name for a linked
+  worktree, the folder's name for the main one), or `RZGit` with none open.
 - **File → Open Repository…** opens the folder in this window, unless another window
   already shows that worktree: then that window is raised and this one is unchanged
   (§8.1). **File → Open Repository in New Window…** (Ctrl+Shift+O, RZG-52) asks for a folder
@@ -2653,7 +2665,7 @@ The app can have several main windows open, each on its own repository or worktr
   (`quitOnLastWindowClosed`), and `AppWindows.shutdown()` after the event loop shuts
   down anything still open.
 - **A restart** brings back only the last repository (§6.3), not every window. A second
-  `rzgitclient <path>` started while the app runs is a second process, as before.
+  `rzgit <path>` started while the app runs is a second process, as before.
 - **A removed worktree's window closes** (RZG-49): before removing a worktree,
   `WorktreeDialogs` closes the window showing it (`window_for`), which saves and shuts
   down as on any close. A window never removes its own worktree.
@@ -2803,6 +2815,8 @@ on it. The README links to it at the top.
 
 ## 11. Conventions
 
+- **The name** (RZG-59): the app is **RZGit**, its package `rzgit`, its command `rzgit`,
+  its desktop file name `rzgit`. The text the app shows says "RZGit".
 - Type hints everywhere, with `from __future__ import annotations`.
 - Value types are `@dataclass(frozen=True)`. State with signals is a `QObject`.
 - Signals are named `<thing>_changed` / `<thing>_occurred` and carry the new value.

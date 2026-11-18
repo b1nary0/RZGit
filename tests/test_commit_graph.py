@@ -1,8 +1,8 @@
 import unittest
 from datetime import datetime, timezone
 
-from rzgitclient.core.commit_graph import CommitGraph, GraphRow
-from rzgitclient.git.git_models import Commit
+from rzgit.core.commit_graph import CommitGraph, GraphRow
+from rzgit.git.git_models import Commit
 
 DATE = datetime(2026, 1, 1, tzinfo=timezone.utc)
 

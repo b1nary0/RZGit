@@ -5,9 +5,9 @@ from PySide6.QtGui import QColor, QMouseEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from rzgitclient.ui.panels.diff_rows import DiffRow, RowKind
-from rzgitclient.ui.panels.diff_view import DiffView, Numbers
-from rzgitclient.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
+from rzgit.ui.panels.diff_rows import DiffRow, RowKind
+from rzgit.ui.panels.diff_view import DiffView, Numbers
+from rzgit.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
 from tests.support import qt_app
 from tests.test_diff_view import LINKED, near
 

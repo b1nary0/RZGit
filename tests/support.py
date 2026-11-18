@@ -15,8 +15,8 @@ if TYPE_CHECKING:
     from PySide6.QtCore import QObject
     from PySide6.QtWidgets import QApplication
 
-    from rzgitclient.core.repo_session import RepoSession
-    from rzgitclient.ui.panels.panel import PanelContext
+    from rzgit.core.repo_session import RepoSession
+    from rzgit.ui.panels.panel import PanelContext
 
 
 def qt_app() -> QApplication:
@@ -145,15 +145,15 @@ class SignalRecorder:
 def make_panel_context() -> PanelContext:
     """A PanelContext with a fresh session (no repo open), the light theme and
     commit drafts, column choices and sort orders kept in memory."""
-    from rzgitclient.core.column_prefs import ColumnPrefs
-    from rzgitclient.core.commit_drafts import CommitDrafts
-    from rzgitclient.core.repo_session import RepoSession
-    from rzgitclient.core.selection import Selection
-    from rzgitclient.core.sort_prefs import SortPrefs
-    from rzgitclient.ui.app_actions import AppActions
-    from rzgitclient.ui.panels.panel import PanelContext
-    from rzgitclient.ui.theme.app_theme import LIGHT_THEME
-    from rzgitclient.ui.theme.theme_manager import ThemeManager
+    from rzgit.core.column_prefs import ColumnPrefs
+    from rzgit.core.commit_drafts import CommitDrafts
+    from rzgit.core.repo_session import RepoSession
+    from rzgit.core.selection import Selection
+    from rzgit.core.sort_prefs import SortPrefs
+    from rzgit.ui.app_actions import AppActions
+    from rzgit.ui.panels.panel import PanelContext
+    from rzgit.ui.theme.app_theme import LIGHT_THEME
+    from rzgit.ui.theme.theme_manager import ThemeManager
 
     session = RepoSession()
     selection = Selection(session)

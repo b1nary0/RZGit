@@ -6,14 +6,14 @@ from unittest import mock
 from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QToolBar, QToolButton
 
-from rzgitclient.core.app_settings import AppSettings
-from rzgitclient.core.commit_drafts import CommitDrafts
-from rzgitclient.core.diff_patch import hunk_lines
-from rzgitclient.core.network_worker import NetworkCommand, NetworkKind
-from rzgitclient.core.selection import FileSelection, FileSource
-from rzgitclient.git.git_models import DiffSource, HistoryOrder
-from rzgitclient.git.repo import Repo
-from rzgitclient.ui.layout.layout_model import (
+from rzgit.core.app_settings import AppSettings
+from rzgit.core.commit_drafts import CommitDrafts
+from rzgit.core.diff_patch import hunk_lines
+from rzgit.core.network_worker import NetworkCommand, NetworkKind
+from rzgit.core.selection import FileSelection, FileSource
+from rzgit.git.git_models import DiffSource, HistoryOrder
+from rzgit.git.repo import Repo
+from rzgit.ui.layout.layout_model import (
     Area,
     LayoutState,
     Orientation,
@@ -22,11 +22,11 @@ from rzgitclient.ui.layout.layout_model import (
     TabsNode,
     to_dict,
 )
-from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT
-from rzgitclient.ui.app_actions import HunkHeaders, StashOp
-from rzgitclient.ui.main_window import MainWindow, commit_summary
-from rzgitclient.ui.theme.app_theme import DARK_CB_THEME, DARK_THEME, LIGHT_THEME
-from rzgitclient.ui.theme.theme_manager import ThemeManager, ThemeMode
+from rzgit.ui.layout.layout_presets import DEFAULT_LAYOUT
+from rzgit.ui.app_actions import HunkHeaders, StashOp
+from rzgit.ui.main_window import MainWindow, commit_summary
+from rzgit.ui.theme.app_theme import DARK_CB_THEME, DARK_THEME, LIGHT_THEME
+from rzgit.ui.theme.theme_manager import ThemeManager, ThemeMode
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 
@@ -108,7 +108,7 @@ class MainWindowTests(unittest.TestCase):
         recent = window.ctx.recent
         window.open_last_repo()
         self.assertEqual(recent.repositories(), (one.resolve(),))
-        with mock.patch("rzgitclient.ui.main_window.QFileDialog.getExistingDirectory",
+        with mock.patch("rzgit.ui.main_window.QFileDialog.getExistingDirectory",
                         return_value=str(two)):
             window.ctx.actions.open_repo.trigger()
         self.assertEqual(recent.repositories(), (two.resolve(), one.resolve()))
@@ -133,7 +133,7 @@ class MainWindowTests(unittest.TestCase):
             window = self.start()
             errors = []
             window.session.error_occurred.connect(errors.append)
-            with mock.patch("rzgitclient.ui.main_window.QMessageBox") as box:
+            with mock.patch("rzgit.ui.main_window.QMessageBox") as box:
                 window.open_last_repo()
             self.assertIsNone(window.session.repo)
             self.assertEqual(errors, [])
@@ -154,7 +154,7 @@ class MainWindowTests(unittest.TestCase):
         again = self.start()
         again.open_last_repo()
         self.assertEqual(again.session.repo.root, repo.resolve())
-        self.assertEqual(again.windowTitle(), "café 日本 — RZGitClient")
+        self.assertEqual(again.windowTitle(), "café 日本 — RZGit")
         self.assertEqual(CommitDrafts(self.tmp / "drafts").get(repo), "Fix é 日本")
 
     def test_first_start_uses_the_default_layout(self):
@@ -177,7 +177,7 @@ class MainWindowTests(unittest.TestCase):
 
     def test_corrupt_saved_layout_starts_with_the_default(self):
         self.settings_path.write_text('[General]\nlayout="{broken"\n')
-        with self.assertLogs("rzgitclient.core.app_settings", "WARNING"):
+        with self.assertLogs("rzgit.core.app_settings", "WARNING"):
             window = self.start()
         self.assertEqual(strip_sizes(window.layout_host.state()), strip_sizes(DEFAULT_LAYOUT))
 
@@ -430,7 +430,7 @@ class MainWindowTests(unittest.TestCase):
         wait_idle(window.session)
         stashes = window.layout_host.panels["stash"]
         stashes._tree.setCurrentItem(stashes._tree.topLevelItem(0))
-        with mock.patch("rzgitclient.ui.main_window.QMessageBox.information") as info:
+        with mock.patch("rzgit.ui.main_window.QMessageBox.information") as info:
             window.ctx.actions.request_stash(StashOp.POP, window.session.stashes[0])
             wait_idle(window.session)
         info.assert_called_once()
@@ -652,7 +652,7 @@ class MainWindowTests(unittest.TestCase):
         self.assertTrue(window.confirm_discard(paths[:1]))
 
     def test_branch_requests_reach_the_branch_dialogs(self):
-        from rzgitclient.ui.app_actions import BranchOp
+        from rzgit.ui.app_actions import BranchOp
         window = self.start()
         with mock.patch.object(window.branch_dialogs, "ask", return_value=None) as ask:
             window.ctx.actions.request_branch(BranchOp.MERGE, "feature")
@@ -661,7 +661,7 @@ class MainWindowTests(unittest.TestCase):
     def test_amending_asks_only_for_a_pushed_commit(self):
         from PySide6.QtCore import QTimer
         from PySide6.QtWidgets import QApplication, QMessageBox
-        from rzgitclient.git.git_models import LastCommit
+        from rzgit.git.git_models import LastCommit
         window = self.start()
         self.assertTrue(window.ctx.actions.confirm_amend(LastCommit("a" * 40, "m", False)))
         seen = {}
@@ -721,7 +721,7 @@ class MainWindowTests(unittest.TestCase):
         repo = make_repo(self.tmp / "repo")
         for n in range(1, 6):
             commit_file(repo, "a.txt", str(n), f"c{n}")
-        with mock.patch("rzgitclient.core.repo_session.HISTORY_PAGE", 2):
+        with mock.patch("rzgit.core.repo_session.HISTORY_PAGE", 2):
             window = self.start()
             window.session.open(repo)
             wait_idle(window.session)

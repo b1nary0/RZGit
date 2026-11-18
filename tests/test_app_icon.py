@@ -3,7 +3,7 @@ import unittest
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QImage
 
-from rzgitclient.ui.app_icon import ASSETS_FOLDER, ICON_SIZES, app_icon, icon_file
+from rzgit.ui.app_icon import ASSETS_FOLDER, ICON_SIZES, app_icon, icon_file
 from tests.support import qt_app
 
 HARD_EDGE_MAX = 32  # icon sizes made with hard edges

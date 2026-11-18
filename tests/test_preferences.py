@@ -2,9 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rzgitclient.core import preferences
-from rzgitclient.core.app_settings import AppSettings
-from rzgitclient.core.preferences import Preferences, Setting, declare, declared
+from rzgit.core import preferences
+from rzgit.core.app_settings import AppSettings
+from rzgit.core.preferences import Preferences, Setting, declare, declared
 from tests.support import qt_app
 
 COUNT = Setting("test/count", 20, "Count", minimum=4, maximum=100)
@@ -55,10 +55,10 @@ class DeclareTests(unittest.TestCase):
             declare(Setting("test/bad", 1, "Bad", minimum=4))
 
     def test_the_apps_settings_are_declared_on_import(self):
-        import rzgitclient.ui.panels.diff_panel  # noqa: F401
-        import rzgitclient.ui.panels.history_model  # noqa: F401
-        import rzgitclient.ui.theme.theme_manager  # noqa: F401
-        import rzgitclient.ui.worktree_dialogs  # noqa: F401
+        import rzgit.ui.panels.diff_panel  # noqa: F401
+        import rzgit.ui.panels.history_model  # noqa: F401
+        import rzgit.ui.theme.theme_manager  # noqa: F401
+        import rzgit.ui.worktree_dialogs  # noqa: F401
         pages = {s.key: s.page for s in declared()}
         self.assertEqual(pages["diff/fold_min_lines"], "Diff")
         self.assertEqual(pages["history/date_format"], "History")
@@ -94,7 +94,7 @@ class PreferencesTests(unittest.TestCase):
     def test_set_checks_the_value(self):
         self.prefs.set(COUNT, 500)
         self.assertEqual(self.prefs.value(COUNT), 100)
-        with self.assertLogs("rzgitclient.core.preferences", "WARNING"):
+        with self.assertLogs("rzgit.core.preferences", "WARNING"):
             self.prefs.set(MODE, "zzz")
         self.assertEqual(self.prefs.value(MODE), "a")
         self.assertEqual(self.changes, [("test/count", 100)])
@@ -109,7 +109,7 @@ class PreferencesTests(unittest.TestCase):
         self.settings.set_pref("test/count", "lots")
         self.settings.set_pref("test/mode", "c")
         prefs = Preferences(self.settings)
-        with self.assertLogs("rzgitclient.core.preferences", "WARNING"):
+        with self.assertLogs("rzgit.core.preferences", "WARNING"):
             self.assertEqual(prefs.value(COUNT), 20)
             self.assertEqual(prefs.value(MODE), "a")
 

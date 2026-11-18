@@ -5,13 +5,13 @@ from pathlib import Path
 import threading
 from unittest import mock
 
-from rzgitclient.core import git_commands
-from rzgitclient.core.diff_patch import hunk_lines
-from rzgitclient.core.git_commands import CommandKind
-from rzgitclient.core.repo_session import Refresh, RepoSession
-from rzgitclient.core.selection import FileSelection, FileSource
-from rzgitclient.git.git_models import DiffSource, FileStatus, HistoryOrder, Ref
-from rzgitclient.git.repo import GitError, Repo
+from rzgit.core import git_commands
+from rzgit.core.diff_patch import hunk_lines
+from rzgit.core.git_commands import CommandKind
+from rzgit.core.repo_session import Refresh, RepoSession
+from rzgit.core.selection import FileSelection, FileSource
+from rzgit.git.git_models import DiffSource, FileStatus, HistoryOrder, Ref
+from rzgit.git.repo import GitError, Repo
 from tests.support import (SignalRecorder, commit_file, git, make_branched_repo, make_repo, qt_app,
                            wait_idle)
 
@@ -308,7 +308,7 @@ class RepoSessionTests(unittest.TestCase):
     def test_unexpected_exception_is_reported_and_not_left_busy(self):
         self.open_and_clear()
         with mock.patch.object(Repo, "status", side_effect=RuntimeError("bug")):
-            with self.assertLogs("rzgitclient.core.repo_session", "ERROR"):
+            with self.assertLogs("rzgit.core.repo_session", "ERROR"):
                 self.session.refresh(Refresh.STATUS)
                 wait_idle(self.session)
         self.assertEqual(self.rec.names(), ["error_occurred"])
@@ -384,7 +384,7 @@ class HistoryPagingTests(unittest.TestCase):
         self.path = make_repo(Path(self._tmp.name) / "repo")
         for n in range(1, 6):
             commit_file(self.path, "a.txt", str(n), f"c{n}")
-        page = mock.patch("rzgitclient.core.repo_session.HISTORY_PAGE", 2)
+        page = mock.patch("rzgit.core.repo_session.HISTORY_PAGE", 2)
         page.start()
         self.addCleanup(page.stop)
         self.session = RepoSession()
@@ -540,7 +540,7 @@ class HistoryOrderTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.path = make_branched_repo(Path(self._tmp.name) / "repo")
-        page = mock.patch("rzgitclient.core.repo_session.HISTORY_PAGE", 3)
+        page = mock.patch("rzgit.core.repo_session.HISTORY_PAGE", 3)
         page.start()
         self.addCleanup(page.stop)
         self.session = RepoSession()
@@ -690,7 +690,7 @@ class RepoSessionDiffTests(unittest.TestCase):
     def test_full_reads_a_diff_over_the_limit(self):
         a = FileSelection("a.txt", FileSource.WORKTREE)
         (self.path / "a.txt").write_text("".join(f"{n}\n" for n in range(40)))
-        with mock.patch("rzgitclient.core.diff_request.DIFF_MAX_LINES", 10):
+        with mock.patch("rzgit.core.diff_request.DIFF_MAX_LINES", 10):
             self.session.request_diff(a)
             wait_idle(self.session)
             self.assertTrue(self.diffs[-1][1].too_large)
@@ -1023,7 +1023,7 @@ class RepoSessionCommandTests(unittest.TestCase):
         self.assertEqual(len(diffs[-1].hunks), 1)
 
     def test_close_drops_commands_that_have_not_run(self):
-        with mock.patch("rzgitclient.core.repo_session.run_command") as run:
+        with mock.patch("rzgit.core.repo_session.run_command") as run:
             self.session.refresh()  # keeps the worker busy, so the command waits
             self.session.stage(["a.txt"])
             self.session.close()

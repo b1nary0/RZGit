@@ -1,7 +1,7 @@
 import unittest
 
-from rzgitclient.ui.panels.panel import Panel
-from rzgitclient.ui.panels.panel_registry import PANEL_TYPES, index_panel_types, panel_type
+from rzgit.ui.panels.panel import Panel
+from rzgit.ui.panels.panel_registry import PANEL_TYPES, index_panel_types, panel_type
 from tests.support import qt_app
 
 

@@ -4,7 +4,7 @@ import subprocess
 import sys
 import unittest
 
-from rzgitclient.ui.layout.layout_model import (
+from rzgit.ui.layout.layout_model import (
     Anchor,
     Area,
     Arrangement,
@@ -26,7 +26,7 @@ from rzgitclient.ui.layout.layout_model import (
     remove_panel,
     to_dict,
 )
-from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT as DEFAULT_STATE
+from rzgit.ui.layout.layout_presets import DEFAULT_LAYOUT as DEFAULT_STATE
 
 DEFAULT_LAYOUT = flatten(DEFAULT_STATE)  # the tree functions work on one tree
 
@@ -488,8 +488,8 @@ class EditTests(unittest.TestCase):
 class LayeringTests(unittest.TestCase):
     def test_layout_modules_import_no_qt(self):
         code = (
-            "import sys, rzgitclient.ui.layout.layout_model, "
-            "rzgitclient.ui.layout.layout_presets; "
+            "import sys, rzgit.ui.layout.layout_model, "
+            "rzgit.ui.layout.layout_presets; "
             "assert 'PySide6' not in sys.modules, sorted(m for m in sys.modules if 'PySide6' in m)"
         )
         proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)

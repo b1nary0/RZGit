@@ -7,9 +7,9 @@ from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QLabel
 
-from rzgitclient.ui.panels.panel import Panel
-from rzgitclient.ui.theme.app_theme import LIGHT_THEME
-from rzgitclient.ui.theme.style_roles import Surface
+from rzgit.ui.panels.panel import Panel
+from rzgit.ui.theme.app_theme import LIGHT_THEME
+from rzgit.ui.theme.style_roles import Surface
 from tests.support import (
     wait_idle,
     SignalRecorder,

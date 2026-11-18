@@ -2,9 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rzgitclient.core.app_settings import AppSettings
-from rzgitclient.core.sort_options import SortOrder
-from rzgitclient.core.sort_prefs import SortPrefs
+from rzgit.core.app_settings import AppSettings
+from rzgit.core.sort_options import SortOrder
+from rzgit.core.sort_prefs import SortPrefs
 from tests.support import qt_app
 
 
@@ -51,7 +51,7 @@ class SortPrefsTests(unittest.TestCase):
     def test_malformed_entries_are_dropped(self):
         self.settings.sort_prefs = {"stash": {"by": "age", "reversed": "yes"}, "files": [1],
                                     "branches": {"by": ""}, "worktrees": {"by": "name"}}
-        with self.assertLogs("rzgitclient.core.sort_prefs", "WARNING") as logs:
+        with self.assertLogs("rzgit.core.sort_prefs", "WARNING") as logs:
             prefs = SortPrefs(self.settings)
         self.assertEqual(len(logs.records), 3)
         self.assertIsNone(prefs.order("stash"))
@@ -75,7 +75,7 @@ class SortPrefsTests(unittest.TestCase):
         self.settings.sort_prefs = {"stash": {"by": "age", "group": 3},
                                     "files": {"by": "name", "group": ""},
                                     "branches": {"by": "name", "group": None}}
-        with self.assertLogs("rzgitclient.core.sort_prefs", "WARNING") as logs:
+        with self.assertLogs("rzgit.core.sort_prefs", "WARNING") as logs:
             prefs = SortPrefs(self.settings)
         self.assertEqual(len(logs.records), 2)
         self.assertIsNone(prefs.order("stash"))

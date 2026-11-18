@@ -7,7 +7,7 @@ from unittest import mock
 
 from PySide6.QtWidgets import QWidget
 
-from rzgitclient.core.git_commands import (
+from rzgit.core.git_commands import (
     CHANGES_KEPT,
     CommandKind,
     GitCommand,
@@ -16,13 +16,13 @@ from rzgitclient.core.git_commands import (
     pull_stash_message,
     run_command,
 )
-from rzgitclient.core.network_worker import NetworkCommand, NetworkKind
-from rzgitclient.core.repo_session import RepoSession
-from rzgitclient.core.selection import Selection
-from rzgitclient.git.git_models import Branch, FileStatus
-from rzgitclient.git.repo import GitError, Repo
-from rzgitclient.ui.app_actions import AppActions
-from rzgitclient.ui.pull_dialogs import MERGE, REBASE, STASH, WITH_CHANGES, PullDialogs
+from rzgit.core.network_worker import NetworkCommand, NetworkKind
+from rzgit.core.repo_session import RepoSession
+from rzgit.core.selection import Selection
+from rzgit.git.git_models import Branch, FileStatus
+from rzgit.git.repo import GitError, Repo
+from rzgit.ui.app_actions import AppActions
+from rzgit.ui.pull_dialogs import MERGE, REBASE, STASH, WITH_CHANGES, PullDialogs
 from tests.support import SignalRecorder, commit_file, git, make_repo, qt_app, wait_idle
 from tests.test_network_worker import wait_network
 

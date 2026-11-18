@@ -8,7 +8,7 @@ from PySide6.QtGui import QFocusEvent
 from PySide6.QtTest import QTest
 from shiboken6 import isValid
 
-from rzgitclient.ui.panels.commit_panel import (
+from rzgit.ui.panels.commit_panel import (
     AMEND_ALONE,
     AMENDING,
     COMMITTING,
@@ -19,7 +19,7 @@ from rzgitclient.ui.panels.commit_panel import (
     join_message,
     split_message,
 )
-from rzgitclient.ui.theme.style_roles import ROLE_PROPERTY, Role
+from rzgit.ui.theme.style_roles import ROLE_PROPERTY, Role
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 from tests.test_repo import add_hook
 

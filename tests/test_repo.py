@@ -3,10 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rzgitclient.git.git_models import (Commit, DiffLine, DiffSource, FileStatus, HistoryOrder,
+from rzgit.git.git_models import (Commit, DiffLine, DiffSource, FileStatus, HistoryOrder,
                                         LineKind, Ref)
-from rzgitclient.git.git_models import Worktree, WorktreeState
-from rzgitclient.git.repo import (GitError, Repo, canonical_path, parse_diff, parse_worktree_status,
+from rzgit.git.git_models import Worktree, WorktreeState
+from rzgit.git.repo import (GitError, Repo, canonical_path, parse_diff, parse_worktree_status,
                                   parse_worktrees, worktree_state)
 from tests.support import commit_file, git, make_branched_repo, make_repo
 

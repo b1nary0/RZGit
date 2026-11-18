@@ -5,10 +5,10 @@ from PySide6.QtGui import QColor, QMouseEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from rzgitclient.ui.panels.diff_rows import NO_NEWLINE, DiffRow, RowKind, TextPos
-from rzgitclient.ui.panels.diff_gutter import MARKS
-from rzgitclient.ui.panels.diff_view import DiffView, Numbers
-from rzgitclient.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
+from rzgit.ui.panels.diff_rows import NO_NEWLINE, DiffRow, RowKind, TextPos
+from rzgit.ui.panels.diff_gutter import MARKS
+from rzgit.ui.panels.diff_view import DiffView, Numbers
+from rzgit.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
 from tests.support import qt_app
 
 UNIFIED = (

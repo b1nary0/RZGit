@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rzgitclient.core.app_settings import AppSettings
-from rzgitclient.core.column_prefs import ColumnPrefs
+from rzgit.core.app_settings import AppSettings
+from rzgit.core.column_prefs import ColumnPrefs
 from tests.support import qt_app
 
 
@@ -77,7 +77,7 @@ class ColumnPrefsTests(unittest.TestCase):
     def test_malformed_widths_are_dropped(self):
         self.settings.column_prefs = {"stash": {"widths": {"Age": "wide"}},
                                       "files": {"widths": {"Status": 40}}}
-        with self.assertLogs("rzgitclient.core.column_prefs", "WARNING"):
+        with self.assertLogs("rzgit.core.column_prefs", "WARNING"):
             prefs = ColumnPrefs(self.settings)
         self.assertEqual(prefs.widths("stash"), {})
         self.assertEqual(prefs.widths("files"), {"Status": 40})
@@ -85,7 +85,7 @@ class ColumnPrefsTests(unittest.TestCase):
     def test_malformed_entries_are_dropped(self):
         self.settings.column_prefs = {"stash": {"hidden": ["Age"]}, "files": {"hidden": "Status"},
                                       "history": [1]}
-        with self.assertLogs("rzgitclient.core.column_prefs", "WARNING"):
+        with self.assertLogs("rzgit.core.column_prefs", "WARNING"):
             prefs = ColumnPrefs(self.settings)
         self.assertEqual(prefs.hidden("stash"), {"Age"})
         self.assertEqual(prefs.hidden("files"), frozenset())

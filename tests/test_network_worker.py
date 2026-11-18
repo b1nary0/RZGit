@@ -10,15 +10,15 @@ from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QThread
 
-from rzgitclient.core import network_worker
-from rzgitclient.core.network_worker import (
+from rzgit.core import network_worker
+from rzgit.core.network_worker import (
     CREDENTIALS_HINT,
     NetworkKind,
     error_message,
     progress_text,
 )
-from rzgitclient.core.repo_session import RepoSession
-from rzgitclient.git.repo import network_env
+from rzgit.core.repo_session import RepoSession
+from rzgit.git.repo import network_env
 from tests.support import SignalRecorder, commit_file, git, make_repo, qt_app, wait_idle
 
 NETWORK_SIGNALS = ("network_changed", "network_progress", "network_finished", "error_occurred")

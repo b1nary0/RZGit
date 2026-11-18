@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from rzgitclient.core.app_settings import AppSettings
-from rzgitclient.core.commit_drafts import CommitDrafts, drafts_folder
+from rzgit.core.app_settings import AppSettings
+from rzgit.core.commit_drafts import CommitDrafts, drafts_folder
 from tests.support import qt_app
 
 
@@ -86,7 +86,7 @@ class CommitDraftsTests(unittest.TestCase):
         settings = AppSettings(self.path)
         settings._settings.setValue("commit/drafts", json.dumps({"/repos/one": "Keep me"}))
         self.folder.write_text("a file, not a folder")
-        with self.assertLogs("rzgitclient.core.commit_drafts", "WARNING"):
+        with self.assertLogs("rzgit.core.commit_drafts", "WARNING"):
             CommitDrafts(self.folder, legacy=settings)
         self.assertEqual(settings.old_commit_drafts, {"/repos/one": "Keep me"})
 
@@ -126,14 +126,14 @@ class CommitDraftsTests(unittest.TestCase):
         for content in ("{not json", "[1]", json.dumps({"root": "/repos/other", "text": "x"}),
                         json.dumps({"root": "/repos/one", "text": 3})):
             file.write_text(content)
-            with self.assertLogs("rzgitclient.core.commit_drafts", "WARNING"):
+            with self.assertLogs("rzgit.core.commit_drafts", "WARNING"):
                 self.assertEqual(drafts.get("/repos/one"), "")
         drafts.set("/repos/one", "Fixed")  # replaces it
         self.assertEqual(drafts.get("/repos/one"), "Fixed")
 
     def test_a_failed_write_is_logged_not_raised(self):
         self.folder.write_text("a file, not a folder")
-        with self.assertLogs("rzgitclient.core.commit_drafts", "WARNING"):
+        with self.assertLogs("rzgit.core.commit_drafts", "WARNING"):
             CommitDrafts(self.folder).set("/repos/one", "Fix")
 
     def test_without_a_folder_drafts_stay_in_memory(self):

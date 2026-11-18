@@ -8,11 +8,11 @@ from PySide6.QtGui import QColor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from rzgitclient.core.selection import FileSelection, FileSource
-from rzgitclient.ui.panels import diff_panel, find_bar
-from rzgitclient.ui.panels.diff_panel import DiffPanel
-from rzgitclient.ui.panels.diff_rows import TextPos
-from rzgitclient.ui.theme.app_theme import LIGHT_THEME
+from rzgit.core.selection import FileSelection, FileSource
+from rzgit.ui.panels import diff_panel, find_bar
+from rzgit.ui.panels.diff_panel import DiffPanel
+from rzgit.ui.panels.diff_rows import TextPos
+from rzgit.ui.theme.app_theme import LIGHT_THEME
 from tests.support import commit_file, make_panel_context, make_repo, qt_app, wait_idle
 
 A = FileSelection("a.txt", FileSource.WORKTREE)

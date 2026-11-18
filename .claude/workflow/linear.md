@@ -1,11 +1,11 @@
-# Linear conventions: RZGitClient (team RZG)
+# Linear conventions: RZGit (team RZG)
 
 Per repository, never synced. The shared rules (archiving, the API key, views, editing quirks) are in
 `.claude/skills/linear/SKILL.md`.
 
 **Workspace and teams**
 - The workspace is `rze`. It has two teams:
-  - **RZG**: RZGitClient, this repository.
+  - **RZG**: RZGit, this repository.
   - **RZE**: the user's engine. Don't work its issues from here.
 - RZG's projects:
   - **Core Workflow**: the everyday features. Its description holds the agreed per-issue workflow (its "Notes" section) and is the source of truth for it.

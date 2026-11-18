@@ -1,11 +1,11 @@
-# Workflow settings: RZGitClient
+# Workflow settings: RZGit
 
 The shared workflow skills (`lanes`, `work-graph`, `linear`, `sync-workflow`) read this file for everything that
 differs between repositories. It's per repository and never synced.
 
 | Setting            | Value                                                        |
 |--------------------|--------------------------------------------------------------|
-| Repository         | RZGitClient (a PySide6 git client)                           |
+| Repository         | RZGit (a PySide6 git client)                                 |
 | Main checkout      | `/home/JPOD/dev/RZGitClient`                                 |
 | Linear team        | `RZG` (workspace `rze`)                                      |
 | Archive sweep      | on: `python3 <main>/.claude/skills/linear/archive_closed.py --team RZG` |

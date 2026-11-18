@@ -5,8 +5,8 @@ from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent
 
-from rzgitclient.core.selection import FileSelection, FileSource
-from rzgitclient.ui.panels.commit_files_panel import CommitFilesPanel
+from rzgit.core.selection import FileSelection, FileSource
+from rzgit.ui.panels.commit_files_panel import CommitFilesPanel
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 
@@ -97,7 +97,7 @@ class CommitFilesPanelTests(unittest.TestCase):
         with mock.patch.object(self.ctx.actions, "move") as move:
             tree.itemDoubleClicked.emit(tree.topLevelItem(0), 0)
             move.assert_not_called()
-        with mock.patch("rzgitclient.ui.panels.file_list.QMenu") as menu:
+        with mock.patch("rzgit.ui.panels.file_list.QMenu") as menu:
             self.panel._list._show_menu(tree.rect().center())
             menu.assert_not_called()
 

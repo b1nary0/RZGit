@@ -3,9 +3,9 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from rzgitclient.core.repo_session import RepoSession
-from rzgitclient.core.selection import FileSelection, FileSource, Selection, file_rows
-from rzgitclient.git.git_models import Commit, FileStatus, Stash
+from rzgit.core.repo_session import RepoSession
+from rzgit.core.selection import FileSelection, FileSource, Selection, file_rows
+from rzgit.git.git_models import Commit, FileStatus, Stash
 from tests.support import SignalRecorder, commit_file, git, make_repo, qt_app, wait_idle
 
 COMMIT = Commit("a" * 40, "Test User", datetime(2026, 1, 1, tzinfo=timezone.utc), "first")

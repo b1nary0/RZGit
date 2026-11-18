@@ -39,20 +39,20 @@ from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QP
 from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QApplication, QMenu,  # noqa: E402
                                QTabWidget, QToolButton, QWidget)  # noqa: E402
 
-from rzgitclient.core.app_settings import AppSettings  # noqa: E402
-from rzgitclient.core.column_prefs import ColumnPrefs  # noqa: E402
-from rzgitclient.core.commit_drafts import CommitDrafts  # noqa: E402
-from rzgitclient.core.preferences import Preferences  # noqa: E402
-from rzgitclient.core.recent_repos import RecentRepos  # noqa: E402
-from rzgitclient.core.selection import FileSelection, FileSource  # noqa: E402
-from rzgitclient.core.sort_prefs import SortPrefs  # noqa: E402
-from rzgitclient.ui.app_windows import AppWindows  # noqa: E402
-from rzgitclient.ui.layout.panel_frame import PanelFrame  # noqa: E402
-from rzgitclient.ui.main_window import MainWindow  # noqa: E402
-from rzgitclient.ui.panels.panel import Panel  # noqa: E402
-from rzgitclient.ui.settings_window import SettingsWindow  # noqa: E402
-from rzgitclient.ui.theme.app_theme import LIGHT_THEME  # noqa: E402
-from rzgitclient.ui.theme.theme_manager import ThemeManager, ThemeMode  # noqa: E402
+from rzgit.core.app_settings import AppSettings  # noqa: E402
+from rzgit.core.column_prefs import ColumnPrefs  # noqa: E402
+from rzgit.core.commit_drafts import CommitDrafts  # noqa: E402
+from rzgit.core.preferences import Preferences  # noqa: E402
+from rzgit.core.recent_repos import RecentRepos  # noqa: E402
+from rzgit.core.selection import FileSelection, FileSource  # noqa: E402
+from rzgit.core.sort_prefs import SortPrefs  # noqa: E402
+from rzgit.ui.app_windows import AppWindows  # noqa: E402
+from rzgit.ui.layout.panel_frame import PanelFrame  # noqa: E402
+from rzgit.ui.main_window import MainWindow  # noqa: E402
+from rzgit.ui.panels.panel import Panel  # noqa: E402
+from rzgit.ui.settings_window import SettingsWindow  # noqa: E402
+from rzgit.ui.theme.app_theme import LIGHT_THEME  # noqa: E402
+from rzgit.ui.theme.theme_manager import ThemeManager, ThemeMode  # noqa: E402
 
 WINDOW_SIZE = QSize(1280, 860)  # big enough for every panel, small enough to read
 DIM_ALPHA = 80  # of 255: how much the parts that aren't the subject are dimmed
@@ -73,7 +73,7 @@ def git(cwd: Path, *args: str) -> str:
 
 def make_clone() -> Path:
     """A clone of this repository's main branch with some work in progress."""
-    repo = _SCRATCH / "RZGitClient"
+    repo = _SCRATCH / "RZGit"
     subprocess.run(["git", "clone", "-q", "--no-hardlinks", "--branch", "main", str(ROOT),
                     str(repo)], check=True)
     git(repo, "config", "user.name", "RZGit Docs")
@@ -86,13 +86,13 @@ def make_clone() -> Path:
     readme.write_text(readme.read_text() + "\nA note to come back to.\n")
     git(repo, "stash", "push", "-q", "-m", "Try a shorter README introduction")
     # A second worktree, so the Worktrees panel shows.
-    git(repo, "worktree", "add", "-q", str(_SCRATCH / "RZGitClient-usage-guide"),
+    git(repo, "worktree", "add", "-q", str(_SCRATCH / "RZGit-usage-guide"),
         "feature/usage-guide")
     # Work in progress: a staged change, unstaged changes and a new file.
-    edit(repo / "src/rzgitclient/ui/panels/find_bar.py", "Match case", "Match upper and lower case")
-    git(repo, "add", "src/rzgitclient/ui/panels/find_bar.py")
-    edit(repo / "src/rzgitclient/ui/panels/commit_panel.py", '"Commit summary"', '"Summary"')
-    edit(repo / "src/rzgitclient/ui/panels/commit_panel.py", '"Description"',
+    edit(repo / "src/rzgit/ui/panels/find_bar.py", "Match case", "Match upper and lower case")
+    git(repo, "add", "src/rzgit/ui/panels/find_bar.py")
+    edit(repo / "src/rzgit/ui/panels/commit_panel.py", '"Commit summary"', '"Summary"')
+    edit(repo / "src/rzgit/ui/panels/commit_panel.py", '"Description"',
          '"Description (optional)"')
     edit(repo / "README.md", "A Qt (PySide6) git client for Linux.",
          "A fast Qt (PySide6) git client for Linux.")
@@ -113,8 +113,8 @@ def edit(path: Path, old: str, new: str) -> None:
 class App:
     def __init__(self, repo: Path):
         self.qt = QApplication.instance() or QApplication([])
-        self.qt.setApplicationName("RZGitClient")
-        self.qt.setOrganizationName("RZGitClient")
+        self.qt.setApplicationName("RZGit")
+        self.qt.setOrganizationName("RZGit")
         QIcon.setThemeName(ICON_THEME)  # offscreen has no desktop to ask for one
         settings = AppSettings(_SCRATCH / "settings.ini")
         self.prefs = Preferences(settings)
@@ -427,7 +427,7 @@ def shot_files(app: App) -> None:
 
 def shot_diff(app: App) -> None:
     """The Diff panel alone, with the find bar open."""
-    app.select_file("src/rzgitclient/ui/panels/commit_panel.py", FileSource.WORKTREE)
+    app.select_file("src/rzgit/ui/panels/commit_panel.py", FileSource.WORKTREE)
     diff = app.panel("diff")
     diff.request_activation()
     app.settle()

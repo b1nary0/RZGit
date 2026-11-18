@@ -3,9 +3,9 @@ import unittest
 from PySide6.QtCore import QRect
 from PySide6.QtGui import QColor, QFont, QImage, QPainter
 
-from rzgitclient.core.ref_labels import RefKind, RefLabel
-from rzgitclient.ui.panels.ref_label_painter import RefLabelPainter
-from rzgitclient.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
+from rzgit.core.ref_labels import RefKind, RefLabel
+from rzgit.ui.panels.ref_label_painter import RefLabelPainter
+from rzgit.ui.theme.app_theme import DARK_THEME, LIGHT_THEME
 from tests.support import qt_app
 
 HEIGHT = 22

@@ -9,12 +9,12 @@ from unittest import mock
 from PySide6.QtCore import QCoreApplication, QEvent, QThread
 from PySide6.QtGui import QColor
 
-from rzgitclient.core.recent_repos import RecentRepos
-from rzgitclient.core.worktree_reader import WorktreeReader
-from rzgitclient.git.git_models import Worktree, WorktreeState
-from rzgitclient.git.repo import canonical_path
-from rzgitclient.ui.app_actions import WorktreeOp
-from rzgitclient.ui.panels.worktrees_panel import (
+from rzgit.core.recent_repos import RecentRepos
+from rzgit.core.worktree_reader import WorktreeReader
+from rzgit.git.git_models import Worktree, WorktreeState
+from rzgit.git.repo import canonical_path
+from rzgit.ui.app_actions import WorktreeOp
+from rzgit.ui.panels.worktrees_panel import (
     COLUMNS,
     NAME,
     NO_WORKTREES,
@@ -34,8 +34,8 @@ from rzgitclient.ui.panels.worktrees_panel import (
     sync_text,
     sync_tooltip,
 )
-from rzgitclient.ui.theme.app_theme import LIGHT_THEME
-from rzgitclient.ui.widgets.column_header import ColumnHeader
+from rzgit.ui.theme.app_theme import LIGHT_THEME
+from rzgit.ui.widgets.column_header import ColumnHeader
 from tests.support import click_column_label, commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 WT = Worktree("/x/feature", "0123456789abcdef", "feature")

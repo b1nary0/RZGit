@@ -20,9 +20,9 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtWidgets import QSplitter, QTabWidget
 from PySide6.QtGui import QAction
 
-from rzgitclient.ui.layout.layout_host import PANEL_MIME, LayoutHost, _drag_source
-from rzgitclient.ui.layout.layout_host import EMPTY_AREA_MIN, AreaPane
-from rzgitclient.ui.layout.layout_model import (
+from rzgit.ui.layout.layout_host import PANEL_MIME, LayoutHost, _drag_source
+from rzgit.ui.layout.layout_host import EMPTY_AREA_MIN, AreaPane
+from rzgit.ui.layout.layout_model import (
     Anchor,
     Area,
     Arrangement,
@@ -32,10 +32,10 @@ from rzgitclient.ui.layout.layout_model import (
     SplitNode,
     TabsNode,
 )
-from rzgitclient.ui.layout.layout_model import DropZone, panel_ids
-from rzgitclient.ui.layout.layout_presets import DEFAULT_LAYOUT, matching_preset
-from rzgitclient.ui.layout.panel_frame import PanelFrame
-from rzgitclient.ui.panels.history_model import SUBJECT_COLUMN
+from rzgit.ui.layout.layout_model import DropZone, panel_ids
+from rzgit.ui.layout.layout_presets import DEFAULT_LAYOUT, matching_preset
+from rzgit.ui.layout.panel_frame import PanelFrame
+from rzgit.ui.panels.history_model import SUBJECT_COLUMN
 from tests.support import commit_file, make_panel_context, make_repo, qt_app, wait_idle
 
 H, V = Orientation.HORIZONTAL, Orientation.VERTICAL

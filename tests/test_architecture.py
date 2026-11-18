@@ -7,7 +7,7 @@ import re
 import unittest
 from pathlib import Path
 
-PACKAGE = "rzgitclient"
+PACKAGE = "rzgit"
 SRC = Path(__file__).resolve().parent.parent / "src" / PACKAGE
 
 # Lower layers first; a module may import only its own layer or lower ones.
@@ -124,63 +124,63 @@ class RuleTests(unittest.TestCase):
         self.assertTrue(any(rule in v for v in found), f"{rule!r} not in {found}")
 
     def test_clean_sources_pass(self):
-        self.assertEqual(_check("rzgitclient.ui.panels.files_panel", (
+        self.assertEqual(_check("rzgit.ui.panels.files_panel", (
             "from PySide6.QtWidgets import QTreeWidget\n"
-            "from rzgitclient.git.git_models import FileStatus\n"
-            "from rzgitclient.ui.panels.panel import Panel\n"
-            "from rzgitclient.ui.app_actions import AppActions\n"
+            "from rzgit.git.git_models import FileStatus\n"
+            "from rzgit.ui.panels.panel import Panel\n"
+            "from rzgit.ui.app_actions import AppActions\n"
         )), [])
-        self.assertEqual(_check("rzgitclient.app", "from rzgitclient.ui.main_window import MainWindow"), [])
+        self.assertEqual(_check("rzgit.app", "from rzgit.ui.main_window import MainWindow"), [])
 
     def test_git_imports_no_qt(self):
-        self.assertBreaks("rzgitclient.git.repo", "import PySide6.QtCore", "git/ imports no Qt")
+        self.assertBreaks("rzgit.git.repo", "import PySide6.QtCore", "git/ imports no Qt")
 
     def test_core_imports_no_widgets_or_gui(self):
-        self.assertBreaks("rzgitclient.core.selection", "from PySide6.QtGui import QColor",
+        self.assertBreaks("rzgit.core.selection", "from PySide6.QtGui import QColor",
                           "core/ imports no widgets")
-        self.assertBreaks("rzgitclient.core.selection", "from PySide6 import QtWidgets",
+        self.assertBreaks("rzgit.core.selection", "from PySide6 import QtWidgets",
                           "core/ imports no widgets")
-        self.assertEqual(_check("rzgitclient.core.selection", "from PySide6.QtCore import QObject"), [])
+        self.assertEqual(_check("rzgit.core.selection", "from PySide6.QtCore import QObject"), [])
 
     def test_layout_model_imports_no_qt(self):
-        self.assertBreaks("rzgitclient.ui.layout.layout_model", "from PySide6.QtCore import Qt",
+        self.assertBreaks("rzgit.ui.layout.layout_model", "from PySide6.QtCore import Qt",
                           "layout_model imports no Qt")
 
     def test_panels_never_import_repo(self):
-        self.assertBreaks("rzgitclient.ui.panels.history_panel", "from rzgitclient.git.repo import Repo",
+        self.assertBreaks("rzgit.ui.panels.history_panel", "from rzgit.git.repo import Repo",
                           "panels never run git")
-        self.assertBreaks("rzgitclient.ui.panels.panel", "from rzgitclient.git import repo",
+        self.assertBreaks("rzgit.ui.panels.panel", "from rzgit.git import repo",
                           "panels never run git")
 
     def test_panel_imports_no_other_panel(self):
-        self.assertBreaks("rzgitclient.ui.panels.history_panel",
-                          "from rzgitclient.ui.panels.files_panel import FilesPanel",
+        self.assertBreaks("rzgit.ui.panels.history_panel",
+                          "from rzgit.ui.panels.files_panel import FilesPanel",
                           "a panel never imports another panel")
 
     def test_lower_top_layer_imports_no_higher_one(self):
-        self.assertBreaks("rzgitclient.git.repo", "from rzgitclient.core.repo_session import Refresh",
+        self.assertBreaks("rzgit.git.repo", "from rzgit.core.repo_session import Refresh",
                           "core/ is above git/")
-        self.assertBreaks("rzgitclient.core.selection", "from rzgitclient.ui.panels.panel import Panel",
+        self.assertBreaks("rzgit.core.selection", "from rzgit.ui.panels.panel import Panel",
                           "ui/ is above core/")
 
     def test_ui_layer_order(self):
-        self.assertBreaks("rzgitclient.ui.panels.panel", "from rzgitclient.ui.layout.panel_frame import PanelFrame",
+        self.assertBreaks("rzgit.ui.panels.panel", "from rzgit.ui.layout.panel_frame import PanelFrame",
                           "ui layout is above ui panels")
-        self.assertBreaks("rzgitclient.ui.theme.app_theme", "from rzgitclient.ui.widgets import section_header",
+        self.assertBreaks("rzgit.ui.theme.app_theme", "from rzgit.ui.widgets import section_header",
                           "ui widgets is above ui theme")
-        self.assertBreaks("rzgitclient.ui.app_actions", "from rzgitclient.ui.panels.panel import Panel",
+        self.assertBreaks("rzgit.ui.app_actions", "from rzgit.ui.panels.panel import Panel",
                           "ui panels is above ui app_actions")
-        self.assertBreaks("rzgitclient.ui.layout.panel_frame", "from rzgitclient.ui.main_window import MainWindow",
+        self.assertBreaks("rzgit.ui.layout.panel_frame", "from rzgit.ui.main_window import MainWindow",
                           "ui main_window is above ui layout")
-        self.assertBreaks("rzgitclient.ui.main_window", "from rzgitclient.ui.app_windows import AppWindows",
+        self.assertBreaks("rzgit.ui.main_window", "from rzgit.ui.app_windows import AppWindows",
                           "ui app_windows is above ui main_window")
 
     def test_relative_imports_are_resolved(self):
         self.assertEqual(
-            module_imports("from ..layout import panel_frame", "rzgitclient.ui.panels.panel"),
-            {"rzgitclient.ui.layout", "rzgitclient.ui.layout.panel_frame"},
+            module_imports("from ..layout import panel_frame", "rzgit.ui.panels.panel"),
+            {"rzgit.ui.layout", "rzgit.ui.layout.panel_frame"},
         )
-        self.assertBreaks("rzgitclient.ui.panels.panel", "from ..layout.panel_frame import PanelFrame",
+        self.assertBreaks("rzgit.ui.panels.panel", "from ..layout.panel_frame import PanelFrame",
                           "ui layout is above ui panels")
 
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QByteArray
 
-from rzgitclient.core.app_settings import AppSettings
+from rzgit.core.app_settings import AppSettings
 from tests.support import qt_app
 
 
@@ -102,7 +102,7 @@ class AppSettingsTests(unittest.TestCase):
 
     def test_corrupt_layout_is_ignored_with_a_warning(self):
         self.path.write_text('[General]\nlayout="{not json"\n')
-        with self.assertLogs("rzgitclient.core.app_settings", "WARNING"):
+        with self.assertLogs("rzgit.core.app_settings", "WARNING"):
             self.assertIsNone(AppSettings(self.path).layout)
 
     def test_layout_that_is_not_an_object_is_ignored(self):
@@ -120,7 +120,7 @@ class AppSettingsTests(unittest.TestCase):
 
     def test_old_drafts_that_are_not_valid_are_ignored(self):
         self.settings._settings.setValue("commit/drafts", "{not json")
-        with self.assertLogs("rzgitclient.core.app_settings", "WARNING"):
+        with self.assertLogs("rzgit.core.app_settings", "WARNING"):
             self.assertEqual(self.settings.old_commit_drafts, {})
         self.settings._settings.setValue("commit/drafts", "[1, 2]")
         self.assertEqual(self.settings.old_commit_drafts, {})
@@ -140,7 +140,7 @@ class AppSettingsTests(unittest.TestCase):
 
     def test_column_prefs_that_are_not_valid_are_ignored(self):
         self.settings._settings.setValue("columns/prefs", "{not json")
-        with self.assertLogs("rzgitclient.core.app_settings", "WARNING"):
+        with self.assertLogs("rzgit.core.app_settings", "WARNING"):
             self.assertEqual(self.settings.column_prefs, {})
         self.settings._settings.setValue("columns/prefs", "[1, 2]")
         self.assertEqual(self.settings.column_prefs, {})
@@ -155,7 +155,7 @@ class AppSettingsTests(unittest.TestCase):
 
     def test_sort_prefs_that_are_not_valid_are_ignored(self):
         self.settings._settings.setValue("sort/prefs", "{not json")
-        with self.assertLogs("rzgitclient.core.app_settings", "WARNING"):
+        with self.assertLogs("rzgit.core.app_settings", "WARNING"):
             self.assertEqual(self.settings.sort_prefs, {})
         self.settings._settings.setValue("sort/prefs", "[1, 2]")
         self.assertEqual(self.settings.sort_prefs, {})
@@ -171,7 +171,7 @@ class AppSettingsTests(unittest.TestCase):
 
     def test_recent_repos_that_are_not_valid_are_ignored(self):
         self.settings._settings.setValue("recent/repos", "{not json")
-        with self.assertLogs("rzgitclient.core.app_settings", "WARNING"):
+        with self.assertLogs("rzgit.core.app_settings", "WARNING"):
             self.assertEqual(self.settings.recent_repos, [])
         self.settings._settings.setValue("recent/repos", '{"a": 1}')
         self.assertEqual(self.settings.recent_repos, [])
@@ -193,16 +193,16 @@ class AppSettingsTests(unittest.TestCase):
 
     def test_saved_layouts_that_are_not_valid_are_dropped_with_a_warning(self):
         self.settings._settings.setValue("layouts/saved", "[not json")
-        with self.assertLogs("rzgitclient.core.app_settings", "WARNING"):
+        with self.assertLogs("rzgit.core.app_settings", "WARNING"):
             self.assertEqual(self.settings.saved_layouts, [])
         self.settings._settings.setValue("layouts/saved", '{"name": "x"}')
-        with self.assertLogs("rzgitclient.core.app_settings", "WARNING"):
+        with self.assertLogs("rzgit.core.app_settings", "WARNING"):
             self.assertEqual(self.settings.saved_layouts, [])
         self.settings._settings.setValue(
             "layouts/saved",
             '[{"name": "ok", "layout": {}}, {"name": "", "layout": {}}, '
             '{"name": "x", "layout": [1]}, 3, {"layout": {}}]')
-        with self.assertLogs("rzgitclient.core.app_settings", "WARNING") as logs:
+        with self.assertLogs("rzgit.core.app_settings", "WARNING") as logs:
             self.assertEqual(self.settings.saved_layouts, [("ok", {})])
         self.assertEqual(len(logs.records), 4)
 
