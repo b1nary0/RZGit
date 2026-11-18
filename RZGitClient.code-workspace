@@ -7,9 +7,6 @@
 			"path": "."
 		}
 	],
-	"settings": {
-		"window.title": "${dirty}${activeEditorShort}${separator}RZGitClient"
-	},
 	"extensions": {
 		"recommendations": [
 			"ms-python.python",
