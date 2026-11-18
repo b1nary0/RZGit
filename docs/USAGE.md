@@ -133,10 +133,16 @@ visible panel can't be hidden.
 - Click a column label to sort the list by that column, and click it again to reverse the
   order. An arrow marks the column the list is sorted by. Not every column sorts.
 
-Your column choices and sort orders are saved for each panel.
+Your column choices, sort orders and groupings are saved for each panel.
 
 **Sorting.** Lists that can be sorted have a **Sort By** submenu in their panel menu. It
 offers the panel's orders and, below them, **Reversed**.
+
+**Grouping.** The file panels, Branches and Stashes have a **Group By** submenu just above
+Sort By. It puts the rows under headings, such as Modified and Untracked, and **None**
+turns it off. Each heading shows how many rows it holds, and its arrow, or a
+double-click, folds it. The sort order applies inside each group, and Reversed reverses
+only the rows inside each group, not the order of the groups.
 
 ## The Controls panel
 
@@ -222,7 +228,10 @@ under their folders. A chain of folders that each hold only one folder is shown 
 row, such as `src/rzgitclient/ui`. Click a folder's arrow to fold it, and it stays folded
 while RZGit runs. Selecting a folder selects every file under it, so you can stage or
 unstage a whole folder at once. Turn the option off to see one full path per row instead.
-Each of the three file panels can be sorted by **Name** or **Status**.
+Each of the three file panels can be sorted by **Name** or **Status**, and grouped by
+**Status**: Conflicted, Modified, Type changed, Added, Deleted, Renamed, Copied and
+Untracked. In a tree, each status heading has its own folders. Select a heading to select
+all its files, to stage or unstage them together.
 
 **Staging.** Select one or more files with the mouse, using Ctrl and Shift to select
 several, and then:
@@ -352,7 +361,10 @@ Select **Uncommitted changes** at the top of History to go back to your own work
 ![The Branches panel and a branch's menu](screenshots/branches.png)
 
 The Branches panel lists the local branches, with the current one in bold. **Sort By** in
-its panel menu offers **Name** and **Last Commit**.
+its panel menu offers **Name** and **Last Commit**. **Group By** offers **Prefix**, the part
+of the name before the first `/` (such as `feature/`, with the branches that have none
+under **Other**), and **Merged**, which shows the branches not merged into the current
+one first.
 
 - Double-click a branch to switch to it.
 - Right-click a branch for its menu: **Switch to** the branch, **New Branch from** it,
@@ -384,7 +396,7 @@ panel, as described in [The Controls panel](#the-controls-panel).
 A stash puts your uncommitted changes aside so that you can work on something else and
 bring them back later. The Stashes panel lists them, newest first, with their message,
 the branch they were made on, and their age. **Sort By** offers **Age**, **Message** and
-**Branch**.
+**Branch**, and **Group By** offers **Branch**.
 
 - **Stash Changes…**, the button above the list and also in the Repository menu, asks for
   an optional message and whether to **Include untracked files**, then stashes all your

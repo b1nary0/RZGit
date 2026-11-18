@@ -473,8 +473,7 @@ def shot_commit_details(app: App) -> None:
 def shot_branches(app: App) -> None:
     branches = app.panel("branches")
     lst = branches._list
-    item = next(lst.item(i) for i in range(lst.count())
-                if lst.item(i).text().startswith("feature/usage-guide"))
+    item = next(i for i in lst.rows() if i.text(0).startswith("feature/usage-guide"))
     lst.setCurrentItem(item)
     context_shot(app, "branches", branches.menu_for("feature/usage-guide"),
                  item_rect(app, lst, lst.visualItemRect(item)), "branches")

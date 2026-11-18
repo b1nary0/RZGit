@@ -25,7 +25,7 @@ class FilesPanel(Panel):
     def _setup(self) -> None:
         actions = self.ctx.actions
         self.sort = SortMenu(self.panel_id, SORTS, self.ctx.sorts, self)
-        self.set_header_actions([self.sort.menuAction()])
+        self.set_header_actions(self.sort.header_actions())
         self._list = FileList(self.ctx, FileSource.WORKTREE,
                               ([actions.stage, actions.discard], [actions.stage_all]),
                               self.panel_id, self.sort)

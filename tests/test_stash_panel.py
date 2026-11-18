@@ -203,7 +203,7 @@ class StashSortTests(unittest.TestCase):
                 for r in range(self.tree.topLevelItemCount())]
 
     def test_sort_by_is_the_header_menu_age_first(self):
-        self.assertEqual(self.panel.header_actions, (self.panel.sort.menuAction(),))
+        self.assertEqual(self.panel.header_actions, tuple(self.panel.sort.header_actions()))
         self.assertEqual([a.text() for a in self.panel.sort.actions()[:3]],
                          ["Age", "Message", "Branch"])
         self.assertEqual(self.rows(), [["zulu", "main", "1 h"], ["alpha", "side", "3 days"]])
@@ -232,6 +232,86 @@ class StashSortTests(unittest.TestCase):
         self.addCleanup(again.deleteLater)
         self.assertEqual(again.sort.order.key, "message")
         self.assertEqual(again._tree.topLevelItem(0).text(0), "alpha")
+
+
+class StashGroupTests(unittest.TestCase):
+    """Group By: branch (RZG-53, spec §5.4). StashSortTests' stashes, and a third on
+    main, made last (git's order: first) but dated oldest."""
+
+    setUpClass = StashSortTests.setUpClass
+    tearDownClass = StashSortTests.tearDownClass
+    stash = StashSortTests.stash
+    rows = StashSortTests.rows
+
+    def setUp(self):
+        StashSortTests.setUp(self)
+        (self.repo / "a.txt").write_text("4\n")
+        self.stash("mike", timedelta(days=9))
+        self.session.refresh()
+        wait_idle(self.session)
+        self.panel.sort.set_group("branch")
+
+    def grouped(self):
+        return [(self.tree.topLevelItem(i).text(0),
+                 [self.tree.topLevelItem(i).child(j).text(0)
+                  for j in range(self.tree.topLevelItem(i).childCount())])
+                for i in range(self.tree.topLevelItemCount())]
+
+    def test_group_by_branch_comes_before_sort_by(self):
+        sort = self.panel.sort
+        self.assertEqual(self.panel.header_actions, (sort.group_menu.menuAction(), sort.menuAction()))
+        self.assertEqual([a.text() for a in sort.group_menu.actions() if not a.isSeparator()],
+                         ["&None", "Branch"])
+
+    def test_under_their_branch_by_name_in_the_sort_inside(self):
+        self.assertEqual(self.grouped(), [("main (2)", ["mike", "zulu"]),
+                                          ("side (1)", ["alpha"])])
+        self.assertTrue(self.tree.rootIsDecorated())
+        self.panel.sort.choose("message")
+        self.panel.sort.set_reversed(True)
+        self.assertEqual(self.grouped(), [("main (2)", ["zulu", "mike"]),
+                                          ("side (1)", ["alpha"])])  # the groups keep their order
+        self.panel.sort.set_group(None)
+        self.assertEqual([r[0] for r in self.rows()], ["zulu", "mike", "alpha"])
+        self.assertFalse(self.tree.rootIsDecorated())
+
+    def test_the_selection_and_ages_work_under_headings(self):
+        zulu = next(s for s in self.session.stashes if s.message == "zulu")
+        self.ctx.selection.commit = zulu
+        self.assertEqual(self.panel.stash_at(self.tree.currentItem()), zulu)
+        self.assertTrue(self.tree.currentItem().isSelected())
+        self.panel.sort.set_reversed(True)
+        self.assertEqual(self.panel.stash_at(self.tree.selectedItems()[0]), zulu)
+        main = self.tree.topLevelItem(0)
+        for i in range(2):
+            main.child(i).setText(2, "?")
+        self.panel._update_ages()
+        self.assertEqual([main.child(i).text(2) for i in range(2)], ["1 h", "1 week"])
+        self.assertEqual(self.tree.topLevelItem(0).text(0), "main (2)")  # ages leave headings
+
+    def test_a_heading_is_not_selected_and_has_no_menu(self):
+        newer = self.session.stashes[0]
+        self.ctx.selection.commit = newer
+        heading = self.tree.topLevelItem(1)  # side
+        self.assertFalse(heading.flags() & Qt.ItemFlag.ItemIsSelectable)
+        self.assertIsNone(self.panel.stash_at(heading))
+        self.tree.show()
+        self.addCleanup(self.tree.hide)
+        QTest.mouseClick(self.tree.viewport(), Qt.MouseButton.LeftButton,
+                         pos=self.tree.visualItemRect(heading).center())
+        self.assertEqual(self.ctx.selection.commit, newer)  # the click left the selection
+
+    def test_a_heading_stays_folded_through_refresh(self):
+        self.tree.topLevelItem(0).setExpanded(False)
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertFalse(self.tree.topLevelItem(0).isExpanded())
+        self.assertTrue(self.tree.topLevelItem(1).isExpanded())
+
+    def test_a_new_panel_keeps_the_grouping(self):
+        again = StashPanel(self.ctx)
+        self.addCleanup(again.deleteLater)
+        self.assertEqual(again._tree.topLevelItem(0).text(0), "main (2)")
 
 
 if __name__ == "__main__":

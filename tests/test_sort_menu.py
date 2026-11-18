@@ -7,11 +7,11 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QTreeView, QWidget
 
 from rzgitclient.core.column_prefs import ColumnPrefs
-from rzgitclient.core.sort_options import SortOption, SortOptions, SortOrder
+from rzgitclient.core.sort_options import GroupOption, SortOption, SortOptions, SortOrder
 from rzgitclient.core.sort_prefs import SortPrefs
 from rzgitclient.ui.theme.app_theme import LIGHT_THEME
 from rzgitclient.ui.widgets.column_header import ColumnHeader
-from rzgitclient.ui.widgets.sort_menu import REVERSED, SORT_BY, SortMenu
+from rzgitclient.ui.widgets.sort_menu import GROUP_BY, NO_GROUPS, REVERSED, SORT_BY, SortMenu
 from tests.support import click_column_label, qt_app
 
 SORTS = SortOptions((
@@ -141,6 +141,63 @@ class SortMenuTests(unittest.TestCase):
         self.menu.choose("message")  # no RuntimeError from the deleted header
         self.assertEqual(self.menu._headers, [])
 
+
+    # ---- Group By (RZG-53) --------------------------------------------------------
+
+    def grouped_menu(self) -> SortMenu:
+        options = SortOptions(SORTS.options, groups=(
+            GroupOption("initial", "Initial", lambda w: w[0].upper()),
+            GroupOption("size", "Size", lambda w: str(len(w))),
+        ))
+        menu = SortMenu("stash", options, self.prefs, self.owner)
+        menu.order_changed.connect(lambda: self.changes.append(menu.order))
+        return menu
+
+    def test_no_group_by_without_groupings(self):
+        self.assertIsNone(self.menu.group_menu)
+        self.assertEqual(self.menu.header_actions(), [self.menu.menuAction()])
+        self.assertIsNone(self.menu.grouped(["a"]))
+
+    def test_group_by_is_none_then_the_groupings_and_comes_before_sort_by(self):
+        menu = self.grouped_menu()
+        self.assertEqual(menu.group_menu.title(), GROUP_BY)
+        self.assertEqual(menu.header_actions(), [menu.group_menu.menuAction(), menu.menuAction()])
+        self.assertEqual([(a.text(), a.isChecked()) for a in menu.group_menu.actions()
+                          if not a.isSeparator()],
+                         [(NO_GROUPS, True), ("Initial", False), ("Size", False)])
+        self.assertTrue(menu.group_menu.actions()[1].isSeparator())
+
+    def test_choosing_a_grouping_groups_saves_and_emits(self):
+        menu = self.grouped_menu()
+        menu.group_menu.actions()[2].trigger()  # Initial
+        self.assertEqual(menu.order, SortOrder("age", group="initial"))
+        self.assertEqual(self.changes, [SortOrder("age", group="initial")])
+        self.assertEqual(self.prefs.order("stash"), SortOrder("age", group="initial"))
+        self.assertTrue(menu.group_menu.actions()[2].isChecked())
+        self.assertFalse(menu.group_menu.actions()[0].isChecked())
+        self.assertEqual([(g.name, g.items) for g in menu.grouped(["bee", "ant", "bat"])],
+                         [("A", ["ant"]), ("B", ["bee", "bat"])])
+        menu.group_menu.actions()[0].trigger()  # None
+        self.assertIsNone(menu.order.group)
+        self.assertIsNone(self.prefs.order("stash"))  # the natural order again: no entry
+
+    def test_the_sort_and_the_grouping_keep_each_other(self):
+        menu = self.grouped_menu()
+        menu.set_group("size")
+        menu.choose("message")
+        self.assertEqual(menu.order, SortOrder("message", group="size"))
+        menu.set_reversed(True)
+        self.assertEqual(menu.order, SortOrder("message", True, "size"))
+        menu.set_group("initial")
+        self.assertEqual(menu.order, SortOrder("message", True, "initial"))
+        self.assertTrue(menu.reversed_action.isChecked())
+
+    def test_a_new_menu_starts_with_the_saved_grouping(self):
+        self.prefs.set_order("stash", SortOrder("age", group="size"))
+        menu = self.grouped_menu()
+        self.assertTrue(menu.group_menu.actions()[3].isChecked())
+        self.prefs.set_order("stash", SortOrder("age", group="gone"))
+        self.assertIsNone(self.grouped_menu().order.group)
 
 if __name__ == "__main__":
     unittest.main()

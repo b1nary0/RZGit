@@ -59,5 +59,28 @@ class SortPrefsTests(unittest.TestCase):
         self.assertEqual(prefs.order("worktrees"), SortOrder("name"))  # reversed defaults
 
 
+    def test_the_grouping_is_saved_in_the_same_entry(self):
+        """RZG-53: "group" is left out when there is none."""
+        prefs = SortPrefs(self.settings)
+        prefs.set_order("stash", SortOrder("age", group="branch"))
+        prefs.set_order("files", SortOrder("status"))
+        self.assertEqual(self.settings.sort_prefs,
+                         {"files": {"by": "status", "reversed": False},
+                          "stash": {"by": "age", "reversed": False, "group": "branch"}})
+        again = self.reopen()
+        self.assertEqual(again.order("stash"), SortOrder("age", group="branch"))
+        self.assertIsNone(again.order("files").group)
+
+    def test_a_malformed_grouping_drops_the_entry(self):
+        self.settings.sort_prefs = {"stash": {"by": "age", "group": 3},
+                                    "files": {"by": "name", "group": ""},
+                                    "branches": {"by": "name", "group": None}}
+        with self.assertLogs("rzgitclient.core.sort_prefs", "WARNING") as logs:
+            prefs = SortPrefs(self.settings)
+        self.assertEqual(len(logs.records), 2)
+        self.assertIsNone(prefs.order("stash"))
+        self.assertIsNone(prefs.order("files"))
+        self.assertEqual(prefs.order("branches"), SortOrder("name"))
+
 if __name__ == "__main__":
     unittest.main()

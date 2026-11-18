@@ -38,7 +38,7 @@ class CommitFilesPanelTests(unittest.TestCase):
         panel = CommitFilesPanel(self.ctx)
         self.addCleanup(panel.deleteLater)
         self.assertIsNone(panel._list)
-        self.assertEqual(panel.header_actions, (panel.sort.menuAction(),))
+        self.assertEqual(panel.header_actions, tuple(panel.sort.header_actions()))
         panel.sort.choose("status")  # M, R: the same; reversed puts the rename first
         panel.sort.set_reversed(True)
         self.selection.commit = self.third

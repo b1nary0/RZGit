@@ -1,22 +1,28 @@
 """The branch list, and the place to work with branches (spec §5.4).
 
 Sort By (RZG-43), its header menu: by name (git's order) or by last commit.
+Group By (RZG-53): the name's prefix ("feature/") or merged, under headings
+that can't be selected (``GroupedTree``).
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import QListWidget, QListWidgetItem, QMenu, QVBoxLayout
+from PySide6.QtWidgets import QMenu, QTreeWidgetItem, QVBoxLayout
 
-from rzgitclient.core.sort_options import SortOption, SortOptions
+from rzgitclient.core.sort_options import GroupOption, SortOption, SortOptions
 from rzgitclient.git.git_models import Branch
 from rzgitclient.ui.app_actions import BranchOp, WorktreeOp
 from rzgitclient.ui.panels.panel import Panel
+from rzgitclient.ui.theme.app_theme import AppTheme
+from rzgitclient.ui.widgets.grouped_tree import GroupedTree
 from rzgitclient.ui.widgets.sort_menu import SortMenu
 
 _NAME = Qt.ItemDataRole.UserRole  # a branch row's name; None for "(no commits)"
 _CURRENT = " (current branch)"
+OTHER = "Other"  # Group By Prefix: the branches without one
+NOT_MERGED, MERGED = "Not merged", "Merged"
 
 
 def _last_commit(branch: Branch) -> float:
@@ -24,10 +30,20 @@ def _last_commit(branch: Branch) -> float:
     return branch.date.timestamp() if branch.date is not None else float("-inf")
 
 
-# Sort By (spec §5.4): git's order is by name.
+def prefix(branch: Branch) -> str:
+    """Its name up to the first "/", with it ("feature/"); "Other" without one."""
+    head, slash, _rest = branch.name.partition("/")
+    return f"{head}/" if slash and head else OTHER
+
+
+# Sort By (spec §5.4): git's order is by name. Group By: prefix or merged.
 SORTS: SortOptions[Branch] = SortOptions((
     SortOption("name", "Name"),
     SortOption("last_commit", "Last Commit", _last_commit, descending=True),
+), groups=(
+    GroupOption("prefix", "Prefix", prefix, last=(OTHER,)),
+    GroupOption("merged", "Merged", lambda b: MERGED if b.merged else NOT_MERGED,
+                order=(NOT_MERGED, MERGED)),
 ))
 
 
@@ -35,14 +51,18 @@ class BranchesPanel(Panel):
     panel_id = "branches"
     title = "Branches"
 
-    _list: QListWidget
+    _list: GroupedTree
     sort: SortMenu
 
     def _setup(self) -> None:
         self.sort = SortMenu(self.panel_id, SORTS, self.ctx.sorts, self)
         self.sort.order_changed.connect(self._on_sorted)
-        self.set_header_actions([self.sort.menuAction()])
-        self._list = QListWidget()
+        self.set_header_actions(self.sort.header_actions())
+        self._list = GroupedTree(self.ctx.theme.current)
+        self._list.setColumnCount(1)
+        self._list.setHeaderHidden(True)
+        self._list.setRootIsDecorated(False)
+        self._list.setUniformRowHeights(True)
         self._list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -55,30 +75,45 @@ class BranchesPanel(Panel):
         session = self.ctx.session
         session.branches_changed.connect(self._render)
         session.head_changed.connect(self._render)
+        session.repo_changed.connect(lambda _repo: self._list.forget_folded())
         self._render()
 
     def _render(self, _value: object = None) -> None:
         # Depends on both the branches and HEAD, so it reads the session.
         branches, head = self.ctx.session.branches, self.ctx.session.head
         current = self._list.currentItem()
-        keep = current.data(_NAME) if current else None
+        keep = current.data(0, _NAME) if current else None
 
+        def item_of(b: Branch) -> QTreeWidgetItem:
+            item = QTreeWidgetItem([b.name])
+            item.setData(0, _NAME, b.name)
+            if b.is_current:
+                font = item.font(0)
+                font.setBold(True)
+                item.setFont(0, font)
+            return item
+
+        groups = self.sort.grouped(branches)
+        if groups is None:
+            items = [item_of(b) for b in self.sort.apply(branches)]
+        else:
+            items = []
+            for group in groups:
+                heading = self._list.heading(group)
+                heading.addChildren([item_of(b) for b in group.items])
+                items.append(heading)
         blocked = self._list.blockSignals(True)
         try:
             self._list.clear()
-            for b in self.sort.apply(branches):
-                item = QListWidgetItem(b.name)
-                item.setData(_NAME, b.name)
-                if b.is_current:
-                    font = item.font()
-                    font.setBold(True)
-                    item.setFont(font)
-                self._list.addItem(item)
-                if b.name == keep:
-                    self._list.setCurrentItem(item)
+            self._list.setRootIsDecorated(groups is not None)
+            self._list.addTopLevelItems(items)
             if not branches and head:
                 # Fresh repo: the branch exists in HEAD but has no ref yet.
-                self._list.addItem(QListWidgetItem(f"{head} (no commits)"))
+                self._list.addTopLevelItem(QTreeWidgetItem([f"{head} (no commits)"]))
+            self._list.fold_headings()
+            for item in self._list.rows():
+                if keep is not None and item.data(0, _NAME) == keep:
+                    self._list.setCurrentItem(item)
         finally:
             self._list.blockSignals(blocked)
 
@@ -92,14 +127,17 @@ class BranchesPanel(Panel):
     def _is_current(self, name: str) -> bool:
         return any(b.name == name and b.is_current for b in self.ctx.session.branches)
 
-    def _on_double_click(self, item: QListWidgetItem) -> None:
-        name = item.data(_NAME)
+    def apply_theme(self, theme: AppTheme) -> None:
+        self._list.set_theme(theme)
+
+    def _on_double_click(self, item: QTreeWidgetItem, _column: int = 0) -> None:
+        name = item.data(0, _NAME)
         if name is not None and not self._is_current(name):
             self.ctx.actions.request_branch(BranchOp.SWITCH, name)
 
     def _show_menu(self, pos: QPoint) -> None:
         item = self._list.itemAt(pos)
-        name = item.data(_NAME) if item is not None else None
+        name = item.data(0, _NAME) if item is not None else None
         if name is not None:
             self.menu_for(name).exec(self._list.viewport().mapToGlobal(pos))
 

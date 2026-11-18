@@ -30,6 +30,8 @@ class ThemeColors:
     column_header_text_hover: str
     column_header_separator: str  # the inset line between two labels
     column_header_border: str  # the line under the row of labels
+    group_header_bg: str  # a group heading in a list (GroupedTree, spec §5.1, RZG-53)
+    group_header_text: str
     row_alt_bg: str  # every second row of a striped list (History's commits)
     # a control floating over a list (History's Back to top, spec §5.4)
     floating_button_bg: str
@@ -253,6 +255,8 @@ LIGHT_THEME = AppTheme(
         column_header_text_hover="#000000",
         column_header_separator="#c6c6c6",
         column_header_border="#c6c6c6",
+        group_header_bg="#dde1e8",  # ΔE ≥ 3 from both list backgrounds: a row of its own
+        group_header_text="#2b2b2b",
         row_alt_bg="#eeeef2",  # ΔE 4 from content_bg (RZG-66); content_hover stays bluer
         floating_button_bg="#dadde3",  # a step darker than the rows, stripes and hover included
         floating_button_hover="#cbcfd7",
@@ -330,6 +334,8 @@ DARK_THEME = AppTheme(
         column_header_text_hover="#ffffff",
         column_header_separator="#5b5d6a",  # a step lighter than border: a 1 px line needs ~2:1
         column_header_border="#41424d",
+        group_header_bg="#3a3c47",  # ΔE ≥ 3 from both list backgrounds, as in the light theme
+        group_header_text="#eaeaf2",
         row_alt_bg="#212226",  # ΔE 4 darker than content_bg (RZG-66): lighter would be too near content_hover
         floating_button_bg="#42444f",  # a step lighter than the rows and their hover
         floating_button_hover="#4f5160",

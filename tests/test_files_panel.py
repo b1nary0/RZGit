@@ -463,7 +463,7 @@ class FilesPanelTests(unittest.TestCase):
         (self.repo / "old.txt").unlink()  # D, which sorts before M and U
 
     def test_sort_by_is_the_header_menu(self):
-        self.assertEqual(self.unstaged.header_actions, (self.unstaged.sort.menuAction(),))
+        self.assertEqual(self.unstaged.header_actions, tuple(self.unstaged.sort.header_actions()))
         self.assertEqual([a.text() for a in self.unstaged.sort.actions()[:2]], ["Name", "Status"])
 
     def test_flat_by_status_then_git_s_order(self):
@@ -515,7 +515,7 @@ class FilesPanelTests(unittest.TestCase):
 
     def test_staged_files_has_its_menu_before_its_list_and_the_list_uses_it(self):
         self.assertIsNone(self.staged._list)
-        self.assertEqual(self.staged.header_actions, (self.staged.sort.menuAction(),))
+        self.assertEqual(self.staged.header_actions, tuple(self.staged.sort.header_actions()))
         self.staged.sort.set_reversed(True)
         for name in ("a.txt", "old.txt"):
             (self.repo / name).write_text("changed")
@@ -525,6 +525,140 @@ class FilesPanelTests(unittest.TestCase):
         self.assertEqual(self.ctx.sorts.order("staged").reversed, True)
         self.assertIsNone(self.ctx.sorts.order("files"))  # each panel its own
 
+
+    # ---- Group By (RZG-53) -------------------------------------------------------
+
+    UNTRACKED = ["docs/a.md", "src/app/core.py", "src/app/ui/panel.py", "src/app/ui/theme.py"]
+
+    def heading(self, name, source=W):
+        tree = self.tree(source)
+        for i in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(i)
+            if item.text(0).startswith(f"{name} ("):
+                return item
+        self.fail(f"no heading {name!r} in {source}")
+
+    def flat(self):
+        self.ctx.actions.file_tree.setChecked(False)
+        self.addCleanup(self.ctx.actions.file_tree.setChecked, True)
+
+    def test_group_by_status_comes_before_sort_by(self):
+        sort = self.unstaged.sort
+        self.assertEqual(self.unstaged.header_actions,
+                         (sort.group_menu.menuAction(), sort.menuAction()))
+        self.assertEqual([a.text() for a in sort.group_menu.actions() if not a.isSeparator()],
+                         ["&None", "Status"])
+
+    def test_flat_grouped_by_status_in_the_status_order(self):
+        self.make_sortable_changes()
+        self.open()
+        self.flat()
+        self.unstaged.sort.set_group("status")
+        self.assertEqual(self.nested(W), [
+            ("Modified (1)", ["a.txt"]), ("Deleted (1)", ["old.txt"]),
+            ("Untracked (4)", self.UNTRACKED)])
+        tree = self.tree(W)
+        self.assertTrue(tree.rootIsDecorated())
+        self.assertTrue(self.heading("Modified").isFirstColumnSpanned())
+        self.assertTrue(self.heading("Modified").font(0).bold())
+        self.assertEqual(self.unstaged.header, "Unstaged Files (6)")  # files, not headings
+        self.unstaged.sort.set_reversed(True)  # inside the groups only
+        self.assertEqual(self.nested(W)[2], ("Untracked (4)", self.UNTRACKED[::-1]))
+        self.assertEqual(self.ctx.sorts.order("files").group, "status")
+        self.unstaged.sort.set_group(None)
+        self.assertFalse(tree.rootIsDecorated())
+        self.assertEqual(tree.indentation(), 0)
+
+    def test_in_the_tree_each_group_has_a_folder_tree_of_its_own(self):
+        self.make_sortable_changes()
+        commit_file(self.repo, "docs/b.md", "1", "add b")
+        (self.repo / "docs/b.md").write_text("changed")
+        self.open()
+        self.unstaged.sort.set_group("status")
+        self.assertEqual(self.nested(W), [
+            ("Modified (2)", [("docs", ["b.md"]), "a.txt"]),
+            ("Deleted (1)", ["old.txt"]),
+            ("Untracked (4)", [("docs", ["a.md"]),
+                               ("src/app", [("ui", ["panel.py", "theme.py"]), "core.py"])]),
+        ])
+        self.assertEqual(self.tree(W).guides_from, 1)  # no guide under the headings' arrows
+        # A folder folded under one heading stays open under the other, through a refresh.
+        docs = self.heading("Untracked").child(0)
+        docs.setExpanded(False)
+        (self.repo / "new.txt").write_text("new")  # so the refresh renders again
+        self.refresh()
+        self.assertEqual(self.heading("Untracked").text(0), "Untracked (5)")
+        self.assertFalse(self.heading("Untracked").child(0).isExpanded())
+        self.assertTrue(self.heading("Modified").child(0).isExpanded())
+
+    def test_a_folded_heading_stays_folded_until_another_repository(self):
+        self.make_sortable_changes()
+        self.open()
+        self.unstaged.sort.set_group("status")
+        self.heading("Untracked").setExpanded(False)
+        self.refresh()
+        self.assertFalse(self.heading("Untracked").isExpanded())
+        self.assertTrue(self.heading("Modified").isExpanded())
+        self.assertTrue(self.folder("docs", W).isExpanded())  # its folders keep theirs
+        self.session.open(self.repo)
+        wait_idle(self.session)
+        self.assertTrue(self.heading("Untracked").isExpanded())
+
+    def test_selecting_a_heading_selects_its_files_and_stage_acts_on_them(self):
+        self.make_sortable_changes()
+        self.open()
+        self.unstaged.sort.set_group("status")
+        tree = self.tree(W)
+        heading = self.heading("Untracked")
+        self.assertTrue(heading.flags() & Qt.ItemFlag.ItemIsSelectable)
+        tree.selectionModel().setCurrentIndex(tree.indexFromItem(heading),
+                                              QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        self.assertEqual([f.path for f in self.ctx.selection.files],  # in tree order
+                         ["docs/a.md", "src/app/ui/panel.py", "src/app/ui/theme.py",
+                          "src/app/core.py"])
+        self.assertIsNone(self.ctx.selection.file)  # a heading: nothing for Diff
+        self.ctx.actions.stage.trigger()
+        wait_idle(self.session)
+        self.assertEqual(self.highlighted(I), self.UNTRACKED)
+
+    def test_double_click_on_a_heading_does_not_stage(self):
+        self.make_sortable_changes()
+        self.open()
+        self.unstaged.sort.set_group("status")
+        with mock.patch.object(self.session, "stage") as stage:
+            self.tree(W).itemDoubleClicked.emit(self.heading("Modified"), 0)
+            self.unstaged._list._move([self.heading("Deleted")])  # Enter: its files
+        stage.assert_called_once_with(("old.txt",))
+
+    def test_the_selection_stays_through_grouping(self):
+        self.make_sortable_changes()
+        self.open()
+        self.select(W, "a.txt", "docs/a.md")
+        self.unstaged.sort.set_group("status")
+        self.assertEqual(self.highlighted(W), ["a.txt", "docs/a.md"])
+        self.assertEqual(self.tree(W).currentItem(), self.item("a.txt", W))
+
+    def test_staged_files_group_on_their_own(self):
+        self.staged.sort.set_group("status")
+        (self.repo / "a.txt").write_text("changed")
+        (self.repo / "new.txt").write_text("new")
+        git(self.repo, "add", "a.txt", "new.txt")
+        git(self.repo, "mv", "old.txt", "moved.txt")
+        self.open()
+        self.assertEqual(self.nested(I), [
+            ("Modified (1)", ["a.txt"]), ("Added (1)", ["new.txt"]),
+            ("Renamed (1)", ["old.txt → moved.txt"])])
+        self.assertIsNone(self.ctx.sorts.order("files"))
+
+    def test_headings_take_the_theme(self):
+        from rzgitclient.ui.theme.app_theme import DARK_THEME
+        self.make_sortable_changes()
+        self.open()
+        self.unstaged.sort.set_group("status")
+        for theme in (DARK_THEME, LIGHT_THEME):
+            self.ctx.theme.set_theme(theme)
+            heading = self.heading("Modified")
+            self.assertEqual(heading.foreground(0).color().name(), theme.colors.group_header_text)
 
 
 if __name__ == "__main__":

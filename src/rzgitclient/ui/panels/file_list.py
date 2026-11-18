@@ -8,7 +8,9 @@ it lists ``session.commit_files``, and has no staging menu or double-click. Each
 at a time, and Selection decides what stays selected after a refresh (§4.2).
 With Show Files as Tree on, files sit under folder rows (``file_tree.py``);
 selecting a folder selects every file under it. Sort By (RZG-43): the owning
-panel's ``SortMenu`` orders the rows, inside each folder in the tree.
+panel's ``SortMenu`` orders the rows, inside each folder in the tree. Group By
+(RZG-53): Status puts the rows under a heading per status (``GroupedTree``),
+each with its own folder tree; a heading is selected like a folder.
 """
 
 from __future__ import annotations
@@ -20,7 +22,6 @@ from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QPen, QShortc
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QMenu,
-    QTreeWidget,
     QTreeWidgetItem,
     QTreeWidgetItemIterator,
     QVBoxLayout,
@@ -28,12 +29,13 @@ from PySide6.QtWidgets import (
 )
 
 from rzgitclient.core.selection import FileSelection, FileSource, other_source
-from rzgitclient.core.sort_options import SortOption, SortOptions
+from rzgitclient.core.sort_options import Group, GroupOption, SortOption, SortOptions
 from rzgitclient.git.git_models import FileStatus
 from rzgitclient.ui.panels.file_tree import FolderNode, build_tree, file_label, sort_tree
 from rzgitclient.ui.panels.panel import PanelContext
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.widgets.column_header import ColumnHeader
+from rzgitclient.ui.widgets.grouped_tree import GroupedTree, heading_key
 from rzgitclient.ui.widgets.sort_menu import SortMenu
 
 STATUS_LABELS = {
@@ -59,15 +61,34 @@ _INDENT = 10  # px per tree level
 Row = tuple[FileStatus, str]  # a file row: its status and code (see rows())
 
 
+# Group By Status (RZG-53): a heading per status, in this order.
+STATUS_GROUPS = {
+    "U": "Conflicted",
+    "M": "Modified",
+    "T": "Type changed",
+    "A": "Added",
+    "D": "Deleted",
+    "R": "Renamed",
+    "C": "Copied",
+    "?": "Untracked",
+}
+
+
 def _status_letter(row: Row) -> str:
     return STATUS_LETTERS.get(row[1], row[1])
 
 
-# Sort By (spec §5.4), the same in the three file panels, each saving its own.
-# Name is git's path order when flat, by name in each folder in the tree.
+def _status_group(row: Row) -> str:
+    return STATUS_GROUPS.get(row[1], row[1])
+
+
+# Sort By and Group By (spec §5.4), the same in the three file panels, each
+# saving its own. Name is git's path order when flat, by name in each folder in the tree.
 SORTS: SortOptions[Row] = SortOptions((
     SortOption("name", "Name", column="Name"),
     SortOption("status", "Status", _status_letter, column="Status"),
+), groups=(
+    GroupOption("status", "Status", _status_group, order=tuple(STATUS_GROUPS.values())),
 ))
 
 
@@ -81,23 +102,25 @@ def rows(changes: Iterable[FileStatus], source: FileSource) -> list[Row]:
             for f in changes if f.is_untracked or f.has_unstaged]
 
 
-class _GuidedTree(QTreeWidget):
+class _GuidedTree(GroupedTree):
     """A tree that draws a faint vertical guide for each folder level, as in
-    VS Code, so a file's folder is easy to follow."""
+    VS Code, so a file's folder is easy to follow; under group headings when
+    grouped, whose own level has no guide."""
 
     guide_color = QColor()
+    guides_from = 0  # the first level with guides: 1 under group headings
 
     def drawBranches(self, painter: QPainter, rect: QRect, index: QModelIndex) -> None:
         super().drawBranches(painter, rect, index)
         depth, parent = 0, index.parent()
         while parent.isValid():
             depth, parent = depth + 1, parent.parent()
-        if not depth or not self.guide_color.isValid():
+        if depth <= self.guides_from or not self.guide_color.isValid():
             return
         indent = self.indentation()
         painter.save()
         painter.setPen(QPen(self.guide_color, 1))
-        for level in range(depth):  # under each ancestor folder's arrow
+        for level in range(self.guides_from, depth):  # under each ancestor folder's arrow
             x = rect.left() + level * indent + indent // 2
             painter.drawLine(x, rect.top(), x, rect.bottom())
         painter.restore()
@@ -124,9 +147,10 @@ class FileList(QWidget):
         # Selection back would undo the click.
         self._choosing = False
         self._rendered_theme: AppTheme | None = None
-        self._collapsed: set[str] = set()  # folder paths the user collapsed
+        # Folders the user collapsed: (their heading's group name, or None, path).
+        self._collapsed: set[tuple[str | None, str]] = set()
 
-        self._tree = _GuidedTree()
+        self._tree = _GuidedTree(ctx.theme.current, selectable_headings=True)
         self.labels = ColumnHeader(panel_id, ctx.columns, ctx.theme.current)
         self._tree.setHeader(self.labels)
         self._tree.setColumnCount(len(COLUMNS))
@@ -155,7 +179,7 @@ class FileList(QWidget):
             session.commit_files_changed.connect(self.render)
         else:
             session.status_changed.connect(self.render)
-        session.repo_changed.connect(lambda _repo: self._collapsed.clear())
+        session.repo_changed.connect(self._forget_collapsed)
         self.ctx.selection.files_changed.connect(self._show_selection)
         self.ctx.selection.file_changed.connect(self._show_selection)
 
@@ -191,27 +215,45 @@ class FileList(QWidget):
             return item
 
         changes = rows(self._changes(), self.source)
-        if tree:
+        muted = QColor(theme.colors.text_muted)
+
+        def items_of(changes: list[Row], in_order: bool = False) -> list[QTreeWidgetItem]:
+            """The rows of ``changes``; ``in_order``: already sorted (a group's)."""
+            if not tree:
+                ordered = changes if in_order else self.sort.apply(changes)
+                return [file_item(f, code) for f, code in ordered]
             root = build_tree((f.path, (f, code)) for f, code in changes)
             order = self.sort.order
             by_name = order.key == SORTS.default.key
             sort_tree(root, lambda files: self.sort.apply(files, of=lambda node: node.data),
                       folders_reversed=by_name and order.reversed)
-            items = self._tree_items(root, file_item, QColor(theme.colors.text_muted))
+            return self._tree_items(root, file_item, muted)
+
+        groups: list[Group] | None = self.sort.grouped(changes)
+        self._tree.set_theme(theme)
+        if groups is None:
+            items = items_of(changes)
         else:
-            items = [file_item(f, code) for f, code in self.sort.apply(changes)]
+            items = []
+            for group in groups:  # in the tree, each with a folder tree of its own
+                heading = self._tree.heading(group)
+                heading.addChildren(items_of(group.items, in_order=True))
+                items.append(heading)
+        nested = tree or groups is not None
         blocked = self._tree.blockSignals(True)
         try:
             self._tree.clear()
             self._tree.guide_color = QColor(theme.colors.tree_guide)
-            self._tree.setRootIsDecorated(tree)
-            self._tree.setIndentation(_INDENT if tree else 0)
+            self._tree.guides_from = 0 if groups is None else 1
+            self._tree.setRootIsDecorated(nested)
+            self._tree.setIndentation(_INDENT if nested else 0)
             self._tree.addTopLevelItems(items)
-            if tree:
+            if nested:
                 self._tree.expandAll()
                 for item in self._folder_items():
-                    if item.data(0, _FOLDER) in self._collapsed:
+                    if self._folder_key(item) in self._collapsed:
                         item.setExpanded(False)
+                self._tree.fold_headings()
         finally:
             self._tree.blockSignals(blocked)
         self.labels.fit(_STATUS_COLUMN)  # unless the user sized it; the name fills the rest
@@ -300,14 +342,31 @@ class FileList(QWidget):
         self.ctx.actions.move(paths, other_source(self.source))
 
     def _on_double_click(self, item: QTreeWidgetItem, _column: int) -> None:
-        if self._file(item) is not None:  # a folder folds, as usual
+        if self._file(item) is not None:  # a folder or a heading folds, as usual
             self._move([item])
 
     def _set_collapsed(self, item: QTreeWidgetItem, collapsed: bool) -> None:
-        """The user folded or unfolded a folder: remembered by its path."""
+        """The user folded or unfolded a folder: remembered by its path, under
+        its heading (headings remember their own, in GroupedTree)."""
+        key = self._folder_key(item)
+        if key is not None:
+            (self._collapsed.add if collapsed else self._collapsed.discard)(key)
+
+    @staticmethod
+    def _folder_key(item: QTreeWidgetItem) -> tuple[str | None, str] | None:
+        """A folder row's (heading's group name, or None, path); None for other rows."""
         path = item.data(0, _FOLDER)
-        if path is not None:
-            (self._collapsed.add if collapsed else self._collapsed.discard)(path)
+        if path is None:
+            return None
+        top = item
+        while top.parent() is not None:
+            top = top.parent()
+        heading = heading_key(top)
+        return (heading[1] if heading else None, path)
+
+    def _forget_collapsed(self, _repo: object = None) -> None:
+        self._collapsed.clear()
+        self._tree.forget_folded()
 
     def _show_menu(self, pos: QPoint) -> None:
         if not any(self._menu_actions):
@@ -328,7 +387,7 @@ class FileList(QWidget):
     # ---- items -----------------------------------------------------------
 
     def _all_items(self) -> list[QTreeWidgetItem]:
-        """Every row, folders and files, in tree order."""
+        """Every row, headings, folders and files, in tree order."""
         found, it = [], QTreeWidgetItemIterator(self._tree)
         while (item := it.value()) is not None:
             found.append(item)

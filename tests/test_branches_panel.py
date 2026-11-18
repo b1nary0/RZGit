@@ -5,8 +5,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QApplication
 
+from rzgitclient.core.sort_options import SortOrder
 from rzgitclient.ui.app_actions import BranchOp, WorktreeOp
 from rzgitclient.ui.panels.branches_panel import BranchesPanel
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
@@ -28,7 +31,19 @@ class BranchesPanelTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def rows(self):
-        return [self.list.item(i).text() for i in range(self.list.count())]
+        return [self.list.topLevelItem(i).text(0) for i in range(self.list.topLevelItemCount())]
+
+    def tree(self):
+        """[(heading, [its rows])], or a row's text when it is at the top."""
+        result = []
+        for i in range(self.list.topLevelItemCount()):
+            top = self.list.topLevelItem(i)
+            if top.childCount():
+                result.append((top.text(0), [top.child(j).text(0)
+                                             for j in range(top.childCount())]))
+            else:
+                result.append(top.text(0))
+        return result
 
     def test_empty_state(self):
         self.assertEqual(self.rows(), [])
@@ -44,7 +59,8 @@ class BranchesPanelTests(unittest.TestCase):
         self.ctx.session.open(self.repo)
         wait_idle(self.ctx.session)
         self.assertEqual(self.rows(), ["feature", "main"])
-        bold = {self.list.item(i).text(): self.list.item(i).font().bold() for i in range(2)}
+        bold = {self.list.topLevelItem(i).text(0): self.list.topLevelItem(i).font(0).bold()
+                for i in range(2)}
         self.assertEqual(bold, {"feature": False, "main": True})
 
     def commit_dated(self, name: str, when: str) -> None:
@@ -54,8 +70,7 @@ class BranchesPanelTests(unittest.TestCase):
                        env={**os.environ, "GIT_COMMITTER_DATE": when})
 
     def test_sort_by_name_or_last_commit(self):
-        """RZG-43: the header menu's only entry; newest first; the selection stays."""
-        self.assertEqual(self.panel.header_actions, (self.panel.sort.menuAction(),))
+        """RZG-43: newest first; the selection stays."""
         self.commit_dated("first", "2026-01-01T00:00:00+00:00")
         git(self.repo, "branch", "old")
         self.commit_dated("second", "2026-03-01T00:00:00+00:00")
@@ -66,13 +81,13 @@ class BranchesPanelTests(unittest.TestCase):
         self.ctx.session.open(self.repo)
         wait_idle(self.ctx.session)
         self.assertEqual(self.rows(), ["main", "old", "zed"])
-        self.list.setCurrentRow(1)  # old
+        self.list.setCurrentItem(self.item("old"))
         self.panel.sort.choose("last_commit")
         self.assertEqual(self.rows(), ["main", "zed", "old"])  # Mar, Feb, Jan
-        self.assertEqual(self.list.currentItem().text(), "old")
+        self.assertEqual(self.list.currentItem().text(0), "old")
         self.panel.sort.set_reversed(True)
         self.assertEqual(self.rows(), ["old", "zed", "main"])
-        self.assertTrue(self.list.item(2).font().bold())  # the current branch, still bold
+        self.assertTrue(self.list.topLevelItem(2).font(0).bold())  # the current branch, still bold
         self.assertEqual(self.ctx.sorts.order("branches").key, "last_commit")
 
     def test_selection_survives_refresh(self):
@@ -80,12 +95,111 @@ class BranchesPanelTests(unittest.TestCase):
         git(self.repo, "branch", "feature")
         self.ctx.session.open(self.repo)
         wait_idle(self.ctx.session)
-        self.list.setCurrentRow(0)  # feature
+        self.list.setCurrentItem(self.item("feature"))
         git(self.repo, "branch", "another")
         self.ctx.session.refresh()
         wait_idle(self.ctx.session)
         self.assertEqual(self.rows(), ["another", "feature", "main"])
-        self.assertEqual(self.list.currentItem().text(), "feature")
+        self.assertEqual(self.list.currentItem().text(0), "feature")
+
+    # ---- Group By (RZG-53) -------------------------------------------------
+
+    def test_header_menu_is_group_by_then_sort_by(self):
+        self.assertEqual(self.panel.header_actions, (self.panel.sort.group_menu.menuAction(),
+                                                     self.panel.sort.menuAction()))
+        self.assertEqual([a.text() for a in self.panel.sort.group_menu.actions()
+                          if not a.isSeparator()], ["&None", "Prefix", "Merged"])
+
+    def test_group_by_prefix_puts_others_last(self):
+        self.open_with_branches("fix/b", "feature/x", "feature/a", "zed", "Fix/c")
+        self.panel.sort.set_group("prefix")
+        self.assertEqual(self.tree(), [
+            ("feature/ (2)", ["feature/a", "feature/x"]),
+            ("Fix/ (1)", ["Fix/c"]),
+            ("fix/ (1)", ["fix/b"]),
+            ("Other (2)", ["main", "zed"]),
+        ])
+        self.assertTrue(self.list.isHeaderHidden())
+        self.assertTrue(self.list.rootIsDecorated())
+        self.assertEqual(self.ctx.sorts.order("branches").group, "prefix")
+        self.panel.sort.set_group(None)
+        self.assertEqual(self.rows(), ["Fix/c", "feature/a", "feature/x", "fix/b", "main", "zed"])
+        self.assertFalse(self.list.rootIsDecorated())
+
+    def test_group_by_merged_sorts_inside_each_group(self):
+        commit_file(self.repo, "a.txt", "1", "first")
+        git(self.repo, "branch", "done")
+        git(self.repo, "switch", "-q", "-c", "ahead")
+        commit_file(self.repo, "b.txt", "2", "second")
+        git(self.repo, "switch", "-q", "main")
+        git(self.repo, "branch", "also")
+        git(self.repo, "switch", "-q", "also")
+        commit_file(self.repo, "c.txt", "3", "third")
+        git(self.repo, "switch", "-q", "main")
+        self.ctx.session.open(self.repo)
+        wait_idle(self.ctx.session)
+        self.panel.sort.set_group("merged")
+        self.assertEqual(self.tree(), [("Not merged (2)", ["ahead", "also"]),
+                                       ("Merged (2)", ["done", "main"])])
+        self.panel.sort.set_reversed(True)  # only inside the groups
+        self.assertEqual(self.tree(), [("Not merged (2)", ["also", "ahead"]),
+                                       ("Merged (2)", ["main", "done"])])
+        self.assertEqual(self.panel.sort.order.group, "merged")  # the sort kept the grouping
+
+    def test_headings_fold_and_stay_folded_through_refresh(self):
+        self.open_with_branches("feature/x", "zed")
+        self.panel.sort.set_group("prefix")
+        heading = self.list.topLevelItem(0)
+        self.assertTrue(heading.isExpanded())
+        heading.setExpanded(False)
+        self.ctx.session.refresh()
+        wait_idle(self.ctx.session)
+        self.assertFalse(self.list.topLevelItem(0).isExpanded())
+        self.assertTrue(self.list.topLevelItem(1).isExpanded())
+        self.ctx.session.open(self.repo)  # another repository: open again
+        wait_idle(self.ctx.session)
+        self.assertTrue(self.list.topLevelItem(0).isExpanded())
+
+    def test_headings_are_not_selected_or_given_a_menu(self):
+        self.open_with_branches("feature/x", "zed")
+        self.panel.sort.set_group("prefix")
+        self.list.setCurrentItem(self.item("feature/x"))
+        heading = self.list.topLevelItem(1)  # Other
+        self.assertFalse(heading.flags() & Qt.ItemFlag.ItemIsSelectable)
+        rect = self.list.visualItemRect(heading)
+        with mock.patch.object(self.panel, "menu_for") as menu_for:
+            self.panel._show_menu(rect.center())
+        menu_for.assert_not_called()
+        seen = self.requests()
+        self.list.itemDoubleClicked.emit(heading, 0)
+        self.assertEqual(seen, [])
+        # Down from feature/x skips the Other heading, to main.
+        self.list.setFocus()
+        QApplication.sendEvent(self.list, QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Down,
+                                                     Qt.KeyboardModifier.NoModifier))
+        self.assertEqual(self.list.currentItem().text(0), "main")
+        QApplication.sendEvent(self.list, QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Up,
+                                                     Qt.KeyboardModifier.NoModifier))
+        self.assertEqual(self.list.currentItem().text(0), "feature/x")
+        QApplication.sendEvent(self.list, QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Up,
+                                                     Qt.KeyboardModifier.NoModifier))
+        # Nothing above but a heading: it stays.
+        self.assertEqual(self.list.currentItem().text(0), "feature/x")
+
+    def test_grouping_is_read_when_built(self):
+        self.ctx.sorts.set_order("branches", SortOrder("name", group="prefix"))
+        panel = BranchesPanel(self.ctx)
+        self.open_with_branches("feature/x")
+        self.assertEqual(panel._list.topLevelItem(0).text(0), "feature/ (1)")
+        self.assertTrue(panel.sort.group_menu.actions()[2].isChecked())  # None, ---, Prefix
+
+    def test_selection_is_kept_through_regrouping(self):
+        self.open_with_branches("feature/x", "zed")
+        self.list.setCurrentItem(self.item("zed"))
+        self.panel.sort.set_group("prefix")
+        self.assertEqual(self.list.currentItem().text(0), "zed")
+        self.panel.sort.set_group(None)
+        self.assertEqual(self.list.currentItem().text(0), "zed")
 
 
     # ---- operations (spec §5.4) ------------------------------------------
@@ -98,8 +212,7 @@ class BranchesPanelTests(unittest.TestCase):
         wait_idle(self.ctx.session)
 
     def item(self, text):
-        return next(self.list.item(i) for i in range(self.list.count())
-                    if self.list.item(i).text() == text)
+        return next(i for i in self.list.rows() if i.text(0) == text)
 
     def entries(self, menu):
         """[(text, enabled)], a submenu as (title, [its entries])."""
@@ -121,16 +234,16 @@ class BranchesPanelTests(unittest.TestCase):
     def test_double_click_asks_to_switch_except_on_the_current_branch(self):
         self.open_with_branches("feature")
         seen = self.requests()
-        self.list.itemDoubleClicked.emit(self.item("main"))
+        self.list.itemDoubleClicked.emit(self.item("main"), 0)
         self.assertEqual(seen, [])
-        self.list.itemDoubleClicked.emit(self.item("feature"))
+        self.list.itemDoubleClicked.emit(self.item("feature"), 0)
         self.assertEqual(seen, [(BranchOp.SWITCH, "feature")])
 
     def test_double_click_on_a_fresh_repo_s_row_does_nothing(self):
         self.ctx.session.open(self.repo)
         wait_idle(self.ctx.session)
         seen = self.requests()
-        self.list.itemDoubleClicked.emit(self.list.item(0))
+        self.list.itemDoubleClicked.emit(self.list.topLevelItem(0), 0)
         self.assertEqual(seen, [])
 
     def test_menu_of_another_branch(self):

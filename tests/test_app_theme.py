@@ -129,6 +129,14 @@ class AppThemeTests(unittest.TestCase):
                                     theme.name)
             self.assertNotIn("QHeaderView", theme.stylesheet())
 
+    def test_group_headings_are_a_row_of_their_own(self):
+        """RZG-53: ΔE 3 from both list backgrounds; text at least 7:1 on it."""
+        for theme in ALL_THEMES:
+            c = theme.colors
+            for other in (c.sidebar_bg, c.content_bg):
+                self.assertGreaterEqual(delta_e(c.group_header_bg, other), 3, (theme.name, other))
+            self.assertGreaterEqual(contrast(c.group_header_text, c.group_header_bg), 7, theme.name)
+
     def test_palette_and_mono_font(self):
         qt_app()
         palette = LIGHT_THEME.palette()

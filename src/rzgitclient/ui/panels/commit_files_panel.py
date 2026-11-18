@@ -30,7 +30,7 @@ class CommitFilesPanel(Panel):
     def _setup(self) -> None:
         self._list = None
         self.sort = SortMenu(self.panel_id, SORTS, self.ctx.sorts, self)
-        self.set_header_actions([self.sort.menuAction()])
+        self.set_header_actions(self.sort.header_actions())
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.set_collapsed(True)

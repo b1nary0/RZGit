@@ -3,7 +3,8 @@
 Selecting a stash sets ``selection.commit`` to it, so Commit Details, Commit
 Files and Diff show it as they show a commit. The panel never runs git or shows
 a dialog: it asks ``actions.request_stash``. Sort By (RZG-43): age (git's
-order), message or branch.
+order), message or branch. Group By (RZG-53): branch, under headings that
+can't be selected (``GroupedTree``).
 """
 
 from __future__ import annotations
@@ -18,18 +19,18 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QToolButton,
-    QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
 )
 
-from rzgitclient.core.sort_options import SortOption, SortOptions
+from rzgitclient.core.sort_options import GroupOption, SortOption, SortOptions
 from rzgitclient.git.git_models import Commit, Stash
 from rzgitclient.ui.app_actions import StashOp
 from rzgitclient.ui.panels.panel import Panel
 from rzgitclient.ui.theme.app_theme import AppTheme
 from rzgitclient.ui.theme.style_roles import Role, set_role
 from rzgitclient.ui.widgets.column_header import ColumnHeader
+from rzgitclient.ui.widgets.grouped_tree import GroupedTree
 from rzgitclient.ui.widgets.sort_menu import SortMenu
 
 NO_STASHES = "No stashes"
@@ -41,10 +42,13 @@ _SHA = Qt.ItemDataRole.UserRole
 _MINUTE_MS = 60_000
 
 # Sort By (spec §5.4): git's order is newest first; the others then by age.
+# Group By: the branch, groups by name.
 SORTS: SortOptions[Stash] = SortOptions((
     SortOption("age", "Age", column="Age"),
     SortOption("message", "Message", lambda s: s.message.casefold(), column="Message"),
     SortOption("branch", "Branch", lambda s: s.branch.casefold(), column="Branch"),
+), groups=(
+    GroupOption("branch", "Branch", lambda s: s.branch),
 ))
 
 
@@ -71,7 +75,7 @@ class StashPanel(Panel):
     panel_id = "stash"
     title = "Stashes"
 
-    _tree: QTreeWidget
+    _tree: GroupedTree
     _labels: ColumnHeader
     _placeholder: QLabel
     _stash_button: QToolButton
@@ -81,7 +85,7 @@ class StashPanel(Panel):
     def _setup(self) -> None:
         self.sort = SortMenu(self.panel_id, SORTS, self.ctx.sorts, self)
         self.sort.order_changed.connect(self._on_sorted)
-        self.set_header_actions([self.sort.menuAction()])
+        self.set_header_actions(self.sort.header_actions())
         self._stash_button = QToolButton()
         self._stash_button.setDefaultAction(self.ctx.actions.stash_changes)
         self._stash_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
@@ -90,7 +94,7 @@ class StashPanel(Panel):
         bar.addWidget(self._stash_button)
         bar.addStretch(1)
 
-        self._tree = QTreeWidget()
+        self._tree = GroupedTree(self.ctx.theme.current)
         self._labels = ColumnHeader(self.panel_id, self.ctx.columns, self.ctx.theme.current)
         self._tree.setHeader(self._labels)
         self._tree.setColumnCount(len(COLUMNS))
@@ -123,26 +127,29 @@ class StashPanel(Panel):
         self._ages.start()
 
         self.ctx.session.stashes_changed.connect(self._render)
+        self.ctx.session.repo_changed.connect(lambda _repo: self._tree.forget_folded())
         self.ctx.selection.commit_changed.connect(self._follow_selection)
         self._render()
 
     # ---- rendering --------------------------------------------------------
 
     def _render(self, _value: object = None) -> None:
-        stashes = self.sort.apply(self.ctx.session.stashes)
+        stashes = self.ctx.session.stashes
+        groups = self.sort.grouped(stashes)
+        if groups is None:
+            items = [self._item(stash) for stash in self.sort.apply(stashes)]
+        else:
+            items = []
+            for group in groups:
+                heading = self._tree.heading(group)
+                heading.addChildren([self._item(stash) for stash in group.items])
+                items.append(heading)
         blocked = self._tree.blockSignals(True)
         try:
             self._tree.clear()
-            for stash in stashes:
-                item = QTreeWidgetItem([stash.message, stash.branch, age(stash.date)])
-                item.setData(0, _SHA, stash.sha)
-                made = stash.date.astimezone().strftime("%Y-%m-%d %H:%M")
-                tip = f"{stash.message}\n\n{stash.ref} · {made}"
-                for column in range(len(COLUMNS)):
-                    item.setToolTip(column, tip)
-                for column in _MUTED:
-                    item.setForeground(column, self._muted)
-                self._tree.addTopLevelItem(item)
+            self._tree.setRootIsDecorated(groups is not None)
+            self._tree.addTopLevelItems(items)
+            self._tree.fold_headings()
         finally:
             self._tree.blockSignals(blocked)
         self._follow_selection(self.ctx.selection.commit)
@@ -151,11 +158,22 @@ class StashPanel(Panel):
         self._placeholder.setVisible(not stashes)
         self.set_header(f"{self.title} ({len(stashes):,})" if stashes else self.title)
 
+    def _item(self, stash: Stash) -> QTreeWidgetItem:
+        item = QTreeWidgetItem([stash.message, stash.branch, age(stash.date)])
+        item.setData(0, _SHA, stash.sha)
+        made = stash.date.astimezone().strftime("%Y-%m-%d %H:%M")
+        tip = f"{stash.message}\n\n{stash.ref} · {made}"
+        for column in range(len(COLUMNS)):
+            item.setToolTip(column, tip)
+        for column in _MUTED:
+            item.setForeground(column, self._muted)
+        return item
+
     def apply_theme(self, theme: AppTheme) -> None:
         self._labels.set_theme(theme)
+        self._tree.set_theme(theme)
         self._muted = QColor(theme.colors.text_muted)
-        for row in range(self._tree.topLevelItemCount()):
-            item = self._tree.topLevelItem(row)
+        for item in self._tree.rows():
             for column in _MUTED:
                 item.setForeground(column, self._muted)
 
@@ -165,8 +183,7 @@ class StashPanel(Panel):
             self._tree.scrollToItem(current)
 
     def _update_ages(self) -> None:
-        for row in range(self._tree.topLevelItemCount()):
-            item = self._tree.topLevelItem(row)
+        for item in self._tree.rows():
             if (stash := self.stash_at(item)) is not None:
                 item.setText(_AGE_COLUMN, age(stash.date))
         self._labels.fit(_AGE_COLUMN)
@@ -197,8 +214,7 @@ class StashPanel(Panel):
         sha = commit.sha if isinstance(commit, Stash) else None
         blocked = self._tree.blockSignals(True)
         try:
-            for row in range(self._tree.topLevelItemCount()):
-                item = self._tree.topLevelItem(row)
+            for item in self._tree.rows():
                 selected = item.data(0, _SHA) == sha
                 item.setSelected(selected)
                 if selected:

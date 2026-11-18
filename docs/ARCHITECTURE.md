@@ -77,8 +77,8 @@ src/rzgitclient/
     network_worker.py           NetworkWorker, NetworkCommand: remote commands (fetch, pull's fetch, push) on a thread of their own
     commit_drafts.py            CommitDrafts: the unfinished commit message of each repository (a file each)
     column_prefs.py             ColumnPrefs: each panel's column choices (hidden columns, widths)
-    sort_options.py             SortOption, SortOptions, SortOrder: a panel's sort orders (plain Python)
-    sort_prefs.py               SortPrefs: each panel's chosen sort order
+    sort_options.py             SortOption, GroupOption, SortOptions, SortOrder, Group: a panel's sort orders and groupings (plain Python)
+    sort_prefs.py               SortPrefs: each panel's chosen sort order and grouping
     preferences.py              Setting, Preferences: the settings the Settings window shows (§8.2)
     commit_graph.py             CommitGraph, GraphRow: History's branch graph lanes (plain Python)
     ref_labels.py               RefLabel, labels_by_commit: History's ref labels (plain Python)
@@ -113,7 +113,8 @@ src/rzgitclient/
       section_header.py         SectionHeader: shared widget used by frames and panels
       panel_segment.py          PanelSegment, PanelSegments: a panel's own internal sections
       column_header.py          ColumnHeader: the column labels of a list (painted from the theme)
-      sort_menu.py              SortMenu: a panel's Sort By menu and its sort order
+      sort_menu.py              SortMenu: a panel's Sort By and Group By menus and its sort order
+      grouped_tree.py           GroupedTree: a tree whose top-level rows can be group headings
     panels/
       panel.py                  Panel, PanelContext
       panel_registry.py         PANEL_TYPES, panel_type(id)
@@ -920,7 +921,33 @@ keep the natural order; `first` names rows kept at the top in every order (the m
   in `_setup`, so the menu is there while it is collapsed, and its list uses the saved
   order.
 - **History** isn't sortable: its paging and graph need commit order, and its header
-  menu keeps Topological Order (RZG-58). Grouping is a separate feature (RZG-53).
+  menu keeps Topological Order (RZG-58), and doesn't group (below).
+
+**Grouping** (RZG-53). A panel whose rows can be put under headings declares
+`GroupOption`s in its `SortOptions` (`groups`): each with a saved key, a label, a
+function giving an item's group name, and the group order: names listed in `order` come
+first, in that order, then the others by name (ignoring case), then those in `last`
+("Other"). `SortOrder.group` is the chosen option's key, `None` (the default) for no
+grouping. `grouped(items, order)` sorts, then splits the rows into `Group`s (a name and
+its items, in group order, empty groups left out): **groups come first, and the sort
+applies inside each group**. Reversed reverses only inside the groups.
+- **`SortMenu.group_menu`** is the **Group By ▸** submenu: **None**, then the options,
+  as radio items. A panel with groupings puts it just above Sort By
+  (`SortMenu.header_actions()`); one `order_changed` covers both. Choosing a sort keeps
+  the grouping, and the other way round.
+- **Headings** (`GroupedTree`, `ui/widgets/grouped_tree.py`, a `QTreeWidget`): a top-level row
+  per group, its rows under it, spanning the columns: the group's name and its count
+  ("Modified (3)"), bold, in `group_header_text` on `group_header_bg` (§7.1). While
+  grouped the tree shows the arrows (rows indented 10 px, as folders), so a heading folds
+  by its arrow or a double-click. The stylesheet ignores an item's own background, so
+  `drawRow` paints the heading's under the whole row.
+  A folded heading stays folded by its group (the grouping's key and the name), per
+  panel, while the app runs (not saved); opening another repository forgets them.
+- **Selectable or not:** in the file panels a heading is selected like a folder (§5.4).
+  In Branches and Stashes it isn't: a click on one leaves the selection as it is, the
+  arrow keys skip it, and it has no menu.
+- **Which panels:** the file panels (Status), Branches (Prefix, Merged) and Stashes
+  (Branch), §5.4. Worktrees and History don't group.
 
 `set_collapsed(True)` asks the layout to give the panel's space to its neighbours for now,
 without hiding it (§6.2): the panel stays in the tree, View → Panels still shows it
@@ -1117,8 +1144,14 @@ keeps the other operations. Like Branches, it never runs git or shows a dialog.
 **Branches** (BranchesPanel, RZG-35) is where branches are worked with. It never runs
 git or shows a dialog: it asks `actions.request_branch(op, name)` (§8), and the list
 follows the session.
-- **Sort By** (RZG-43; its header menu's only entry): **Name** (git's order, the default)
+- **Sort By** (RZG-43): **Name** (git's order, the default)
   or **Last Commit** (the tip's committer date, `Branch.date`, newest first).
+- **Group By** (RZG-53), above Sort By in the header menu: **Prefix** (the part before
+  the first `/`, shown with it: "feature/"; branches without one under "Other", last) or
+  **Merged** ("Not merged", then "Merged": `Branch.merged`). The list is a `GroupedTree`
+  with one column and no labels; the current branch stays bold, and the selection is kept
+  by name through re-sorts and refreshes. The "(no commits)" row of a fresh repository
+  is never grouped.
 - **Double-click** a branch to switch to it (MainWindow confirms first). The current
   branch, and the "(no commits)" row of a fresh repository, do nothing.
 - **Right-click** a branch for its menu, built by `menu_for(name)`:
@@ -1199,6 +1232,8 @@ says "No stashes". Like Branches, it never runs git or shows a dialog.
 - **Sort By** (RZG-43), the header menu: **Age** (git's order, newest first, the
   default), **Message** and **Branch** (ignoring case, then by age), each from its column
   label too.
+- **Group By** (RZG-53), above Sort By: **Branch** (the stash's branch; "(no branch)"
+  is a group too), groups by name.
 
 **Unstaged Files** (FilesPanel) and **Staged Files** (StagedPanel, `staged_panel.py`)
 are one list each, as in GitKraken. Both are a thin panel around a `FileList`
@@ -1294,6 +1329,13 @@ can't collapse), it shows the placeholder "No commit selected".
     tree) and **Status** (the status letter as shown, then that order), from the Name and
     Status labels too. In the tree, folders stay first and the order applies inside each
     folder (`sort_tree`); Name reversed reverses the folders too.
+  - **Group By** (RZG-53), above Sort By, saved per panel: **Status**, in this order:
+    Conflicted, Modified, Type changed, Added, Deleted, Renamed, Copied, Untracked. In
+    the tree each status group holds a folder tree of its own, so a folder may show under
+    two headings; a folder folded under one stays open under the other. "By folder" is the
+    tree itself, not a grouping. A heading is selected like a folder: it selects its
+    files, so Stage, Unstage, Discard, Enter and the menu act on them; double-click
+    folds it. The folder guides start below the headings.
   - **Expanded by default.** A folder the user collapses stays collapsed, by its path,
     through refreshes, staging and toggling, while the app runs (not saved). Opening
     another repository forgets them.
@@ -1975,7 +2017,9 @@ id: `sort_prefs` is JSON, `{"stash": {"by": "branch", "reversed": true}}`. A pan
 default order, not reversed, has no entry. Malformed entries are dropped (logged), and an
 unknown key reads as the default. Each change is written at once. A panel reads
 its order when it is built; a change applies to that panel only, so other open windows
-keep theirs until they are built again (the last change wins).
+keep theirs until they are built again (the last change wins). The grouping (RZG-53) is
+in the same entry: `{"stash": {"by": "age", "reversed": false, "group": "branch"}}`; no
+`"group"` is no grouping, and an unknown one reads as none.
 
 **Stored folder paths** (RZG-29) are canonical: `canonical_path(path)` (`git/repo.py`)
 expands `~` and resolves symlinks. `Repo.root` is git's `--show-toplevel` made canonical,
@@ -2190,6 +2234,7 @@ back where the user had it. The default place is only the fallback.
 class ThemeColors:   menubar_bg: str; toolbar_bg: str; tab_bg: str; header_bg: str; sidebar_bg: str; content_bg: str; border: str; tree_guide: str;
                      column_header_bg, column_header_text, column_header_text_hover,
                      column_header_separator, column_header_border: str   # ColumnHeader (§5.2)
+                     group_header_bg, group_header_text: str   # a group heading in a list (§5.1, RZG-53)
                      row_alt_bg: str   # every second row of a striped list (History, RZG-63); ΔE ≥ 3.5 from content_bg and ≥ 5 from content_selection (RZG-66)
                      content_hover: str   # hover in content lists: ΔE ≥ 3 from content_bg, row_alt_bg and content_selection (RZG-66)
                      floating_button_bg, floating_button_hover, floating_button_text,
@@ -2250,6 +2295,9 @@ def colour_blind_theme(base: AppTheme) -> AppTheme   # LIGHT_THEME → LIGHT_CB_
   hovered label a step stronger, and the line under the row `border`. The separators are
   at least 1.5:1 on the label background, so a 1 px line shows: `border` in the light
   theme, a step lighter in the dark one.
+- **Group headings** (RZG-53): `group_header_bg` is at least ΔE 3 from both list
+  backgrounds (sidebar and content), so a heading reads as a row of its own; its text is at
+  least 7:1 on it.
 - **Graph lanes** (RZG-58): `graph.lanes` are 8 colours a lane takes in turn, so
   neighbouring lanes differ. Each is at least 3:1 on the content background (a line
   shows), and tests require a minimum ΔE between neighbours, under every simulated kind
