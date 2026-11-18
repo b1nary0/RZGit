@@ -141,11 +141,38 @@ Tell the user which lanes started (the tab, the session ID and the base). They r
 ## 3. While lanes run
 
 - **When a lane needs the user, tell them.** Each watch event is a lane that finished its turn (questions, a plan waiting for "start", a report) or is stuck on a permission prompt. Reply with just one line naming the lane and what it needs ("RZG-58 needs you: six review questions"). Don't mention the monitor or the event.
-- **Tab colours:** the watch colours each lane's tab red (`#c0392b`) while it needs the user, green (`#3b8f5a`) once they have answered it, and blue (`#2f6fd0`) while it has stopped but is waiting on one of its own shell commands (a background task), not the user. An answer shows as a new `user` record in the lane's transcript. A lane started without the hooks gets neither colours nor events: say so.
+- Tab colours and events follow the attention highlight rules below.
 - When the user says a lane has landed, check `git -C <main> log --oneline <base>`. Then start any lane that was waiting for it (step 2).
 - If the user switches the main checkout to another branch while lanes run, lanes started on the old base stop before landing and ask (their prompt says so). New lanes take the new branch as their base.
 - If the user asks about a lane, read its issue in Linear (state, Result note) and `git -C <worktree> log`/`status`. Don't guess.
 - Don't push unless the user asks. When they do, push the base from the main checkout (`git push origin <base>`), after checking it is a fast-forward of its upstream.
+
+## Attention highlights
+
+How a lane tells the coordinator it needs the user, and how its tab shows that. `lane_hook.py` and `watch.py` implement these rules; change the scripts and this section together.
+
+**What counts as needing the user** (`lane_hook.py`, run by the lane's own hooks):
+- **Stop**: the lane finished its turn. The event reads `waiting for you: <the end of its last message>` (up to 200 characters).
+- **Notification**: only a **permission prompt** counts (`needs permission: <message>`). Idle reminders are ignored, since they repeat the Stop event.
+- Each event appends one line to `<dir>/attention.log` (`HH:MM <lane> <what>`) and records `<dir>/state/<lane>.json`: the lane's Konsole session (`KONSOLE_DBUS_SESSION`), its transcript, the transcript's size at that moment, the state `attention`, and the event.
+
+**Tab colours** (`watch.py`, run by the coordinator as a Monitor):
+
+| Colour | Hex       | When |
+|--------|-----------|------|
+| red    | `#c0392b` | the lane needs the user: a Stop or a permission prompt they haven't answered |
+| green  | `#3b8f5a` | the user has answered: a new `user` record in the lane's transcript after the recorded size |
+| blue   | `#2f6fd0` | the lane stopped, but one of its own shell commands is still running (a background task), so it's waiting on that, not the user |
+
+- Blue applies only to a Stop. A permission prompt stays red even while a shell command runs. The check is a `shell-snapshots` child of the lane's `claude` process under the tab's shell.
+- A tab is recoloured only when its colour changes. A lane with no Konsole session in its state file gets events but no colour.
+- The watch needs `KONSOLE_DBUS_SERVICE`; outside Konsole it can't run. Say so, and read `attention.log` yourself instead.
+
+**The coordinator's side:**
+- Each line the watch prints is one event: reply in one line, as in step 3.
+- The watch starts reading `attention.log` from its current end. When you re-arm it after it expired, read the log lines written since the last event you saw, so nothing is missed.
+- A lane started without the hooks (no `--settings` file) gets neither colours nor events: say so.
+- Removing a lane's state file (step 4) stops the watch colouring its tab. The tab keeps its last colour.
 
 ## 4. Clean up (when the user says the lanes are done)
 
