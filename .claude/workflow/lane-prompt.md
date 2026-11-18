@@ -1,9 +1,11 @@
+<!-- Lane prompt for RZGitClient. The lanes skill fills in the {{PLACEHOLDERS}}; see its step 2. Per repository, never synced. -->
 You are lane {{LANE}}, one of several parallel lanes working on RZGitClient (a PySide6 git client). Linear team RZG. Your issue: {{ISSUE}}.
 
 ## Where you work
 - Your worktree is /home/JPOD/dev/RZGitClient-{{LANE}}, on branch {{LANE}}. Work only there.
+- You land on `{{BASE}}`: the branch the main checkout was on when you started.
 - Never edit:
-  - /home/JPOD/dev/RZGitClient (the main checkout, on `main`)
+  - /home/JPOD/dev/RZGitClient (the main checkout, on `{{BASE}}`)
   - another lane's worktree (/home/JPOD/dev/RZGitClient-RZG-*)
   - anything under .claude/worktrees (other sessions)
 - Other lanes running at the same time:
@@ -20,7 +22,7 @@ Do the same for any script that imports rzgitclient, or have it insert your work
 
 ## The workflow
 First read, in this order:
-1. /home/JPOD/dev/RZGitClient/.claude/skills/linear/SKILL.md: how this project uses Linear, including archiving. Use the main checkout's copy, which is always the current one.
+1. /home/JPOD/dev/RZGitClient/.claude/skills/linear/SKILL.md and /home/JPOD/dev/RZGitClient/.claude/workflow/linear.md: how this project uses Linear, including archiving. Use the main checkout's copies, which are always the current ones.
 2. The description of the Linear project "Core Workflow".
 3. CLAUDE.md.
 Then:
@@ -29,8 +31,8 @@ Then:
 3. **Build:** set the issue In Progress, and its parent epic too, if any. Update docs/ARCHITECTURE.md first, then the code and tests.
 4. **Verify:**
    - The full suite 5x (the command above).
-   - An offscreen render compared with main:
-     - Make a temporary worktree of `main`: `git worktree add --detach <fresh mktemp -d path>/head main`.
+   - An offscreen render compared with `{{BASE}}`:
+     - Make a temporary worktree of `{{BASE}}`: `git worktree add --detach <fresh mktemp -d path>/head {{BASE}}`.
      - Use a fresh `mktemp -d` settings folder (XDG_CONFIG_HOME).
      - Remove the worktree afterwards with `git worktree remove <literal path>`.
    - A real Wayland launch (QT_QPA_PLATFORM=wayland) against /home/JPOD/dev/RZE, with startup timing. Other lanes may be running launches and test suites at the same time, so say the timings are noisy.
@@ -38,11 +40,12 @@ Then:
    - Mutation checks: break each key piece and confirm a test fails. Restore from a scratchpad copy, never with `git checkout`.
 5. **Report:** set the issue In Review and add a "**Result (date, uncommitted):**" note.
 6. **Commit** only when the user says yes. Then:
-   - `git rebase main`, resolving conflicts if main moved (other lanes land on main too). Rerun the full suite once.
+   - Check the main checkout is still on `{{BASE}}` (`git -C /home/JPOD/dev/RZGitClient branch --show-current`). If it isn't, stop and ask the user.
+   - `git rebase {{BASE}}`, resolving conflicts if it moved (other lanes land on it too). Rerun the full suite once.
    - One commit titled `{{LANE}}: <issue title without the [Feature]/[Architecture] prefix>`, ending with the line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-   - Land it: `git -C /home/JPOD/dev/RZGitClient merge --ff-only {{LANE}}`. If that fails because main moved, rebase again, rerun the suite and retry.
+   - Land it: `git -C /home/JPOD/dev/RZGitClient merge --ff-only {{LANE}}`. If that fails because `{{BASE}}` moved, rebase again, rerun the suite and retry.
    - Never force anything, never merge non-fast-forward, never commit in the main checkout, never push.
-   - Set the issue Done, and replace "uncommitted" with the hash now on main. Then run the archive sweep: `python3 /home/JPOD/dev/RZGitClient/.claude/skills/linear/archive_closed.py`.
+   - Set the issue Done, and replace "uncommitted" with the hash now on `{{BASE}}`. Then run the archive sweep: `python3 /home/JPOD/dev/RZGitClient/.claude/skills/linear/archive_closed.py --team RZG`.
    - Tell the user the lane has landed, so the coordinator can start any lane waiting for it.
 
 ## Rules from this user (carry them exactly)

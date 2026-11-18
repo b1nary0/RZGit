@@ -1,0 +1,50 @@
+# Linear conventions: RZGitClient (team RZG)
+
+Per repository, never synced. The shared rules (archiving, the API key, views, editing quirks) are in
+`.claude/skills/linear/SKILL.md`.
+
+**Workspace and teams**
+- The workspace is `rze`. It has two teams:
+  - **RZG**: RZGitClient, this repository.
+  - **RZE**: the user's engine. Don't work its issues from here.
+- RZG's projects:
+  - **Core Workflow**: the everyday features. Its description holds the agreed per-issue workflow (its "Notes" section) and is the source of truth for it.
+  - **App Architecture**: architecture work.
+  - **UI**: look and feel.
+
+## Writing an issue
+
+- **Check for a duplicate first** (`list_issues` with a `query`).
+- **Title:** `[Feature]`, `[Bug]`, `[Architecture]` or `[Epic]`, then a plain description: `[Feature] Stash panel: list, inspect, apply, pop and drop stashes`.
+- **Labels:** `Claude`, plus `Feature`, `Bug` or `Improvement`. Put the issue in the right project.
+- **Body**, for people to read: short sentences, and the same word for the same thing throughout.
+  1. What changes and why: a short paragraph.
+  2. `**Spec:**` the `docs/ARCHITECTURE.md` sections (§) it changes.
+  3. `**Done when**`: checkable bullets.
+  4. `**Questions to review**`: numbered, each ending with `*Recommended:* …`.
+  5. Related issues.
+  6. Detail for agents (plans, file lists, logs) goes last, in a collapsible section named **Notes**: `+++ Notes` … `+++`. Never "Agent notes".
+- **A placeholder** ("we'll discuss it later") says so, and lists what is to be discussed instead of "Done when".
+- **Images** the user shares are never attached to issues. Record what you derive from them as text.
+
+## Working an issue
+
+Follow the Core Workflow description; in short:
+
+1. **Review:** go through the questions with the user, with recommendations. Record the answers under `**Decisions** (date)` in the issue. A change made while building is noted in the Result.
+2. **Plan:** a short plan. Wait for "start".
+3. **Build:** set the issue **In Progress**, and its **parent epic In Progress** too. Then `docs/ARCHITECTURE.md` first, then the code and tests.
+4. **Verify:** the suite 5× (2× for a small issue, done in the coordinator), an offscreen render compared with main, and a Wayland launch on RZE with timings.
+5. **Report:** set it **In Review**. Add `**Result (date, uncommitted):**` before the Notes: what was done, any changes from the decisions, and the test, mutation-check and timing results.
+6. **Commit** only on the user's yes:
+   - one commit `RZG-N: <title without the prefix>`, ending with the Co-Authored-By line
+   - set the issue **Done**, and replace "uncommitted" with the hash
+   - then **archive** (the linear skill)
+   - push only when the user asks
+
+For parallel work, see the `lanes` skill.
+
+**Epics**
+- An epic (`[Epic]`) has its parts as child issues (`parentId`).
+- When a child goes In Progress, the epic does too. When its last child closes, ask the user before closing the epic.
+- Closing the epic archives it with all its children.

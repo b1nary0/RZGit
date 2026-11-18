@@ -1,12 +1,15 @@
-"""Archive the workspace's closed issues, by the archiving rule of the linear skill.
+"""Archive one team's closed issues, by the archiving rule of the linear skill.
 
 An issue is archived when it is Done or Canceled (any completed or canceled
 state) and either has no parent, or its parent is closed too. A parent takes
 all its children with it, whatever their state. A closed child of an open
 parent stays until its parent closes.
 
-    python3 archive_closed.py --dry-run   # list what would be archived
-    python3 archive_closed.py             # archive it
+    python3 archive_closed.py --team RZG --dry-run   # list what would be archived
+    python3 archive_closed.py --team RZG             # archive it
+
+The team key comes from the repository's .claude/workflow/repo.md. A parent takes
+its children with it even when a child belongs to another team.
 
 The API key is read from ~/.config/linear-api-key and never printed.
 """
@@ -22,7 +25,8 @@ from pathlib import Path
 API = "https://api.linear.app/graphql"
 KEY_FILE = Path.home() / ".config" / "linear-api-key"
 
-ISSUES = """query($after: String) { issues(first: 100, after: $after) { nodes {
+ISSUES = """query($after: String, $team: String!) {
+  issues(first: 100, after: $after, filter: { team: { key: { eq: $team } } }) { nodes {
   id identifier title archivedAt state { name type } team { key }
   parent { identifier state { type } }
   children { nodes { id identifier archivedAt state { type } } } }
@@ -50,11 +54,11 @@ def closed(state: dict) -> bool:
     return state["type"] in ("completed", "canceled")
 
 
-def to_archive() -> list[dict]:
+def to_archive(team: str) -> list[dict]:
     """The issues to archive, children before their parents."""
     rows, after = [], None
     while True:
-        page = gql(ISSUES, {"after": after})["issues"]
+        page = gql(ISSUES, {"after": after, "team": team})["issues"]
         rows += page["nodes"]
         if not page["pageInfo"]["hasNextPage"]:
             break
@@ -76,8 +80,11 @@ def to_archive() -> list[dict]:
 
 
 def main() -> None:
-    dry = "--dry-run" in sys.argv
-    issues = to_archive()
+    args = sys.argv[1:]
+    dry = "--dry-run" in args
+    if "--team" not in args or args.index("--team") + 1 >= len(args):
+        raise SystemExit("usage: archive_closed.py --team <KEY> [--dry-run]")
+    issues = to_archive(args[args.index("--team") + 1])
     for issue in issues:
         state = issue["state"]["type"]
         if dry:
