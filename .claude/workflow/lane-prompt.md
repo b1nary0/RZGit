@@ -2,11 +2,11 @@
 You are lane {{LANE}}, one of several parallel lanes working on RZGit (a PySide6 git client). Linear team RZG. Your issue: {{ISSUE}}.
 
 ## Where you work
-- Your worktree is /home/JPOD/dev/RZGitClient-{{LANE}}, on branch {{LANE}}. Work only there.
+- Your worktree is /home/JPOD/dev/RZGit-{{LANE}}, on branch {{LANE}}. Work only there.
 - You land on `{{BASE}}`: the branch the main checkout was on when you started.
 - Never edit:
-  - /home/JPOD/dev/RZGitClient (the main checkout, on `{{BASE}}`)
-  - another lane's worktree (/home/JPOD/dev/RZGitClient-RZG-*)
+  - /home/JPOD/dev/RZGit (the main checkout, on `{{BASE}}`)
+  - another lane's worktree (/home/JPOD/dev/RZGit-RZG-*)
   - anything under .claude/worktrees (other sessions)
 - Other lanes running at the same time:
 {{OTHER_LANES}}
@@ -16,13 +16,13 @@ You are lane {{LANE}}, one of several parallel lanes working on RZGit (a PySide6
 {{DEPENDS}}
 
 ## Python and tests (important)
-The shared venv is /home/JPOD/dev/RZGitClient/.venv. Its editable install points at the MAIN checkout's src, so always put your own src first. From your worktree root:
-  PYTHONPATH=src /home/JPOD/dev/RZGitClient/.venv/bin/python -m unittest discover -v -s tests -t .
+The shared venv is /home/JPOD/dev/RZGit/.venv. Its editable install points at the MAIN checkout's src, so always put your own src first. From your worktree root:
+  PYTHONPATH=src /home/JPOD/dev/RZGit/.venv/bin/python -m unittest discover -v -s tests -t .
 Do the same for any script that imports rzgit, or have it insert your worktree's src at sys.path[0]. Check once that `rzgit.__file__` resolves into your worktree.
 
 ## The workflow
 First read, in this order:
-1. /home/JPOD/dev/RZGitClient/.claude/skills/linear/SKILL.md and /home/JPOD/dev/RZGitClient/.claude/workflow/linear.md: how this project uses Linear, including archiving. Use the main checkout's copies, which are always the current ones.
+1. /home/JPOD/dev/RZGit/.claude/skills/linear/SKILL.md and /home/JPOD/dev/RZGit/.claude/workflow/linear.md: how this project uses Linear, including archiving. Use the main checkout's copies, which are always the current ones.
 2. The description of the Linear project "Core Workflow".
 3. CLAUDE.md.
 Then:
@@ -40,14 +40,14 @@ Then:
    - Mutation checks: break each key piece and confirm a test fails. Restore from a scratchpad copy, never with `git checkout`.
 5. **Report:** set the issue In Review and add a "**Result (date, uncommitted):**" note.
 6. **Commit** only when the user says yes. Then:
-   - Check the main checkout is still on `{{BASE}}` (`git -C /home/JPOD/dev/RZGitClient branch --show-current`). If it isn't, stop and ask the user.
+   - Check the main checkout is still on `{{BASE}}` (`git -C /home/JPOD/dev/RZGit branch --show-current`). If it isn't, stop and ask the user.
    - `git rebase {{BASE}}`, resolving conflicts if it moved (other lanes land on it too). Rerun the full suite once.
    - One commit titled `{{LANE}}: <issue title without the [Feature]/[Architecture] prefix>`, ending with the line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-   - Land it: `git -C /home/JPOD/dev/RZGitClient merge --ff-only {{LANE}}`. If that fails because `{{BASE}}` moved, rebase again, rerun the suite and retry.
+   - Land it: `git -C /home/JPOD/dev/RZGit merge --ff-only {{LANE}}`. If that fails because `{{BASE}}` moved, rebase again, rerun the suite and retry.
    - Never force anything, never merge non-fast-forward, never commit in the main checkout, never push.
-   - Set the issue Done, and replace "uncommitted" with the hash now on `{{BASE}}`. Then run the archive sweep: `python3 /home/JPOD/dev/RZGitClient/.claude/skills/linear/archive_closed.py --team RZG`.
+   - Set the issue Done, and replace "uncommitted" with the hash now on `{{BASE}}`. Then run the archive sweep: `python3 /home/JPOD/dev/RZGit/.claude/skills/linear/archive_closed.py --team RZG`.
    - Tell the user the lane has landed, so the coordinator can start any lane waiting for it.
-   - Last, mark the lane free: `python3 /home/JPOD/dev/RZGitClient/.claude/skills/lanes/lane_hook.py "$LANE_DIR" "$LANE_NAME" done`. Its tab turns green. (If `LANE_DIR` is unset, you were started without the hooks: skip it.)
+   - Last, mark the lane free: `python3 /home/JPOD/dev/RZGit/.claude/skills/lanes/lane_hook.py "$LANE_DIR" "$LANE_NAME" done`. Its tab turns green. (If `LANE_DIR` is unset, you were started without the hooks: skip it.)
 
 ## Rules from this user (carry them exactly)
 - Short, token-efficient replies.

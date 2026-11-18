@@ -6,12 +6,12 @@ differs between repositories. It's per repository and never synced.
 | Setting            | Value                                                        |
 |--------------------|--------------------------------------------------------------|
 | Repository         | RZGit (a PySide6 git client)                                 |
-| Main checkout      | `/home/JPOD/dev/RZGitClient`                                 |
+| Main checkout      | `/home/JPOD/dev/RZGit`                                       |
 | Linear team        | `RZG` (workspace `rze`)                                      |
 | Archive sweep      | on: `python3 <main>/.claude/skills/linear/archive_closed.py --team RZG` |
 | Lane name          | `RZG-N` (the issue ID)                                       |
-| Lane worktree      | `/home/JPOD/dev/RZGitClient-RZG-N`, branch `RZG-N`          |
-| Small-items lane   | worktree `/home/JPOD/dev/RZGitClient-small`, tab `RZG-small`, hook name `small` |
+| Lane worktree      | `/home/JPOD/dev/RZGit-RZG-N`, branch `RZG-N`                 |
+| Small-items lane   | worktree `/home/JPOD/dev/RZGit-small`, tab `RZG-small`, hook name `small` |
 | Lanes by default   | yes: lanes is the default way to work an RZG issue          |
 | Peer repository    | `/home/JPOD/dev/RZE` (for `sync-workflow`)                   |
 
@@ -35,6 +35,6 @@ Issues that edit these overlap and must rebase carefully:
 
 ## Rules every lane carries (they're in `lane-prompt.md`; keep them in sync)
 
-- Python from the shared venv, with the lane's own src first: `PYTHONPATH=src /home/JPOD/dev/RZGitClient/.venv/bin/python …`. The editable install points at the main checkout.
+- Python from the shared venv, with the lane's own src first: `PYTHONPATH=src /home/JPOD/dev/RZGit/.venv/bin/python …`. The editable install points at the main checkout.
 - Anything that writes to a repository uses a scratch clone of RZE, never `/home/JPOD/dev/RZE` itself. Timings are noisy while other lanes run.
 - The user's standing rules: short replies; no `rm -rf` on variable paths; the Linear section is "Notes"; an epic goes In Progress with its child; no images in Linear; never print the Linear API key; no hard-coded colours outside `ui/theme`; layering git/ → core/ → ui/.
