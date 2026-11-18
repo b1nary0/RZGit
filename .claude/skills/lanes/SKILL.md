@@ -1,6 +1,7 @@
 ---
 name: lanes
 description: Run several RZG Linear issues in parallel as "lanes" - one git worktree, one Konsole tab and one Claude session per issue, each named after its issue ID (RZG-N). This is the default way to work an RZG issue: use it whenever the user asks to work on, start or do one, except a small issue (done in the coordinator session, or on the small-items lane) or when they ask to do it in the current session. Also for planning which issues can run side by side.
+argument-hint: "[-N] [graph | RZG-n ...]"
 ---
 
 # Lanes: parallel issues in Konsole tabs
@@ -14,6 +15,23 @@ One lane works on one Linear issue. A lane is named after its issue's ID, **RZG-
 Each lane is a Claude session in its own tab. It runs the issue's normal per-issue workflow with the user (review, plan, build, verify, report, commit) and lands its commit on `main` by fast-forward.
 
 This session is the **coordinator**. It plans the lanes, starts them, starts lanes that were waiting, and cleans up. It doesn't do lane work itself, apart from small issues (step 0). While lanes run, it never commits in the main checkout or edits it: lanes fast-forward `main` there.
+
+## Arguments
+
+`/lanes -N …` sets **N, the most lanes running at once** for this invocation; for example `/lanes -4` allows four. It counts every lane tab this coordinator has open, including the small-items lane, but not lanes from other sessions. Without `-N`, the limit is 3. The rest of the arguments name the issues to run (`/lanes -2 RZG-12 RZG-14`); with none, use the issues the user names in the request.
+
+While lanes run, the limit holds: when a lane lands and frees a slot, start the next waiting issue; when every slot is full, an unblocked issue waits for one. Tell the user in one line when an unblocked issue is waiting for a slot. The user can change N at any time ("allow 5 lanes").
+
+## Running a work graph (`/lanes -N graph`)
+
+`graph` runs the team's work graph, built with the work-graph skill: `~/.claude/work-graphs/RZG.md`. If the file is missing, or its Status isn't `active`, say so and stop.
+
+- **Linear holds the edges.** Never trust a copy: each time you decide what to start, read each open node's blocked-by relations from Linear. A blocker counts as cleared when it's Done or Canceled, or archived. Pick up any change the user or a lane made there.
+- **What can start:** a node whose blockers are all cleared, that isn't `held` or an `epic`, and that has no lane yet. Start them in wave order, up to N lanes (Arguments). A `small` node goes to the small-items lane, in order, or to the coordinator if the user prefers. A `discussion first` node's prompt says its lane starts with the review. The last-alone node starts only when every other node is done and no lane is running.
+- **Catching landings:** run a background Bash that exits when `main` moves (`X=$(git rev-parse main); until [ "$(git rev-parse main)" != "$X" ]; do sleep 5; done; git log --format=%s "$X"..main`). Each time it exits, work out what to start, start it, and re-arm the watch. Say so in one line when you start something; stay silent when nothing was unblocked.
+- **Only graph nodes get lanes.** A new task joins the graph only if it directly relates to graph work: a split of a node into an epic's children, or an issue that blocks a node. Add it to the file's Nodes with a Log line. Everything else goes to the backlog, with no lane.
+- **Epics:** when all of an epic's children are done, ask the user before closing it.
+- **Keep the file current:** log each landing, each lane started, and each change the user makes (a hold, a reorder, a dropped node). When every node is done, set Status to `done` and tell the user.
 
 ## 0. Lane or coordinator?
 
@@ -47,7 +65,7 @@ A small issue follows the same per-issue workflow, except that the full suite ru
    - **starts later**: the coordinator starts it once the other has landed; or
    - **starts now, lands after**: it builds the parts that don't depend on the other, and lands only after the other's commit is on `main`. Its prompt says so.
 
-   Keep it to about 3 lanes at a time, unless the user asks for more.
+   Keep it to N lanes at a time (see Arguments; 3 if not given).
 5. **Wait for the user's go.** Don't create worktrees or tabs before it.
 
 ## 2. Start the lanes
