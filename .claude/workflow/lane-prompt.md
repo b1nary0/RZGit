@@ -47,6 +47,7 @@ Then:
    - Never force anything, never merge non-fast-forward, never commit in the main checkout, never push.
    - Set the issue Done, and replace "uncommitted" with the hash now on `{{BASE}}`. Then run the archive sweep: `python3 /home/JPOD/dev/RZGitClient/.claude/skills/linear/archive_closed.py --team RZG`.
    - Tell the user the lane has landed, so the coordinator can start any lane waiting for it.
+   - Last, mark the lane free: `python3 /home/JPOD/dev/RZGitClient/.claude/skills/lanes/lane_hook.py "$LANE_DIR" "$LANE_NAME" done`. Its tab turns green. (If `LANE_DIR` is unset, you were started without the hooks: skip it.)
 
 ## Rules from this user (carry them exactly)
 - Short, token-efficient replies.
