@@ -169,6 +169,8 @@ class FileDiff:
     binary: bool = False
     too_large: bool = False  # over the size limit: not parsed, no hunks
     line_count: int = 0  # lines of git's output; set even when too_large
+    new_mode: str | None = None  # an added file's mode ("100644"), from git's header
+    deleted_mode: str | None = None  # a deleted file's mode
 
 
 @dataclass(frozen=True)

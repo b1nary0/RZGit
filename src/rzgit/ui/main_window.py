@@ -3,9 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from PySide6.QtCore import QEvent, Signal
+from PySide6.QtCore import QEvent, QTimer, Signal
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox
+from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QWidget,
+)
 
 from rzgit.core.app_settings import AppSettings
 from rzgit.core.network_worker import NetworkKind
@@ -79,6 +86,7 @@ class MainWindow(QMainWindow):
         session.busy_changed.connect(self._busy_label.setVisible)
         session.network_changed.connect(self._on_network_changed)
         session.network_progress.connect(self._network_label.setText)
+        ctx.saver.saved.connect(self._on_saved)  # spec §8.3
 
     # ---- construction -------------------------------------------------
 
@@ -160,6 +168,10 @@ class MainWindow(QMainWindow):
         self.layout_host.apply(state)
         self.setCentralWidget(self.layout_host)
         self.statusBar().showMessage("No repository open")
+        self._saved_notice = QTimer(self)  # "Saved <path>" stays this long (spec §8.3)
+        self._saved_notice.setSingleShot(True)
+        self._saved_notice.setInterval(SAVED_NOTICE_MS)
+        self._saved_notice.timeout.connect(self._update_status_bar)
         # Beside the summary, not replacing it.
         self._busy_label = QLabel("Loading…")
         self._busy_label.setVisible(self.session.busy)
@@ -358,7 +370,15 @@ class MainWindow(QMainWindow):
     def _show_notice(self, message: str) -> None:
         QMessageBox.information(self, "RZGit", message)
 
+    def _on_saved(self, path: object, origin: object) -> None:
+        """A save from this window: say so in the status bar for a while (spec §8.3)."""
+        if isinstance(origin, QWidget) and origin.window() is self:
+            self.statusBar().showMessage(f"Saved {path}")
+            self._saved_notice.start()  # then the summary again
+
     def _update_status_bar(self, _value: object = None) -> None:
+        if self._saved_notice.isActive():
+            return  # it comes back when the notice ends
         s = self.session
         if s.repo is None:
             self.statusBar().showMessage("No repository open")
@@ -371,6 +391,7 @@ class MainWindow(QMainWindow):
 
 
 _LISTED = 10  # files named in the discard confirmation
+SAVED_NOTICE_MS = 5000  # how long "Saved <path>" shows in the status bar (spec §8.3)
 
 
 def commit_summary(loaded: int, complete: bool, count: int | None) -> str:

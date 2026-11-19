@@ -8,6 +8,7 @@ from rzgit import __version__
 from rzgit.core.app_settings import AppSettings
 from rzgit.core.column_prefs import ColumnPrefs
 from rzgit.core.commit_drafts import CommitDrafts, drafts_folder
+from rzgit.core.file_saver import FileSaver
 from rzgit.core.gc_on_main_thread import GcOnMainThread
 from rzgit.core.old_name_migration import migrate_old_name
 from rzgit.core.preferences import Preferences
@@ -15,6 +16,7 @@ from rzgit.core.recent_repos import RecentRepos
 from rzgit.core.sort_prefs import SortPrefs
 from rzgit.ui.app_icon import app_icon
 from rzgit.ui.app_windows import AppWindows
+from rzgit.ui.save_dialog import SaveDialog
 from rzgit.ui.theme.theme_manager import ThemeManager, ThemeMode
 
 
@@ -36,7 +38,8 @@ def main(argv: list[str] | None = None) -> int:
     # Shared by every window (spec §8.1); drafts saved by older versions move to files.
     drafts = CommitDrafts(drafts_folder(), legacy=settings)
     windows = AppWindows(app, settings, theme, drafts, ColumnPrefs(settings),
-                         SortPrefs(settings), prefs=prefs, recent=RecentRepos(settings))
+                         SortPrefs(settings), prefs=prefs, recent=RecentRepos(settings),
+                         saver=SaveDialog(FileSaver(settings)))  # every save (spec §8.3)
 
     window = windows.new_window()
     window.show()

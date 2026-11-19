@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QStyle
 from rzgit.core.app_settings import AppSettings
 from rzgit.core.column_prefs import ColumnPrefs
 from rzgit.core.commit_drafts import CommitDrafts
+from rzgit.core.file_saver import FileSaver
 from rzgit.core.preferences import Preferences
 from rzgit.core.recent_repos import RecentRepos
 from rzgit.core.repo_session import RepoSession
@@ -28,6 +29,7 @@ from rzgit.git.repo import GitError, Repo, canonical_path
 from rzgit.ui.app_actions import AppActions
 from rzgit.ui.main_window import MainWindow
 from rzgit.ui.panels.panel import PanelContext
+from rzgit.ui.save_dialog import SaveDialog
 from rzgit.ui.settings_window import SettingsWindow, show_window
 from rzgit.ui.theme.theme_manager import ThemeManager
 
@@ -57,12 +59,14 @@ class AppWindows(QObject):
     def __init__(self, app: QApplication, settings: AppSettings, theme: ThemeManager,
                  drafts: CommitDrafts, columns: ColumnPrefs, sorts: SortPrefs,
                  parent: QObject | None = None, *, prefs: Preferences | None = None,
-                 recent: RecentRepos | None = None):
+                 recent: RecentRepos | None = None, saver: SaveDialog | None = None):
         """``prefs``: the app's settings (§8.2); ``recent``: the repositories opened
-        recently (§6.3). Each is in memory if not given (tests)."""
+        recently (§6.3); ``saver``: saving files (§8.3). Each is in memory if not given
+        (tests)."""
         super().__init__(parent)
         self._prefs = prefs if prefs is not None else Preferences(parent=self)
         self._recent = recent if recent is not None else RecentRepos(parent=self)
+        self._saver = saver if saver is not None else SaveDialog(FileSaver(parent=self))
         self._settings_window: SettingsWindow | None = None
         self._app = app
         self._settings = settings
@@ -119,7 +123,7 @@ class AppWindows(QObject):
         ctx = PanelContext(session=session, selection=selection, theme=self._theme,
                            actions=actions, drafts=self._drafts, columns=self._columns,
                            sorts=self._sorts, worktrees=worktrees, prefs=self._prefs,
-                           recent=self._recent)
+                           recent=self._recent, saver=self._saver)
         window = MainWindow(ctx, self._settings, self, restore_geometry=anchor is None)
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         # Its own objects are deleted with it (after its panels, which are connected

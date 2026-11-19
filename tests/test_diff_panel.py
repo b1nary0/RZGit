@@ -7,7 +7,7 @@ from PySide6.QtCore import QCoreApplication, QEvent, QPoint, Qt, QThread
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from rzgit.core.diff_patch import hunk_lines
+from rzgit.core.diff_patch import all_lines, copy_patch, hunk_lines
 from rzgit.core.selection import FileSelection, FileSource
 from rzgit.ui.app_actions import OPEN_IN_VSCODE_TEXT as VSCODE, HunkHeaders
 from rzgit.ui.panels import diff_panel
@@ -18,6 +18,15 @@ from tests.support import commit_file, git, make_panel_context, make_repo, qt_ap
 
 A = FileSelection("a.txt", FileSource.WORKTREE)
 B = FileSelection("b.txt", FileSource.WORKTREE)
+PATCH_ENTRIES = ["Copy as Patch", "Save as Patch"]  # submenus (RZG-76)
+COPY_ENTRIES = ["Hunk", "Selected Lines\tCtrl+Shift+C", "File"]
+SAVE_ENTRIES = ["Hunk…", "Selected Lines…", "File…"]
+
+
+def patch_action(menu, submenu, entry):
+    """The action ``entry`` (its text up to a tab) of ``menu``'s submenu ``submenu``."""
+    sub = next(a.menu() for a in menu.actions() if a.text() == submenu)
+    return next(a for a in sub.actions() if a.text().split("\t")[0] == entry)
 
 
 class DiffPanelTests(unittest.TestCase):
@@ -276,6 +285,10 @@ class DiffPanelHunkTests(unittest.TestCase):
         wait_idle(self.session)
         QCoreApplication.processEvents()
 
+    def trigger_patch(self, menu, submenu, entry):
+        patch_action(menu, submenu, entry).trigger()
+        QCoreApplication.processEvents()
+
     def test_the_hunk_link_stages_one_hunk_and_keeps_the_scroll(self):
         self.select("a.txt")
         view = self.panel._unified
@@ -299,6 +312,7 @@ class DiffPanelHunkTests(unittest.TestCase):
         self.assertEqual(self.entries(menu), [
             ("Stage Hunk", True), ("Stage Selected Lines", True),
             ("Discard Hunk…", True), ("Discard Selected Lines…", True), ("Copy", False),
+            *((text, True) for text in PATCH_ENTRIES),
             (VSCODE, False)])
 
     def test_stage_the_clicked_line_only(self):
@@ -317,7 +331,7 @@ class DiffPanelHunkTests(unittest.TestCase):
         self.assertEqual(view._link, "Unstage Hunk")
         menu = self.menu(view, 4)
         self.assertEqual([t for t, _ in self.entries(menu)],
-                         ["Unstage Hunk", "Unstage Selected Lines", "Copy", VSCODE])
+                         ["Unstage Hunk", "Unstage Selected Lines", "Copy", *PATCH_ENTRIES, VSCODE])
         self.trigger(menu, "Unstage Hunk")
         self.assertNotIn("FIVE", self.index("a.txt"))
         self.assertIn("NINETY", self.index("a.txt"))
@@ -327,7 +341,7 @@ class DiffPanelHunkTests(unittest.TestCase):
         view = self.panel._unified
         menu = self.menu(view, 1)
         self.assertEqual([t for t, _ in self.entries(menu)],
-                         ["Stage Hunk", "Stage Selected Lines", "Copy", VSCODE])
+                         ["Stage Hunk", "Stage Selected Lines", "Copy", *PATCH_ENTRIES, VSCODE])
         self.trigger(menu, "Stage Selected Lines")
         self.assertEqual(self.index("new.txt"), "one\n")
 
@@ -363,7 +377,9 @@ class DiffPanelHunkTests(unittest.TestCase):
         wait_idle(self.session)
         view = self.panel._unified
         self.assertEqual(view._link, "")
-        self.assertEqual(self.entries(self.menu(view, 1)), [("Copy", False), (VSCODE, False)])
+        self.assertEqual(self.entries(self.menu(view, 1)),
+                         [("Copy", False), *((text, True) for text in PATCH_ENTRIES),
+                          (VSCODE, False)])
 
     def test_open_with_vs_code_opens_the_shown_file_at_the_line_under_the_pointer(self):
         self.select("a.txt")
@@ -462,6 +478,111 @@ class DiffPanelHunkTests(unittest.TestCase):
         self.assertEqual(QApplication.clipboard().text(), "ne 4\nli")
         self.trigger(menu, "Stage Selected Lines")
         self.assertIn("line 4\nline 6\n", self.index("a.txt"))
+
+    # ---- Copy as Patch (RZG-76) ------------------------------------------------
+
+    def test_copy_hunk_selected_lines_and_file_as_patch(self):
+        self.select("a.txt")
+        view, diff = self.panel._unified, self.session.diff
+        chosen = [n for n, r in enumerate(view.rows) if r.text in ("line 5", "FIVE")]
+        view.selection.set_rows(chosen)
+        menu = self.menu(view, len(view.rows) - 2)  # the selection, in the second hunk
+        sub = next(a.menu() for a in menu.actions() if a.text() == "Copy as Patch")
+        self.assertEqual([a.text() for a in sub.actions()], COPY_ENTRIES)
+        for entry, lines in (("Hunk", hunk_lines(diff, 1)),
+                             ("Selected Lines", view.selected_lines()),
+                             ("File", all_lines(diff))):
+            QApplication.clipboard().clear()
+            self.trigger_patch(menu, "Copy as Patch", entry)
+            self.assertEqual(QApplication.clipboard().text(), copy_patch(diff, lines), entry)
+        self.assertIn("-line 5\n+FIVE\n line 6\n", copy_patch(diff, view.selected_lines()))
+
+    def test_a_commits_diff_copies_as_a_patch(self):
+        sha = git(self.repo, "rev-parse", "HEAD").strip()
+        self.ctx.selection.file = FileSelection("a.txt", FileSource.COMMIT, sha)
+        wait_idle(self.session)
+        QCoreApplication.processEvents()
+        self.trigger_patch(self.menu(self.panel._unified, 1), "Copy as Patch", "File")
+        patch = QApplication.clipboard().text()
+        self.assertTrue(patch.startswith("diff --git a/a.txt b/a.txt\nnew file mode 100644\n"))
+
+    def test_ctrl_shift_c_copies_the_focused_views_selected_lines(self):
+        self.select("a.txt")
+        view = self.panel._unified
+        view.setFocus()
+        QApplication.clipboard().setText("before")
+        QTest.keyClick(view, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier
+                       | Qt.KeyboardModifier.ShiftModifier)
+        self.assertEqual(QApplication.clipboard().text(), "before")  # nothing selected
+        chosen = [n for n, r in enumerate(view.rows) if r.text == "NINETY"]
+        view.selection.set_rows(chosen)
+        QTest.keyClick(view, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier
+                       | Qt.KeyboardModifier.ShiftModifier)
+        self.assertEqual(QApplication.clipboard().text(),
+                         copy_patch(self.session.diff, view.selected_lines()))
+
+    def test_a_rename_cannot_be_copied_as_a_patch_and_says_why(self):
+        git(self.repo, "checkout", "--", "a.txt")
+        git(self.repo, "mv", "a.txt", "moved.txt")
+        (self.repo / "moved.txt").write_text((self.repo / "moved.txt").read_text() + "end\n")
+        git(self.repo, "add", "moved.txt")
+        self.session.refresh()
+        self.select("moved.txt", FileSource.INDEX)
+        menu = self.menu(self.panel._unified, 1)
+        actions = [a for a in menu.actions() if a.text() in PATCH_ENTRIES]
+        self.assertEqual(len(actions), 2)
+        for action in actions:
+            self.assertFalse(action.isEnabled())
+            self.assertIn("renamed", action.toolTip())
+            self.assertFalse(any(a.isEnabled() for a in action.menu().actions()))
+
+    # ---- Save as Patch (RZG-76, spec §8.3) -------------------------------------
+
+    def save_from_menu(self, entry, answer):
+        """Choose Save as Patch ▸ ``entry``, answering the file dialog with ``answer``
+        ("" cancels); what the dialog was asked, as (title, suggested path, filters)."""
+        asked = []
+        def ask_path(parent, title, suggested, filters):
+            asked.append((title, suggested, filters))
+            return str(answer)
+        self.ctx.saver.ask_path = ask_path
+        view = self.panel._unified
+        self.trigger_patch(self.menu(view, len(view.rows) - 2), "Save as Patch", entry)
+        return asked
+
+    def test_save_hunk_as_patch_writes_what_copy_copies(self):
+        self.select("a.txt")
+        diff = self.session.diff
+        saved = []
+        self.ctx.saver.saved.connect(lambda path, origin: saved.append((path, origin)))
+        target = Path(self._tmp.name) / "out" / "hunk.patch"
+        target.parent.mkdir()
+        asked = self.save_from_menu("Hunk…", target)
+        title, suggested, filters = asked[0]
+        self.assertEqual(title, "Save Patch")
+        self.assertEqual(suggested, self.repo.resolve() / "a.txt.patch")  # the root, first time
+        self.assertIn("*.patch", filters)
+        self.assertEqual(target.read_text(), copy_patch(diff, hunk_lines(diff, 1)))
+        self.assertEqual(saved, [(target.resolve(), self.panel)])
+        self.save_from_menu("File…", target)  # the next save starts where this one went
+        self.assertEqual(self.save_from_menu("File…", "")[0][1], target.parent.resolve() / "a.txt.patch")
+        self.assertEqual(target.read_text(), copy_patch(diff, all_lines(diff)))
+
+    def test_cancelling_the_dialog_saves_nothing(self):
+        self.select("a.txt")
+        saved = []
+        self.ctx.saver.saved.connect(lambda *args: saved.append(args))
+        self.save_from_menu("File…", "")
+        self.assertEqual(saved, [])
+        self.assertIsNone(self.ctx.saver.saver.folder("patch"))
+
+    def test_a_failed_save_says_why(self):
+        self.select("a.txt")
+        with mock.patch("rzgit.ui.save_dialog.QMessageBox.warning") as warning:
+            self.save_from_menu("File…", Path(self._tmp.name) / "no such folder" / "x.patch")
+        self.assertEqual(warning.call_count, 1)
+        self.assertIn("Couldn't save", warning.call_args.args[2])
+        self.assertIsNone(self.ctx.saver.saver.folder("patch"))
 
     def test_no_line_buttons_where_there_is_no_link(self):
         sha = git(self.repo, "rev-parse", "HEAD").strip()
@@ -571,6 +692,15 @@ class DiffPanelWholeFileTests(unittest.TestCase):
         self.assertNotIn("THIRTY", index)
         self.assertTrue(self.session.diff_whole)  # still whole after the reload
         self.assertEqual([r.new_no for r in self.view().rows if r.new_no], list(range(1, 101)))
+
+    def test_copy_hunk_as_patch_trims_the_whole_files_context(self):
+        hunks_diff = self.session.diff
+        self.whole()
+        menu = self.panel.menu_for(self.view(), QPoint(30, 5))  # the first hunk, at the top
+        self.addCleanup(menu.deleteLater)
+        patch_action(menu, "Copy as Patch", "Hunk").trigger()
+        self.assertEqual(QApplication.clipboard().text(),
+                         copy_patch(hunks_diff, hunk_lines(hunks_diff, 0)))
 
     def visible(self, view, n):
         first = view.firstVisibleBlock().blockNumber()

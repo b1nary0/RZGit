@@ -3,8 +3,10 @@ whole file (spec §5.4)."""
 
 from __future__ import annotations
 
+from pathlib import PurePosixPath
+
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer
-from PySide6.QtGui import QIcon, QKeySequence, QShortcut
+from PySide6.QtGui import QGuiApplication, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -19,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from rzgit.core.diff_patch import Line, can_patch, hunk_lines
+from rzgit.core.diff_patch import Line, all_lines, can_patch, copy_patch, hunk_lines
 from rzgit.core.diff_request import DIFF_MAX_LINES, GIT_CONTEXT
 from rzgit.core.preferences import Setting, declare
 from rzgit.core.selection import FileSelection, FileSource
@@ -56,6 +58,7 @@ NO_CHANGES = "No changes to show."
 BINARY = "Binary file: there's no text diff to show."
 UNREADABLE = "Couldn't read this diff."
 LOADING = "Loading…"
+COPY_PATCH_KEYS = "Ctrl+Shift+C"  # Copy Selected Lines as Patch
 _SOURCES = {FileSource.WORKTREE: "Unstaged", FileSource.INDEX: "Staged"}
 
 # The Diff page of the Settings window (spec §8.2).
@@ -142,7 +145,8 @@ class DiffPanel(Panel):
         context = Qt.ShortcutContext.WidgetWithChildrenShortcut
         for keys, slot in ((QKeySequence.StandardKey.Find, self.open_find),
                            (QKeySequence("F3"), lambda: self.find_step(1)),
-                           (QKeySequence("Shift+F3"), lambda: self.find_step(-1))):
+                           (QKeySequence("Shift+F3"), lambda: self.find_step(-1)),
+                           (QKeySequence(COPY_PATCH_KEYS), self.copy_selected_patch)):
             shortcut = QShortcut(QKeySequence(keys), self)
             shortcut.setContext(context)
             shortcut.activated.connect(slot)
@@ -492,7 +496,9 @@ class DiffPanel(Panel):
         menu.setToolTipsVisible(True)
         verb, why = self._patching()
         diff = self._diff
-        if verb is not None and diff is not None:
+        hunk_set: frozenset[Line] = frozenset()
+        chosen: frozenset[Line] = frozenset()
+        if diff is not None:
             row = view.row_at(pos)
             hunk = row.hunk if row is not None else None
             hunk_set = hunk_lines(diff, hunk) if hunk is not None else frozenset()
@@ -500,6 +506,7 @@ class DiffPanel(Panel):
             if not chosen and row is not None and row.line is not None and row.hunk is not None:
                 if diff.hunks[row.hunk].lines[row.line].kind is not LineKind.CONTEXT:
                     chosen = frozenset({(row.hunk, row.line)})
+        if verb is not None and diff is not None:
             entries = [(f"{verb} Hunk", hunk_set, self._apply),
                        (f"{verb} Selected Lines", chosen, self._apply)]
             if self._can_discard():
@@ -526,11 +533,59 @@ class DiffPanel(Panel):
         copy = menu.addAction("Copy")
         copy.setEnabled(bool(view.selection) or view.text_range() is not None)
         copy.triggered.connect(view.copy)
+        if diff is not None:  # Copy and Save as Patch (RZG-76, spec §5.4)
+            reason = can_patch(diff)
+            scopes = (("Hunk", hunk_set), ("Selected Lines", chosen), ("File", all_lines(diff)))
+            for title, run, suffix, keys in (("Copy as Patch", self.copy_patch, "", True),
+                                             ("Save as Patch", self.save_patch, "…", False)):
+                submenu = menu.addMenu(title)
+                submenu.menuAction().setEnabled(reason is None)
+                if reason:
+                    submenu.menuAction().setToolTip(reason)
+                for name, lines in scopes:
+                    text = name + suffix
+                    if keys and name == "Selected Lines":
+                        text += f"\t{COPY_PATCH_KEYS}"  # shown, not bound: the panel's shortcut is
+                    action = submenu.addAction(text)
+                    action.setEnabled(bool(lines) and reason is None)
+                    action.triggered.connect(lambda _=False, run=run, lines=lines: run(lines))
         if self._shown is not None:  # RZG-96: the working-tree file, at the line under the pointer
             menu.addSeparator()
             line = new_line_at(view.rows, view.cursorForPosition(pos).blockNumber())
             menu.addAction(self.ctx.actions.open_in_vscode((self._shown.path,), menu, line))
         return menu
+
+    def _patch(self, lines: frozenset[Line]) -> str | None:
+        """The patch of ``lines`` of the shown diff (``copy_patch``), or None."""
+        diff = self._diff
+        if diff is None or not lines or can_patch(diff) is not None:
+            return None
+        return copy_patch(diff, lines)
+
+    def copy_patch(self, lines: frozenset[Line]) -> None:
+        """Put the patch of ``lines`` of the shown diff on the clipboard."""
+        if (patch := self._patch(lines)) is not None:
+            QGuiApplication.clipboard().setText(patch)
+
+    def save_patch(self, lines: frozenset[Line]) -> None:
+        """Ask where to save the patch of ``lines`` of the shown diff, and save it (§8.3)."""
+        if (patch := self._patch(lines)) is None or self._diff is None:
+            return
+        repo = self.ctx.session.repo
+        self.ctx.saver.ask_and_save(
+            self, patch, kind="patch", title="Save Patch",
+            suggested_name=f"{PurePosixPath(self._diff.path).name}.patch",
+            filters="Patches (*.patch *.diff);;All Files (*)",
+            start=repo.root if repo is not None else None)
+
+    def copy_selected_patch(self) -> None:
+        """Ctrl+Shift+C: copy the focused view's selected lines as a patch."""
+        views = self._shown_views()
+        view = next((v for v in views if v.hasFocus()), None)
+        if view is None:
+            view = next((v for v in views if v.selected_lines()), None)
+        if view is not None:
+            self.copy_patch(view.selected_lines())
 
     def _show_message(self, text: str, show_anyway: bool = False,
                       changes_only: bool = False) -> None:

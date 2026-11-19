@@ -19,6 +19,7 @@ from rzgit.core.selection import Selection
 from rzgit.core.sort_prefs import SortPrefs
 from rzgit.core.worktree_reader import WorktreeReader
 from rzgit.ui.app_actions import AppActions
+from rzgit.ui.save_dialog import SaveDialog
 from rzgit.ui.theme.app_theme import AppTheme
 from rzgit.ui.theme.style_roles import Surface, set_surface
 from rzgit.ui.theme.theme_manager import ThemeManager
@@ -39,6 +40,7 @@ class PanelContext:
     worktrees: WorktreeReader | None = None  # the Worktrees window's (spec §4.4)
     prefs: Preferences = field(default_factory=Preferences)  # the app's settings (§8.2)
     recent: RecentRepos = field(default_factory=RecentRepos)  # opened recently (§6.3)
+    saver: SaveDialog = field(default_factory=SaveDialog)  # saving files (§8.3)
 
 
 class Panel(QWidget):

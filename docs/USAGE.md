@@ -340,6 +340,17 @@ drag to select, double-click a word, or triple-click a line. Ctrl+A selects all 
 of one side, and Ctrl+C or **Copy** in the right-click menu copies the selected code
 without line numbers or **+** and **−** marks. Esc clears the selection.
 
+**Copying or saving a patch.** The right-click menu of any diff, a commit's too, has
+**Copy as Patch** and **Save as Patch**, each with **Hunk** (the hunk under the pointer),
+**Selected Lines** (the same lines **Stage Selected Lines** takes) and **File**. Ctrl+Shift+C
+copies the selected lines. The patch is one that `git apply` accepts on the file as it was
+before the change, with three lines of context around each change, whatever the diff shows.
+A patch of a new file creates it, and one with all of a deleted file deletes it. **Save as
+Patch** asks where to save, suggesting the file's name with `.patch` added, in the folder
+you last saved a patch to (the repository's folder the first time), and the status bar says
+where it went. A renamed file, or one with text that isn't UTF-8, can't be made into a
+patch.
+
 **Find.** Press Ctrl+F in the Diff panel to open the find bar (5) at its bottom. The search
 runs as you type, highlights every match, and shows a count such as "1 of 4".
 
@@ -560,4 +571,5 @@ when the focus is in the panel or field named.
 | `Esc` | Closes the find bar, or clears the selection in the diff. | The Diff panel |
 | `Ctrl+A` | Selects all the text of the diff (of one side, side by side), or of a message. | The Diff panel; Commit Details |
 | `Ctrl+C` | Copies the selected text. In a diff, it copies only the code. | The Diff panel; Commit Details |
+| `Ctrl+Shift+C` | Copies the selected lines as a patch. | The Diff panel |
 | `Ctrl+Home` | Goes to the top of the list. | History |

@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent
-from PySide6.QtWidgets import QToolBar, QToolButton
+from PySide6.QtWidgets import QToolBar, QToolButton, QWidget
 
 from rzgit.core.app_settings import AppSettings
 from rzgit.core.commit_drafts import CommitDrafts
@@ -740,6 +740,27 @@ class MainWindowTests(unittest.TestCase):
             wait_idle(window.session)
         self.assertEqual(len(window.session.history), 2)  # one page loaded…
         self.assertIn("  ·  5 commits  ·  ", window.statusBar().currentMessage())  # …all counted
+
+    def test_a_save_from_this_window_shows_in_its_status_bar_for_a_while(self):
+        """RZG-76, spec §8.3: the summary is held back while the notice shows."""
+        repo = make_repo(self.tmp / "repo")
+        commit_file(repo, "a.txt", "a", "first")
+        window = self.start()
+        window.session.open(repo)
+        wait_idle(window.session)
+        bar = window.statusBar()
+        summary = bar.currentMessage()
+        saver = window.ctx.saver.saver
+        saver.save(self.tmp / "elsewhere.txt", "x", origin=QWidget())  # another window's
+        self.assertEqual(bar.currentMessage(), summary)
+        path = saver.save(self.tmp / "out.patch", "x", origin=window.centralWidget())
+        self.assertEqual(bar.currentMessage(), f"Saved {path}")
+        window._update_status_bar()  # a refresh meanwhile doesn't replace it
+        self.assertEqual(bar.currentMessage(), f"Saved {path}")
+        self.assertEqual(window._saved_notice.interval(), 5000)
+        window._saved_notice.stop()  # as when a single shot fires: no longer active
+        window._saved_notice.timeout.emit()  # the notice ends
+        self.assertEqual(bar.currentMessage(), summary)
 
     def test_opened_repo_is_remembered(self):
         repo = make_repo(self.tmp / "repo")

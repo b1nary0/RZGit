@@ -37,7 +37,7 @@ one names the sections below that it covers.
   ↑
  core/  application state. QtCore only (QObject, Signal). No widgets.
   ↑
- ui/    widgets. theme/ → app_icon → widgets/ → app_actions → panels/ → layout/ → branch_dialogs → main_window → app_windows
+ ui/    widgets. theme/ → app_icon → widgets/ → save_dialog → app_actions → panels/ → layout/ → branch_dialogs → main_window → app_windows
   ↑
  app.py composition root. The only place concrete objects are created and wired together,
         with AppWindows (§8.1), which app.py makes to build each main window's own objects.
@@ -72,7 +72,7 @@ src/rzgit/
   core/
     repo_session.py             RepoSession: the open repo, its data, git commands
     diff_request.py             DiffRequest, the size limit, load_diff (the worker side of diffs)
-    diff_patch.py               build_patch: a patch of chosen lines of a FileDiff (plain Python)
+    diff_patch.py               build_patch, copy_patch: a patch of chosen lines of a FileDiff (plain Python)
     git_commands.py             GitCommand, run_command (the worker side of commands: stage, commit, …)
     network_worker.py           NetworkWorker, NetworkCommand: remote commands (fetch, pull's fetch, push) on a thread of their own
     commit_drafts.py            CommitDrafts: the unfinished commit message of each repository (a file each)
@@ -88,6 +88,7 @@ src/rzgit/
     worktree_reader.py          WorktreeReader: a repository's worktrees and their state, kept up to date
     vscode_target.py            VSCodeTarget: which VS Code window a worktree's files open in, and the command line (plain Python)
     recent_repos.py             RecentRepos: the repositories and worktrees opened recently (§6.3)
+    file_saver.py               FileSaver: writes a file atomically; the last folder of each kind of save (§8.3)
     app_settings.py             AppSettings: typed wrapper over QSettings (last_repo, layout, …)
     old_name_migration.py       migrate_old_name: copies the settings and drafts of the old name (RZGitClient) once (§6.3)
     gc_on_main_thread.py        GcOnMainThread: Python's garbage collection, on the main thread only (§4.1)
@@ -103,6 +104,7 @@ src/rzgit/
     push_dialogs.py             PushDialogs: Push's box (push and track)
     worktree_dialogs.py         WorktreeDialogs, NewWorktreeDialog: New Worktree…, Remove, Prune; folder, terminal
     vscode_launcher.py          VSCodeLauncher: Open with VS Code (the command setting, starting it)
+    save_dialog.py              SaveDialog: asks where to save, saves with FileSaver, says if it failed (§8.3)
     app_icon.py                 app_icon(): the app's QIcon, built from assets/icon (app.py sets it)
     assets/                     image files shipped as package data (no modules)
       icon/                     the app icon: its SVG source and PNGs at 16–512 px
@@ -466,6 +468,17 @@ class RepoSession(QObject):
       changed since the diff was read, the patch doesn't apply, nothing changes, the error
       shows, and the reload brings the new diff. A diff with text git couldn't read as UTF-8
       (shown as `�`) is refused before git runs: writing it back would change the file.
+    - **Copy as Patch** (RZG-76): `copy_patch(diff, lines)` is the patch the Diff panel
+      copies or saves (§8.3). It is `build_patch` forwards (so `git apply` applies it to
+      the diff's base, for worktree, index and commit diffs alike), with each hunk's context
+      trimmed to `COPY_CONTEXT` (3, git's default): a run of context longer than twice that
+      inside a hunk splits it in two, each with its own recounted header. So the patch is
+      the same whatever the view shows: the whole file (`split_hunks`' pieces cover it) or
+      more context lines (RZG-97). The headers come from git's own: the diff reader keeps `new file mode <m>`
+      and `deleted file mode <m>` as `FileDiff.new_mode` / `deleted_mode` (None otherwise).
+      An added file's patch is a new-file patch (`--- /dev/null`) with that mode, also with
+      only some lines chosen; a patch that removes every line of a deleted file is a
+      deletion (`deleted file mode <m>`, `+++ /dev/null`). Staging's patches don't trim.
   - Paths are passed with `--literal-pathspecs`, so a file named `:x` or `*.c` means itself.
   - **Results:** after a job, `command_finished(command, ok)` is sent for each of its
     commands, in order, after the parts and the error: `ok` is False for the one that
@@ -895,6 +908,7 @@ class PanelContext:
     sorts: SortPrefs                               # each panel's sort order (SortMenu)
     worktrees: WorktreeReader | None = None        # the window's worktree reader (§4.4)
     prefs: Preferences = Preferences()             # the app's settings (§8.2); in memory by default
+    saver: SaveDialog = SaveDialog()               # saving files (§8.3); remembers nothing by default
 
 class Panel(QWidget):
     panel_id: ClassVar[str]                        # stable, saved in layouts: "history"
@@ -1712,6 +1726,16 @@ than rebuilding them.
   commit diff, the working-tree file may have moved on.
   Discards go through `AppActions.request_discard_lines`: the window confirms (§8). The diff
   that comes back keeps the scroll position.
+- **Copy and Save as Patch** (RZG-76): after Copy, every diff's menu (commit diffs too, both
+  views) has two submenus with the same three entries: **Copy as Patch** ▸ **Hunk**,
+  **Selected Lines** (Ctrl+Shift+C) and **File**, and **Save as Patch** ▸ **Hunk…**,
+  **Selected Lines…** and **File…**. Hunk is the hunk under the pointer; Selected Lines
+  the same lines as Stage Selected Lines; File every changed line. Each takes
+  `copy_patch` (§4.1): Copy puts it on the clipboard; Save asks `ctx.saver` (§8.3, kind
+  `"patch"`, `<file name>.patch` suggested, the repository's root the first time).
+  Ctrl+Shift+C takes the focused view's `selected_lines()` and does nothing without them;
+  Save has no shortcut. A rename or unreadable text disables both submenus, with
+  `can_patch`'s reason as their tooltip.
 - **Show Whole File** (RZG-60): the checkable **Show Whole File** action (§8), from the View
   menu or the panel's own button beside Side by Side Diff, asks for the diff with
   `whole=True` (§4.1): every line of the file, the changes highlighted where they are, in
@@ -2077,7 +2101,8 @@ typed accessors (`last_repo`, `layout`, `layout_preset`, `window_geometry`,
 `app.py` creates it and `AppWindows` passes it to each `MainWindow`; panels don't get it.
 One `AppSettings` is shared by every window. What panels save goes through a small object
 in `ctx` that holds only that: the commit draft through `CommitDrafts` (§5.4), column
-choices through `ColumnPrefs`, sort orders through `SortPrefs`.
+choices through `ColumnPrefs`, sort orders through `SortPrefs`, the last folder of each
+kind of save through `FileSaver` (`save_folders`, §8.3).
 
 **Where they are stored** (RZG-59): `app.py` names the app `RZGit` (organisation and
 application), so `QSettings` is `~/.config/RZGit/RZGit.conf` and the app's data folder
@@ -2874,6 +2899,37 @@ window while it's open (§8.1). Layouts and columns aren't in it either.
   - **Restore Defaults** asks: **Restore All Settings**, **Restore <page> Settings** (the
     page shown) or **Cancel**. The theme rows count as Appearance's. The editors follow
     `changed` and `theme_changed`, so they show a change made elsewhere.
+
+### 8.3 Saving files (RZG-76)
+
+One way to save anything the app makes (a patch now; later a file at a revision, a
+stash), so every save looks and behaves the same.
+- **`FileSaver`** (`core/file_saver.py`, a QObject, no widgets), one for the app (app.py),
+  shared by every window:
+  - `save(path, data, *, kind=None, origin=None) -> Path` writes `data` (`str` as UTF-8,
+    exactly as given, CRs too; or `bytes`) **atomically**: a temp file beside the target,
+    synced, then `os.replace`. A symlink is followed, so the file it points at is
+    replaced. An existing file keeps its permissions; a new one gets the usual ones
+    (0666 less the umask). A failed write raises `OSError` and leaves the target as it
+    was, with no temp file left behind.
+  - **The last folder of each kind** (`folder(kind)`, `remember(kind, folder)`): a save of
+    a kind remembers its folder, kept in `AppSettings.save_folders` (§6.3) as a JSON
+    object of kind → path. A folder that no longer exists is forgotten (`folder` gives
+    None).
+  - `saved(path, origin)` is emitted after each save; `origin` is whatever the caller
+    passed (the widget that asked).
+- **`SaveDialog`** (`ui/save_dialog.py`; its own layer, above `widgets/` and below
+  `app_actions`, so panels and dialogs may use it): `ask_and_save(parent, data, *, kind,
+  suggested_name, title, filters="", start=None) -> Path | None`. It asks with
+  `QFileDialog.getSaveFileName` (which asks before overwriting), starting in the kind's
+  last folder, else `start` (the caller's choice: the repository's root for a patch),
+  else the home folder. It saves with `origin=parent`, and shows a message box if the
+  write fails ("Couldn't save <path>" and the reason). It returns the path saved, or
+  None (cancelled or failed): callers do nothing more.
+- **Reaching it:** panels as `ctx.saver` (§5.1); windows and dialogs from their context.
+  `PanelContext`'s default is a `SaveDialog` over an in-memory `FileSaver` (tests).
+- **Feedback:** each `MainWindow` shows "Saved <path>" in its status bar for 5 s after a
+  save whose origin is in it (`origin.window() is self`).
 
 ## 9. Performance stance
 

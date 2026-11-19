@@ -37,6 +37,7 @@ _SAVED_LAYOUTS = "layouts/saved"
 _COLUMN_PREFS = "columns/prefs"
 _SORT_PREFS = "sort/prefs"
 _RECENT_REPOS = "recent/repos"
+_SAVE_FOLDERS = "save/folders"  # FileSaver's last folder of each kind (spec §8.3)
 _PREFS = "prefs/"  # the Settings window's settings, by key (spec §8.2)
 
 
@@ -254,6 +255,24 @@ class AppSettings:
     @recent_repos.setter
     def recent_repos(self, entries: list[dict[str, Any]]) -> None:
         self._set(_RECENT_REPOS, json.dumps(entries) if entries else None)
+
+    @property
+    def save_folders(self) -> dict[str, str]:
+        """The last folder of each kind of save, as ``FileSaver`` wrote them ({} if none,
+        or not a JSON object of strings; spec §8.3)."""
+        raw = self._settings.value(_SAVE_FOLDERS, "", str)
+        try:
+            data = json.loads(raw) if raw else {}
+        except ValueError as exc:
+            log.warning("Saved folders aren't valid JSON (%s); ignoring them", exc)
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
+
+    @save_folders.setter
+    def save_folders(self, folders: dict[str, str]) -> None:
+        self._set(_SAVE_FOLDERS, json.dumps(folders) if folders else None)
 
     def pref(self, key: str) -> object | None:
         """The stored value of the setting ``key`` (spec §8.2), as QSettings gives it

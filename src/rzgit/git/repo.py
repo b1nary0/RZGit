@@ -707,6 +707,8 @@ def parse_diff(
 
     hunks: list[Hunk] = []
     old_path: str | None = None
+    new_mode: str | None = None
+    deleted_mode: str | None = None
     binary = False
     lines: list[DiffLine] = []
     header = ""
@@ -751,10 +753,15 @@ def parse_diff(
             header, lines = "", []
         elif line.startswith(("rename from ", "copy from ")):
             old_path = _unquote(line.split(" ", 2)[2])
+        elif line.startswith("new file mode "):
+            new_mode = line[len("new file mode "):]
+        elif line.startswith("deleted file mode "):
+            deleted_mode = line[len("deleted file mode "):]
         elif line.startswith("Binary files ") or line == "GIT binary patch":
             binary = True
     end_hunk()
-    return FileDiff(path, tuple(hunks), old_path, binary, line_count=line_count)
+    return FileDiff(path, tuple(hunks), old_path, binary, line_count=line_count,
+                    new_mode=new_mode, deleted_mode=deleted_mode)
 
 
 _STASH_SUBJECT = re.compile(r"^(?:WIP on|On) (.+?): (.*)$", re.DOTALL)
