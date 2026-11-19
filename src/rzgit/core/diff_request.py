@@ -1,8 +1,9 @@
 """Reading one file's diff, on the session's worker (spec §4.1).
 
 RepoSession keeps the diff target and queues it; this module is the worker
-side: it picks the git source, applies the size limit and, for the whole
-file, cuts git's one hunk into hunks of one change each. No Qt objects.
+side: it picks the git source, applies the size limit and cuts git's hunks
+back into the hunks it makes at 3 lines of context, for the whole file and
+for wider context alike. No Qt objects.
 """
 
 from __future__ import annotations
@@ -16,7 +17,8 @@ from rzgit.git.repo import Repo
 DIFF_MAX_BYTES = 1_000_000  # larger diffs come back too_large, unless asked for in full
 DIFF_MAX_LINES = 20_000
 WHOLE_CONTEXT = 1_000_000_000  # lines of context that take in any file whole
-SPLIT_RUN = 6  # an unchanged run longer than this (git's context, twice) parts two hunks
+GIT_CONTEXT = 3  # git's own lines of context: the hunks are always those it makes at 3
+SPLIT_RUN = 2 * GIT_CONTEXT  # an unchanged run longer than this parts two hunks
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,7 @@ class DiffRequest:
     full: bool = False  # read it however large
     whole: bool = False  # the whole file, not only the changes with some context
     max_lines: int | None = None  # longer comes back too_large unless full; None: DIFF_MAX_LINES
+    context: int = GIT_CONTEXT  # unchanged lines above and below a change, unless whole
 
     @property
     def follows_status(self) -> bool:
@@ -60,17 +63,19 @@ def load_diff(repo: Repo, request: DiffRequest, status: tuple[FileStatus, ...],
             raise ValueError(f"not a file source: {file.source!r}")
     limit = {} if request.full else {"max_bytes": DIFF_MAX_BYTES,
                                        "max_lines": request.max_lines or DIFF_MAX_LINES}
-    if not request.whole:
+    if not request.whole and request.context == GIT_CONTEXT:
         return repo.diff(file.path, source, commit=commit, old_path=old_path, **limit)
+    context = WHOLE_CONTEXT if request.whole else request.context
     diff = repo.diff(file.path, source, commit=commit, old_path=old_path,
-                     context=WHOLE_CONTEXT, **limit)
-    return split_whole(diff)
+                     context=context, **limit)
+    return split_hunks(diff)
 
 
-def split_whole(diff: FileDiff) -> FileDiff:
+def split_hunks(diff: FileDiff) -> FileDiff:
     """``diff`` with each hunk cut in the middle of every unchanged run longer
     than ``SPLIT_RUN`` lines: the pieces cover the same lines without gaps, each
-    with its own header. A diff with git's usual context comes back as it is."""
+    with its own header, and hold the changes git's hunks at 3 lines of context
+    hold. A diff with git's usual context comes back as it is."""
     hunks = tuple(piece for hunk in diff.hunks for piece in _split(hunk))
     if len(hunks) == len(diff.hunks):
         return diff

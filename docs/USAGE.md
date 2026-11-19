@@ -285,6 +285,9 @@ The Diff panel shows the changes in the file you select in any of the file panel
 at the top names the file and says whether you are looking at its unstaged or staged
 changes, or at a commit (1). Removed lines are red and marked **−**, added lines are green
 and marked **+**, and the words that changed within a line are highlighted more strongly.
+Each group of changes shows 3 unchanged lines above and below it; the *Diff* settings'
+**Context lines above and below a change** shows more. Groups of changes stay the same
+whatever that number is, and a line between two groups shows only once.
 
 **Side by side.** **View → Side by Side Diff**, or the **Side by Side Diff** button (3),
 shows the old file on the left and the new file on the right. Uncheck it to see one column
@@ -492,7 +495,8 @@ needs a restart.
   **Monospace font** and **Monospace font size** used by diffs and commit hashes.
 - **Diff:** how long a stretch of unchanged lines must be before it can be folded, how
   many lines are kept next to a change, whether stretches are folded when a whole file
-  opens, the **Tab width**, and the length above which RZGit asks before showing a diff.
+  opens, the **Tab width**, the length above which RZGit asks before showing a diff, and
+  the **Context lines above and below a change** (3 by default).
 - **History:** the **Date format**, which is either the ISO format with or without
   seconds, or your locale's short format.
 - **Tools:** the **Terminal command** that Open Terminal starts.

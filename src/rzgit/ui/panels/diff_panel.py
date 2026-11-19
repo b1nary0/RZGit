@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from rzgit.core.diff_patch import Line, can_patch, hunk_lines
-from rzgit.core.diff_request import DIFF_MAX_LINES
+from rzgit.core.diff_request import DIFF_MAX_LINES, GIT_CONTEXT
 from rzgit.core.preferences import Setting, declare
 from rzgit.core.selection import FileSelection, FileSource
 from rzgit.git.git_models import FileDiff, LineKind
@@ -76,6 +76,10 @@ LARGE_DIFF = declare(Setting(
     "diff/max_lines", DIFF_MAX_LINES, "Ask before showing a diff with more lines than",
     page="Diff", minimum=10, maximum=10_000_000,
     help='A longer diff shows "Large diff" with Show Anyway.'))
+CONTEXT_LINES = declare(Setting(
+    "diff/context_lines", GIT_CONTEXT, "Context lines above and below a change", page="Diff",
+    minimum=GIT_CONTEXT, maximum=1000,
+    help="The unchanged lines shown around each hunk's changes, unless the whole file is shown."))
 _FOLD_KEYS = (FOLD_MIN.key, FOLD_KEPT.key, FOLD_ON_OPEN.key)
 
 
@@ -293,13 +297,16 @@ class DiffPanel(Panel):
     def _cached(self, file: FileSelection) -> bool:
         """The session's latest diff is ``file``'s, read the way the panel wants it."""
         session = self.ctx.session
-        return (session.diff_file == file
-                and session.diff_whole == self.ctx.actions.whole_file_diff.isChecked())
+        whole = self.ctx.actions.whole_file_diff.isChecked()
+        context = None if whole else self.ctx.prefs.value(CONTEXT_LINES)
+        return (session.diff_file == file and session.diff_whole == whole
+                and session.diff_context == context)
 
     def _request(self, file: FileSelection, full: bool = False) -> None:
         whole = self.ctx.actions.whole_file_diff.isChecked()
         self.ctx.session.request_diff(file, full=full, whole=whole,
-                                      max_lines=self.ctx.prefs.value(LARGE_DIFF))
+                                      max_lines=self.ctx.prefs.value(LARGE_DIFF),
+                                      context=self.ctx.prefs.value(CONTEXT_LINES))
 
     def _on_pref_changed(self, key: str, value: object) -> None:
         if key == TAB_SPACES.key:
@@ -311,6 +318,10 @@ class DiffPanel(Panel):
             self._rerender()
         elif key == LARGE_DIFF.key and self._file is not None:
             self._request(self._file)  # the diff on screen stays until the new one is in
+        elif (key == CONTEXT_LINES.key and self._file is not None
+              and not self.ctx.actions.whole_file_diff.isChecked()):
+            self._keep_place()  # the same lines stay in view once the new diff is in
+            self._request(self._file)
 
     def _load_full(self) -> None:
         if self._file is not None:
@@ -321,14 +332,17 @@ class DiffPanel(Panel):
         self._headers.setVisible(on)
         if self._file is None:
             return
-        # Find the same lines in the other diff once it's in.
-        shown = self._shown_views() if self._shown == self._file else []
-        self._place = [view.place() for view in shown] or None
+        self._keep_place()
         self._request(self._file)
         if self._cached(self._file):
             self._show(self._file, self.ctx.session.diff)
         else:
             self._loading.start()
+
+    def _keep_place(self) -> None:
+        """Find the same lines in the diff asked for next, once it's in."""
+        shown = self._shown_views() if self._shown == self._file else []
+        self._place = [view.place() for view in shown] or None
 
     def _show(self, file: FileSelection, diff: FileDiff | None) -> None:
         self._loading.stop()

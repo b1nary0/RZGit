@@ -251,7 +251,7 @@ class RepoSession(QObject):
     # Latest values, so a panel created later renders at once (read-only properties):
     repo, head, head_sha, branches, history, history_order, status, stashes, commit_count, remotes,
     push_default,
-    history_complete, diff_file, diff, diff_whole,
+    history_complete, diff_file, diff, diff_whole, diff_context,
     commit_files_sha, commit_files, commit_details_sha, commit_details, last_commit
 ```
 
@@ -375,9 +375,19 @@ class RepoSession(QObject):
   - **Size limit:** a diff of more than `DIFF_MAX_BYTES` (1 MB) or `DIFF_MAX_LINES`
     (20,000 lines) comes back as `FileDiff(too_large=True)` with no hunks, and isn't parsed.
     `request_diff(file, full=True)` reads it whole; the target keeps `full` across refreshes.
+  - **Context lines** (RZG-97): `request_diff(file, context=N)` (3 to 1000, a setting, §8.2;
+    3 by default, git's own) reads the hunks view with `--unified=N`, then cuts it with
+    `split_hunks` like the whole file (below). The hunks stay git's at 3 lines: changes up
+    to 6 lines apart share one, so Stage Hunk acts on the same changes at any N. Where two
+    hunks' context would overlap, git merges them and the cut parts them again in the
+    middle of the run between them (the larger half above), so each unchanged line shows
+    once and no hunk takes another's changed lines. At 3 the cut changes nothing. The
+    target keeps `context` across refreshes, and `diff_context` is the count the latest
+    `diff_changed` was read with (None for the whole file); like `diff_whole` it is part of
+    what makes a result differ.
   - **The whole file** (RZG-60): `request_diff(file, whole=True)` reads the diff with
     `--unified=WHOLE_CONTEXT` (10⁹ lines), so git returns every line of the file in one hunk.
-    `split_whole(diff)` (`diff_request.py`, plain Python) then cuts each hunk in the middle
+    `split_hunks(diff)` (`diff_request.py`, plain Python) then cuts each hunk in the middle
     of every unchanged run longer than 6 lines (twice git's 3 lines of context). The pieces
     cover the file without gaps, each with its own `@@ -a,b +c,d @@` header, so a hunk is
     still one changed block: Stage Hunk and the patches of `diff_patch.py` work as in the
@@ -1689,7 +1699,7 @@ than rebuilding them.
   `whole=True` (§4.1): every line of the file, the changes highlighted where they are, in
   unified and side by side alike (a whole added or deleted file still shows unified, as
   above). Line numbers, marks, word highlights, line buttons and the hunk actions work as
-  in the hunks view, on the hunks `split_whole` made.
+  in the hunks view, on the hunks `split_hunks` made.
   - **Hunk headers** in the whole-file view are one of three (`HunkHeaders`, in
     `app_actions.py`; from a drop-down button in the bar, shown only while the whole file
     is, and from View → Hunk Headers): **Full**, the `@@` rows where the hunks meet; **Slim** (the default), a
@@ -1765,6 +1775,8 @@ than rebuilding them.
 - **Updates:** a new diff of the same file keeps the scroll position; another file starts
   at the top. Selecting a file at another path calls `request_activation()`, so the Diff
   tab comes to the front; a refresh never does.
+  - The session's latest diff is shown at once (no "Loading…") only when it was read the
+    way the panel wants it now: the same file, `diff_whole` and `diff_context` (RZG-97).
 
 **CommitPanel** writes a commit. It sits directly below Files in every preset (§6.1), as
 in GitKraken: a one-line **summary** (`QLineEdit`) with its length counter inside it on the
@@ -2775,9 +2787,11 @@ window while it's open (§8.1). Layouts and columns aren't in it either.
   - **Diff:** *Fold unchanged stretches with more lines than* (20) and *Lines kept next to
     a change* (3), passed to `stretches(rows, min_lines, keep)`; *Fold unchanged stretches
     when a whole file opens* (off); *Tab width* (4, `DiffView.set_tab_width`); *Ask before
-    showing a diff with more lines than* (20 000, passed as `request_diff(…, max_lines=)`).
+    showing a diff with more lines than* (20 000, passed as `request_diff(…, max_lines=)`);
+    *Context lines above and below a change* (3, 3 to 1000, passed as
+    `request_diff(…, context=)`, §4.1; the hunks view only).
     A change shows on the diff on screen at once: the folds start again, and a new limit
-    reads the diff again. `diff_panel.py`.
+    or context count reads the diff again. `diff_panel.py`.
   - **History:** *Date format*: ISO (`2026-11-17 14:05`, the default), ISO with seconds, or
     the locale's short format. `history_model.py`.
   - **Tools:** *Terminal command* (`""`): what Open in Terminal starts, split as a shell

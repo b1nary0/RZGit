@@ -18,7 +18,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QThreadPool, Signal
 
 from rzgit.core.diff_patch import Line
-from rzgit.core.diff_request import DiffRequest, load_diff
+from rzgit.core.diff_request import GIT_CONTEXT, DiffRequest, load_diff
 from rzgit.core.git_commands import (
     CommandKind, GitCommand, PullDiverged, PullMode, run_command,
 )
@@ -127,8 +127,10 @@ class RepoSession(QObject):
         self._diff_request: DiffRequest | None = None
         self._diff_generation = 0
         self._diff_pending = False  # the target waits for the next job
-        # The latest result: its file, its diff, and whether it was read whole.
-        self._diff: tuple[FileSelection | None, FileDiff | None, bool] = (None, None, False)
+        # The latest result: its file, its diff, whether it was read whole, and its
+        # context lines (None when whole).
+        self._diff: tuple[FileSelection | None, FileDiff | None, bool, int | None] = (
+            None, None, False, None)
         # The commit files target, the same way (spec §4.1).
         self._files_sha: str | None = None
         self._files_generation = 0
@@ -260,6 +262,11 @@ class RepoSession(QObject):
     def diff_whole(self) -> bool:
         """Whether the latest diff was read as the whole file (spec §4.1)."""
         return self._diff[2]
+
+    @property
+    def diff_context(self) -> int | None:
+        """The context lines the latest diff was read with; None when whole (spec §4.1)."""
+        return self._diff[3]
 
     @property
     def commit_files_sha(self) -> str | None:
@@ -469,17 +476,20 @@ class RepoSession(QObject):
         self.refresh(Refresh.HISTORY)
 
     def request_diff(self, file: FileSelection | None, full: bool = False,
-                     whole: bool = False, max_lines: int | None = None) -> None:
+                     whole: bool = False, max_lines: int | None = None,
+                     context: int = GIT_CONTEXT) -> None:
         """Make ``file`` the diff target and read its diff in the background.
 
         The result comes as ``diff_changed``; results of older requests are
         dropped. ``None`` clears the target. ``full`` reads a diff over the
         size limit anyway; ``whole`` reads the whole file, not only the changes.
         ``max_lines``: the size limit's lines (a setting, spec §8.2; None: the default).
+        ``context``: unchanged lines above and below a change, unless ``whole``
+        (a setting, spec §8.2).
         Jobs that load the status read the target again.
         """
         self._diff_generation += 1
-        self._diff_request = DiffRequest(file, full, whole, max_lines) if file is not None else None
+        self._diff_request = DiffRequest(file, full, whole, max_lines, context) if file is not None else None
         self._diff_pending = file is not None and self._repo is not None
         if file is None:
             self._store_diff(None, None)
@@ -722,8 +732,9 @@ class RepoSession(QObject):
             # After the parts: a listener of status_changed may have changed the target.
             if result.diff_generation == self._diff_generation and self._diff_request:
                 if result.diff_read:
-                    self._store_diff(self._diff_request.file, result.diff,
-                                     self._diff_request.whole)
+                    request = self._diff_request
+                    self._store_diff(request.file, result.diff, request.whole,
+                                     None if request.whole else request.context)
                 elif result.diff_wanted:  # an earlier part failed: read it by itself
                     self._diff_pending = True
             if result.error is not None:
@@ -774,10 +785,10 @@ class RepoSession(QObject):
             self._signals[part].emit(value)
 
     def _store_diff(self, file: FileSelection | None, diff: FileDiff | None,
-                    whole: bool = False) -> None:
-        if (file, diff, whole) == self._diff:
+                    whole: bool = False, context: int | None = None) -> None:
+        if (file, diff, whole, context) == self._diff:
             return
-        self._diff = (file, diff, whole)
+        self._diff = (file, diff, whole, context)
         self.diff_changed.emit(file, diff)
 
     def _store_commit_files(self, sha: str | None,

@@ -720,6 +720,28 @@ class RepoSessionDiffTests(unittest.TestCase):
         self.session.request_diff(None)
         self.assertFalse(self.session.diff_whole)
 
+    def test_context_reads_wider_and_says_so(self):
+        """RZG-97: a new context count sends a result even when the diff is the same."""
+        a = FileSelection("a.txt", FileSource.WORKTREE)
+        self.session.request_diff(a)
+        wait_idle(self.session)
+        self.assertEqual(self.session.diff_context, 3)
+        self.session.request_diff(a, context=10)  # a one-line file: the same diff
+        wait_idle(self.session)
+        self.assertEqual(len(self.diffs), 2)
+        self.assertEqual(self.session.diff_context, 10)
+        commit_file(self.path, "a.txt", "".join(f"{n}\n" for n in range(30)), "long")
+        (self.path / "a.txt").write_text("".join(f"{n}\n" for n in range(29)))
+        self.session.refresh()  # keeps the count
+        wait_idle(self.session)
+        self.assertEqual(self.session.diff_context, 10)
+        self.assertEqual(len(self.session.diff.hunks[0].lines), 11)  # 10 above the removed line
+        self.session.request_diff(a, whole=True, context=10)
+        wait_idle(self.session)
+        self.assertIsNone(self.session.diff_context)
+        self.session.request_diff(None)
+        self.assertIsNone(self.session.diff_context)
+
     def test_a_failed_diff_is_an_error_and_none(self):
         gone = FileSelection("gone.txt", FileSource.WORKTREE)
         (self.path / "gone.txt").write_text("x")

@@ -5,7 +5,7 @@ from unittest import mock
 
 from rzgit.core import diff_request
 from rzgit.core.diff_patch import build_patch, hunk_lines
-from rzgit.core.diff_request import DiffRequest, load_diff, split_whole
+from rzgit.core.diff_request import DiffRequest, load_diff, split_hunks
 from rzgit.core.selection import FileSelection, FileSource
 from rzgit.git.git_models import DiffLine, DiffSource, FileDiff, Hunk, LineKind
 from rzgit.git.repo import Repo
@@ -170,12 +170,132 @@ class SplitWholeTests(unittest.TestCase):
         lines = (DiffLine(C, 1, 1, "a"), DiffLine(A, None, 2, "b"),
                  *(DiffLine(C, n, n + 1, "c") for n in range(2, 8)), DiffLine(A, None, 9, "d"))
         diff = FileDiff("f", (Hunk("@@ -1,7 +1,9 @@ f()", 1, 1, lines),))
-        self.assertIs(split_whole(diff), diff)  # a run of 6 isn't cut
+        self.assertIs(split_hunks(diff), diff)  # a run of 6 isn't cut
 
     def test_a_run_of_seven_is_cut_with_the_larger_half_first(self):
         C, A = LineKind.CONTEXT, LineKind.ADDED
         lines = (DiffLine(A, None, 1, "b"), *(DiffLine(C, n, n + 1, "c") for n in range(1, 8)),
                  DiffLine(A, None, 9, "d"))
-        first, second = split_whole(FileDiff("f", (Hunk("@@ -1,7 +1,9 @@", 1, 1, lines),))).hunks
+        first, second = split_hunks(FileDiff("f", (Hunk("@@ -1,7 +1,9 @@", 1, 1, lines),))).hunks
         self.assertEqual(len(first.lines), 5)  # the added line and 4 of the 7
         self.assertEqual((first.header, second.header), ("@@ -1,4 +1,5 @@", "@@ -5,3 +6,4 @@"))
+
+
+class ContextLinesTests(unittest.TestCase):
+    """RZG-97: wider context, with git's hunks at 3 lines and each line once."""
+
+    N = (3, 4, 10, 50, 1000)
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = make_repo(Path(self._tmp.name) / "repo")
+        commit_file(self.path, "a.txt", _lines(300), "first")
+        self.repo = Repo(self.path)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def load(self, context, source=FileSource.WORKTREE, commit=None):
+        request = DiffRequest(FileSelection("a.txt", source, commit), context=context)
+        return load_diff(self.repo, request, tuple(self.repo.status()))
+
+    def changes(self, diff):
+        """Each hunk's changed lines, as (kind, old number, new number)."""
+        return [[(l.kind, l.old_no, l.new_no) for l in h.lines if l.kind is not LineKind.CONTEXT]
+                for h in diff.hunks]
+
+    def context_runs(self, hunk):
+        """The unchanged lines above and below the hunk's changes."""
+        kinds = [l.kind is LineKind.CONTEXT for l in hunk.lines]
+        above = kinds.index(False)
+        below = kinds[::-1].index(False)
+        return above, below
+
+    def test_the_hunks_are_git_s_at_3_and_each_line_shows_once(self):
+        # Gaps of 6 (one hunk at 3), 7, 9, 20 and 150 unchanged lines; changes at both ends.
+        changed = (1, 8, 16, 26, 47, 198, 298)
+        (self.path / "a.txt").write_text(_lines(300, changed=changed))
+        at_three = self.changes(self.load(3))
+        self.assertEqual(len(at_three), 6)  # the changes 6 apart share a hunk
+        for n in self.N:
+            with self.subTest(n=n):
+                diff = self.load(n)
+                self.assertEqual(self.changes(diff), at_three)
+                new = [l.new_no for h in diff.hunks for l in h.lines if l.new_no]
+                self.assertEqual(new, sorted(set(new)))  # in order, none twice
+                for hunk in diff.hunks:
+                    old = [l.old_no for l in hunk.lines if l.old_no is not None]
+                    news = [l.new_no for l in hunk.lines if l.new_no is not None]
+                    self.assertTrue(hunk.header.startswith(  # git may add a function's name
+                        f"@@ -{old[0]},{len(old)} +{news[0]},{len(news)} @@"), hunk.header)
+                    self.assertLessEqual(max(self.context_runs(hunk)), n)
+
+    def test_overlapping_context_is_split_in_the_middle_far_apart_gets_n_each(self):
+        # Changes at lines 10 and 20 (9 unchanged between), and at 200 (179 between).
+        (self.path / "a.txt").write_text(_lines(300, changed=(10, 20, 200)))
+        first, second, third = self.load(50).hunks
+        self.assertEqual(self.context_runs(first), (10, 5))  # line 0 to 9 above: the file's start
+        self.assertEqual(self.context_runs(second), (4, 50))  # the larger half (5) goes above
+        self.assertEqual(self.context_runs(third), (50, 50))
+        # At 5 git merges the 9 lines between (2 × 5 ≥ 9) and they are split; at 4 it
+        # doesn't, and the middle line isn't shown.
+        first, second, _ = self.load(5).hunks
+        self.assertEqual((self.context_runs(first)[1], self.context_runs(second)[0]), (5, 4))
+        first, second, _ = self.load(4).hunks
+        self.assertEqual((self.context_runs(first)[1], self.context_runs(second)[0]), (4, 4))
+        self.assertEqual(second.lines[0].new_no - first.lines[-1].new_no, 2)
+
+    def test_touching_context_is_not_cut(self):
+        # 8 unchanged between: at 4 git's two hunks just meet, 4 and 4.
+        (self.path / "a.txt").write_text(_lines(300, changed=(100, 109)))
+        first, second = self.load(4).hunks
+        self.assertEqual((self.context_runs(first)[1], self.context_runs(second)[0]), (4, 4))
+        self.assertEqual(first.lines[-1].new_no + 1, second.lines[0].new_no)
+
+    def test_context_is_read_wider_for_every_source(self):
+        (self.path / "a.txt").write_text(_lines(300, changed=(150,)))
+        git(self.path, "add", "a.txt")
+        self.assertEqual(len(self.load(20, FileSource.INDEX).hunks[0].lines), 42)
+        git(self.path, "commit", "-q", "-m", "second")
+        self.assertEqual(len(self.load(20, FileSource.COMMIT, "HEAD").hunks[0].lines), 42)
+
+    def test_at_3_git_s_diff_is_used_as_it_is(self):
+        (self.path / "a.txt").write_text(_lines(300, changed=(150,)))
+        with mock.patch.object(Repo, "diff", wraps=self.repo.diff) as spy:
+            self.load(3)
+        self.assertIsNone(spy.call_args.kwargs.get("context"))
+
+    def test_stage_unstage_and_discard_at_50_are_as_at_3(self):
+        changed = (20, 26, 40, 120, 200)  # 20 and 26 share a hunk at 3
+        (self.path / "a.txt").write_text(_lines(300, changed=changed))
+
+        def staged_after(n, lines_of):
+            git(self.path, "reset", "-q")
+            diff = self.load(n)
+            self.repo.apply(build_patch(diff, lines_of(diff)), cached=True)
+            return git(self.path, "diff", "--cached")
+
+        def one_line(diff, hunk=1):  # a hunk's first changed line: a removed one
+            return frozenset([sorted(hunk_lines(diff, hunk))[0]])
+
+        for lines_of in (lambda d: hunk_lines(d, 1), one_line):
+            self.assertEqual(staged_after(50, lines_of), staged_after(3, lines_of))
+        # Unstage a hunk of the staged diff at 50.
+        git(self.path, "add", "a.txt")
+        staged = self.load(50, FileSource.INDEX)
+        self.assertEqual(len(staged.hunks), 4)
+        self.repo.apply(build_patch(staged, hunk_lines(staged, 2), reverse=True),
+                        cached=True, reverse=True)
+        left = git(self.path, "diff", "--cached")
+        self.assertNotIn("+LINE 120", left)
+        self.assertIn("+LINE 200", left)
+        # Discard a hunk, then some lines, of the unstaged diff at 50.
+        git(self.path, "reset", "-q")
+        diff = self.load(50)
+        self.repo.apply(build_patch(diff, hunk_lines(diff, 3), reverse=True), reverse=True)
+        self.assertNotIn("LINE 200", (self.path / "a.txt").read_text())
+        diff = self.load(50)
+        self.repo.apply(build_patch(diff, one_line(diff, 2), reverse=True), reverse=True)
+        text = (self.path / "a.txt").read_text()
+        self.assertIn("line 120\n", text)  # the removed line is back
+        self.assertIn("LINE 120\n", text)  # the added one stays

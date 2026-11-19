@@ -22,7 +22,7 @@ from rzgit.ui.panels.diff_rows import (
     copy_text,
     touched_rows,
 )
-from rzgit.core.diff_request import split_whole
+from rzgit.core.diff_request import split_hunks
 
 C, A, R = LineKind.CONTEXT, LineKind.ADDED, LineKind.REMOVED
 K = RowKind
@@ -124,7 +124,7 @@ def whole_diff(n, changed):
             lines += [DiffLine(R, i, None, f"old {i}"), DiffLine(A, None, i, f"new {i}")]
         else:
             lines.append(DiffLine(C, i, i, f"line {i}"))
-    return split_whole(FileDiff("f", (Hunk(f"@@ -1,{n} +1,{n} @@", 1, 1, tuple(lines)),)))
+    return split_hunks(FileDiff("f", (Hunk(f"@@ -1,{n} +1,{n} @@", 1, 1, tuple(lines)),)))
 
 
 class WholeRowsTests(unittest.TestCase):

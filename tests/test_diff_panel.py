@@ -712,6 +712,39 @@ class DiffPanelWholeFileTests(unittest.TestCase):
         self.settle()
         self.assertIs(self.panel._stack.currentWidget(), self.view())
 
+    def test_the_context_lines_setting_reads_the_hunks_again_in_place(self):
+        """RZG-97 (spec §8.2): more context at once, the selected line kept."""
+        view = self.view()
+        shown = lambda: [r.new_no for r in view.rows if r.new_no]
+        self.assertEqual(shown(), [*range(27, 34), *range(67, 74)])
+        thirty = next(n for n, r in enumerate(view.rows) if r.text == "THIRTY")
+        view.selection.set_rows([thirty])
+        self.ctx.prefs.set(diff_panel.CONTEXT_LINES, 10)
+        self.settle()
+        self.assertEqual(self.session.diff_context, 10)
+        self.assertEqual(shown(), [*range(20, 41), *range(60, 81)])
+        self.assertEqual([view.rows[n].text for n in view.selection.rows], ["THIRTY"])
+        self.ctx.prefs.set(diff_panel.CONTEXT_LINES, 30)  # lines 31 to 69 split, 20 and 19
+        self.settle()
+        self.assertEqual(shown(), list(range(1, 101)))
+        self.assertEqual(sum(r.kind is RowKind.HUNK for r in view.rows), 2)
+
+    def test_the_whole_file_ignores_the_context_lines(self):
+        self.whole()
+        with mock.patch.object(self.session, "request_diff") as request:
+            self.ctx.prefs.set(diff_panel.CONTEXT_LINES, 10)
+        request.assert_not_called()
+        self.assertIsNone(self.session.diff_context)
+        self.whole(False)  # read at the new count
+        self.assertEqual(self.session.diff_context, 10)
+
+    def test_a_diff_read_at_another_count_isn_t_shown_as_current(self):
+        self.assertTrue(self.panel._cached(A))
+        self.ctx.prefs.set(diff_panel.CONTEXT_LINES, 10)  # asked for, not yet in
+        self.assertFalse(self.panel._cached(A))
+        self.settle()
+        self.assertTrue(self.panel._cached(A))
+
     def test_a_whole_file_too_large_offers_the_changes_only(self):
         self.ctx.prefs.set(diff_panel.LARGE_DIFF, 50)  # the setting (spec §8.2)
         self.whole()
