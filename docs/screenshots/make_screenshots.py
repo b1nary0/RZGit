@@ -39,6 +39,7 @@ from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QP
 from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QApplication, QMenu,  # noqa: E402
                                QTabWidget, QToolButton, QWidget)  # noqa: E402
 
+from outline_shape import outline_path, overlap_groups  # noqa: E402  (beside this script)
 from rzgit.core.app_settings import AppSettings  # noqa: E402
 from rzgit.core.column_prefs import ColumnPrefs  # noqa: E402
 from rzgit.core.commit_drafts import CommitDrafts  # noqa: E402
@@ -263,20 +264,35 @@ class Picture:
         painter.drawPixmap(QPoint(0, 0), self.image)
         for image, at in self.overlays:
             painter.drawPixmap(at, image)
+        # Overlapping subjects (a menu over its panel) share one outline (RZG-95).
+        groups = overlap_groups(self.subjects)
         if dim and self.subjects:
             path = QPainterPath()
             path.addRect(QRectF(bounds))
-            for rect in self.subjects:
+            for group in groups:
                 hole = QPainterPath()
-                hole.addRoundedRect(QRectF(rect), OUTLINE_RADIUS, OUTLINE_RADIUS)
+                if len(group) == 1:
+                    hole.addRoundedRect(QRectF(group[0]), OUTLINE_RADIUS, OUTLINE_RADIUS)
+                else:
+                    hole = outline_path(group, OUTLINE_RADIUS)
                 path = path.subtracted(hole)
             painter.fillPath(path, self.app.dim)
         painter.setPen(QPen(self.app.accent, OUTLINE_WIDTH))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         inset = OUTLINE_WIDTH / 2
-        for rect in self.subjects:
-            painter.drawRoundedRect(QRectF(rect).adjusted(inset, inset, -inset, -inset),
-                                    OUTLINE_RADIUS, OUTLINE_RADIUS)
+        for group in groups:
+            if len(group) == 1:
+                painter.drawRoundedRect(QRectF(group[0]).adjusted(inset, inset, -inset, -inset),
+                                        OUTLINE_RADIUS, OUTLINE_RADIUS)
+                continue
+            # The same edges as a single subject's: a stroke centred on the shape
+            # inset by half its width is a doubled stroke of the shape, clipped to it.
+            shape = outline_path(group, OUTLINE_RADIUS + inset)
+            painter.save()
+            painter.setClipPath(shape)
+            painter.setPen(QPen(self.app.accent, 2 * OUTLINE_WIDTH))
+            painter.drawPath(shape)
+            painter.restore()
         font = QFont(self.app.qt.font())
         font.setBold(True)
         font.setPixelSize(13)

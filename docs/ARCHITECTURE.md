@@ -2939,6 +2939,13 @@ on it. The README links to it at the top.
   alpha, and adds numbered badges (`accent`, `accent_text`) that the guide's text refers
   to. Context menus are grabbed and drawn where they would open. It reads the panels'
   private widgets, so a change to a panel may need a change to its shot.
+  - **Outlines that overlap merge** (RZG-95), such as a menu over its panel: each group
+    of overlapping subjects gets one outline around their union, with every corner
+    rounded (inside corners too, at `OUTLINE_RADIUS` or less on a short edge), and the dimmed
+    area is cut out along the same shape. Subjects that only sit side by side, even 1 px
+    apart like panels in a split, keep their own outlines. The shapes are
+    `docs/screenshots/outline_shape.py` (`overlap_groups`, `outline_path`), which has no
+    side effects, so `tests/test_outline_shape.py` imports it.
 
 ## 11. Conventions
 
