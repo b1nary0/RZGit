@@ -366,6 +366,9 @@ of the name before the first `/` (such as `feature/`, with the branches that hav
 under **Other**), and **Merged**, which shows the branches not merged into the current
 one first.
 
+The current branch is always the first row, whatever the order or grouping, above the
+headings. When HEAD is detached, the first row is "HEAD (detached at *sha*)" instead.
+
 - Double-click a branch to switch to it.
 - Right-click a branch for its menu: **Switch to** the branch, **New Branch from** it,
   **New Worktree from** it, **Rename** it, **Delete** it, and the **Merge / Rebase**
@@ -415,14 +418,15 @@ the branch they were made on, and their age. **Sort By** offers **Age**, **Messa
 
 A worktree is a second working folder of the same repository, with a different branch
 checked out, so that you can work on two branches at once. The Worktrees panel lists them,
-with the main worktree first. It appears once the repository has more than one worktree,
+with the worktree this window shows first, then the main worktree. It appears once the repository has more than one worktree,
 and **Repository → Show Worktrees** (Ctrl+Shift+W) brings it to the front.
 
 For each worktree, the panel shows its **Name**, its **State** (such as "clean" or "3
 changed files"), and **↑↓**, how many commits its branch is ahead of and behind its
 upstream. The **Branch** and **Path** columns are hidden at first; right-click the column
 labels to show them. The worktree this window shows is in bold. **Sort By** offers **Git
-Order**, **Recently Used** (the default), **Name**, **Branch** and **Path**.
+Order**, **Recently Used** (the default), **Name**, **Branch** and **Path**; this window's
+worktree and the main one stay at the top in every order.
 
 - Double-click a worktree, or select it and press Enter, to open it in a window of its
   own.

@@ -2,7 +2,8 @@
 
 Sort By (RZG-43), its header menu: by name (git's order) or by last commit.
 Group By (RZG-53): the name's prefix ("feature/") or merged, under headings
-that can't be selected (``GroupedTree``).
+that can't be selected (``GroupedTree``). The current branch, or a detached HEAD,
+is the first row in every order, above the headings (RZG-99).
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from rzgit.ui.theme.app_theme import AppTheme
 from rzgit.ui.widgets.grouped_tree import GroupedTree
 from rzgit.ui.widgets.sort_menu import SortMenu
 
-_NAME = Qt.ItemDataRole.UserRole  # a branch row's name; None for "(no commits)"
+_NAME = Qt.ItemDataRole.UserRole  # a branch row's name; None for "(no commits)" and HEAD
 _CURRENT = " (current branch)"
 OTHER = "Other"  # Group By Prefix: the branches without one
 NOT_MERGED, MERGED = "Not merged", "Merged"
@@ -36,11 +37,16 @@ def prefix(branch: Branch) -> str:
     return f"{head}/" if slash and head else OTHER
 
 
-# Sort By (spec §5.4): git's order is by name. Group By: prefix or merged.
+def detached_text(sha: str) -> str:
+    return f"HEAD (detached at {sha[:8]})"
+
+
+# Sort By (spec §5.4): git's order is by name. Group By: prefix or merged. The
+# current branch is pinned first, above the groups (RZG-99).
 SORTS: SortOptions[Branch] = SortOptions((
     SortOption("name", "Name"),
     SortOption("last_commit", "Last Commit", _last_commit, descending=True),
-), groups=(
+), first=(lambda b: b.is_current,), groups=(
     GroupOption("prefix", "Prefix", prefix, last=(OTHER,)),
     GroupOption("merged", "Merged", lambda b: MERGED if b.merged else NOT_MERGED,
                 order=(NOT_MERGED, MERGED)),
@@ -75,6 +81,7 @@ class BranchesPanel(Panel):
         session = self.ctx.session
         session.branches_changed.connect(self._render)
         session.head_changed.connect(self._render)
+        session.head_sha_changed.connect(self._on_head_sha)
         session.repo_changed.connect(lambda _repo: self._list.forget_folded())
         self._render()
 
@@ -84,20 +91,25 @@ class BranchesPanel(Panel):
         current = self._list.currentItem()
         keep = current.data(0, _NAME) if current else None
 
+        def bold(item: QTreeWidgetItem) -> QTreeWidgetItem:
+            font = item.font(0)
+            font.setBold(True)
+            item.setFont(0, font)
+            return item
+
         def item_of(b: Branch) -> QTreeWidgetItem:
             item = QTreeWidgetItem([b.name])
             item.setData(0, _NAME, b.name)
-            if b.is_current:
-                font = item.font(0)
-                font.setBold(True)
-                item.setFont(0, font)
-            return item
+            return bold(item) if b.is_current else item
 
+        # Pinned first (RZG-99): a detached HEAD, else the current branch (in `top`).
+        sha = self.ctx.session.head_sha
+        items = [bold(QTreeWidgetItem([detached_text(sha)]))] if head is None and sha else []
         groups = self.sort.grouped(branches)
         if groups is None:
-            items = [item_of(b) for b in self.sort.apply(branches)]
+            items += [item_of(b) for b in self.sort.apply(branches)]
         else:
-            items = []
+            items += [item_of(b) for b in self.sort.top(branches)]
             for group in groups:
                 heading = self._list.heading(group)
                 heading.addChildren([item_of(b) for b in group.items])
@@ -116,6 +128,10 @@ class BranchesPanel(Panel):
                     self._list.setCurrentItem(item)
         finally:
             self._list.blockSignals(blocked)
+
+    def _on_head_sha(self, _sha: object) -> None:
+        if self.ctx.session.head is None:  # the detached row shows the sha
+            self._render()
 
     def _on_sorted(self) -> None:
         self._render()

@@ -32,10 +32,21 @@ class SortOptionsTests(unittest.TestCase):
         self.assertTrue(SORTS.descending(SortOrder("name", True)))
 
     def test_first_rows_stay_at_the_top_in_every_order(self):
-        sorts = SortOptions(SORTS.options, first=lambda w: w == "pear")
+        sorts = SortOptions(SORTS.options, first=(lambda w: w == "pear",))
         for order in (SortOrder("given"), SortOrder("given", True), SortOrder("name"),
                       SortOrder("name", True), SortOrder("length", True)):
             self.assertEqual(sorts.apply(WORDS, order)[0], "pear", order)
+
+    def test_first_pins_by_its_tests_in_order_each_row_once(self):
+        """RZG-99: the first test's rows, then the second's, then the rest."""
+        sorts = SortOptions(SORTS.options, first=(lambda w: w == "fig", str.istitle))
+        self.assertEqual(sorts.apply(WORDS, SortOrder("name")), ["fig", "Apple", "apple", "pear"])
+        self.assertEqual(sorts.apply(WORDS, SortOrder("name", True)),
+                         ["fig", "Apple", "pear", "apple"])
+        both = SortOptions(SORTS.options, first=(str.istitle, lambda w: w.startswith("A")))
+        self.assertEqual(both.apply(WORDS, SortOrder("given")), ["Apple", "pear", "fig", "apple"])
+        self.assertEqual(both.top(WORDS, SortOrder("given")), ["Apple"])
+        self.assertEqual(SORTS.top(WORDS, SortOrder("given")), [])
 
     def test_of_reads_the_value_from_a_wrapped_item(self):
         rows = [(w, i) for i, w in enumerate(WORDS)]
@@ -125,10 +136,17 @@ class GroupingTests(unittest.TestCase):
         group = GROUPED.grouped(FRUIT, SortOrder("given", group="size"))[0]
         self.assertEqual((group.key, group.name), ("size", "short"))
 
-    def test_first_rows_stay_at_the_top_of_their_group(self):
-        options = SortOptions(SORTS.options, first=lambda w: w == "plum", groups=GROUPED.groups)
-        groups = options.grouped(FRUIT, SortOrder("name", group="initial"))
-        self.assertEqual(groups[-1].items, ["plum", "pear"])
+    def test_first_rows_stand_above_the_groups_in_none(self):
+        """RZG-99: ``top`` gives them; a group left empty by them isn't there."""
+        options = SortOptions(SORTS.options, first=(lambda w: w == "plum",), groups=GROUPED.groups)
+        order = SortOrder("name", group="initial")
+        groups = options.grouped(FRUIT, order)
+        self.assertEqual(groups[-1].items, ["pear"])
+        self.assertNotIn("plum", [w for g in groups for w in g.items])
+        self.assertEqual(options.top(FRUIT, order), ["plum"])
+        alone = SortOptions(SORTS.options, first=(lambda w: w.startswith("f"),),
+                            groups=GROUPED.groups)
+        self.assertNotIn("f", [g.name for g in alone.grouped(FRUIT, order)])
 
     def test_of_reads_the_value_for_the_group_too(self):
         wrapped = [(w, i) for i, w in enumerate(FRUIT)]

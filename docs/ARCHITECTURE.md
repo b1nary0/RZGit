@@ -905,7 +905,10 @@ a saved key, a label, a key function on the panel's own items, a default directi
 option is the **natural order**, git's or the app's own, with no key function: the way
 back, and the default unless `default_key` names another option (RZG-50: Worktrees' Recently
 Used). An unknown key reads as the default. `apply(items, order)` is a stable sort, so ties
-keep the natural order; `first` names rows kept at the top in every order (the main worktree).
+keep the natural order. `first` is a tuple of tests for rows **pinned** at the top in every
+order, reversed or not (RZG-99): the rows passing the first test, then the second, then the
+rest in the chosen order; a row passing two is shown once, at the first. Branches pins the
+current branch; Worktrees this window's worktree, then the main one.
 - **`SortMenu`** (`ui/widgets/sort_menu.py`) is a panel's **Sort By ▸** submenu: the options
   as radio items, a separator, then **Reversed** (relative to the option's default
   direction). The panel puts its `menuAction()` last in its header actions. It holds the
@@ -931,7 +934,9 @@ first, in that order, then the others by name (ignoring case), then those in `la
 ("Other"). `SortOrder.group` is the chosen option's key, `None` (the default) for no
 grouping. `grouped(items, order)` sorts, then splits the rows into `Group`s (a name and
 its items, in group order, empty groups left out): **groups come first, and the sort
-applies inside each group**. Reversed reverses only inside the groups.
+applies inside each group**. Reversed reverses only inside the groups. Pinned rows
+(`first`) are in no group: `top(items, order)` gives them, and the panel shows them as
+top-level rows above the headings, counted in no heading (RZG-99).
 - **`SortMenu.group_menu`** is the **Group By ▸** submenu: **None**, then the options,
   as radio items. A panel with groupings puts it just above Sort By
   (`SortMenu.header_actions()`); one `order_changed` covers both. Choosing a sort keeps
@@ -1153,6 +1158,11 @@ follows the session.
   with one column and no labels; the current branch stays bold, and the selection is kept
   by name through re-sorts and refreshes. The "(no commits)" row of a fresh repository
   is never grouped.
+- **The current branch is the first row** (RZG-99) in every sort order, reversed or not,
+  and above the headings when grouped (`first`, §5.1), shown once. On a detached HEAD the
+  first row is instead "HEAD (detached at *sha*)" (8 characters, `session.head_sha`), in
+  bold; like "(no commits)" it has no menu and does nothing on a double-click. The panel
+  renders on `head_changed` and, while detached, on `head_sha_changed`.
 - **Double-click** a branch to switch to it (MainWindow confirms first). The current
   branch, and the "(no commits)" row of a fresh repository, do nothing.
 - **Right-click** a branch for its menu, built by `menu_for(name)`:
@@ -1165,7 +1175,7 @@ follows the session.
   the empty space below the list have no menu.
 
 **Worktrees** (WorktreesPanel, RZG-48), below Branches, lists `ctx.worktrees.worktrees`,
-the main worktree first, in labelled columns (§5.2): **Name** (the main column),
+this window's worktree first, then the main one, in labelled columns (§5.2): **Name** (the main column),
 **State** and **↑↓**, and **Branch** and **Path**, which start hidden (right-click the labels
 to show them). Branch, ↑↓ and path are muted (`text_muted`). The other columns fit their
 text, the path up to about 48 characters (shown with `~` for the home folder, elided in
@@ -1206,11 +1216,12 @@ runs git or shows a dialog.
 - The selection is kept by path through refreshes and re-sorts.
 - **Sort By** (RZG-43), last in the header menu: **Git Order**, **Recently Used** (the
   default, RZG-50), **Name**, **Branch** and **Path**, the last three also from their
-  column labels (ignoring case). State and ↑↓ don't sort. The main worktree is first in
-  every order.
+  column labels (ignoring case). State and ↑↓ don't sort. **This window's worktree is
+  first** in every order, reversed or not, then the main worktree (RZG-99; one row when
+  this window shows the main one), then the rest in the chosen order (`first`, §5.1).
 - **Recently Used** (RZG-50): most recent first, by `ctx.recent.last_opened(root)` (§6.3). This
-  window's own worktree counts as the most recent, so it comes right after the main one,
-  and a window's list doesn't move when the window is activated (no row jumps under the
+  window's own worktree counts as the most recent (it is pinned first anyway, RZG-99),
+  so a window's list doesn't move when the window is activated (no row jumps under the
   click). Worktrees never used come last, in git's order. Reversed is a plain reverse:
   oldest first, the never-used ones at the top. The panel renders again when a time
   changes (another window was activated), keeping the selection.

@@ -6,7 +6,7 @@ is only one worktree. The panel never runs git or opens a window: it asks
 ``actions.request_open_worktree`` (or ``request_open_worktree_here``), and
 ``actions.request_worktree`` for the rest (new, remove, prune, folder, terminal).
 Sort By (RZG-43): git's order, recently used (the default, RZG-50), name, branch
-or path; the main worktree first.
+or path; this window's worktree first, then the main one (RZG-99).
 """
 
 from __future__ import annotations
@@ -112,16 +112,18 @@ def sync_tooltip(state: WorktreeState | None) -> str:
 NEVER_USED = float("-inf")  # sorts after every used worktree, most recent first
 
 
-def worktree_sorts(last_used: Callable[[Worktree], float]) -> SortOptions[Worktree]:
-    """Sort By (spec §5.4): the main worktree is first in every order. ``last_used``
-    gives a worktree's time for Recently Used (the default; ``NEVER_USED`` if none)."""
+def worktree_sorts(last_used: Callable[[Worktree], float],
+                   is_owner: Callable[[Worktree], bool]) -> SortOptions[Worktree]:
+    """Sort By (spec §5.4): this window's worktree (``is_owner``) is first in every
+    order, then the main one (RZG-99). ``last_used`` gives a worktree's time for
+    Recently Used (the default; ``NEVER_USED`` if none)."""
     return SortOptions((
         SortOption("git", "Git Order"),
         SortOption("recent", "Recently Used", last_used, descending=True),
         SortOption("name", "Name", lambda w: w.name.casefold(), column="Name"),
         SortOption("branch", "Branch", lambda w: branch_text(w).casefold(), column="Branch"),
         SortOption("path", "Path", lambda w: w.path.casefold(), column="Path"),
-    ), first=lambda w: w.main, default_key="recent")
+    ), first=(is_owner, lambda w: w.main), default_key="recent")
 
 
 class WorktreesPanel(Panel):
@@ -162,7 +164,8 @@ class WorktreesPanel(Panel):
         self.prune_action = QAction(PRUNE, self)
         self.prune_action.triggered.connect(
             lambda: self.ctx.actions.request_worktree(WorktreeOp.PRUNE))
-        self.sort = SortMenu(self.panel_id, worktree_sorts(self.last_used), self.ctx.sorts, self)
+        self.sort = SortMenu(self.panel_id, worktree_sorts(self.last_used, self.is_owner),
+                             self.ctx.sorts, self)
         self.sort.order_changed.connect(self._on_sorted)
         self.ctx.recent.changed.connect(self._on_used)
         separator = QAction(self)
@@ -264,10 +267,14 @@ class WorktreesPanel(Panel):
         if self._tree is not None and (item := self._selected_item()) is not None:
             self._tree.scrollToItem(item)
 
+    def is_owner(self, worktree: Worktree) -> bool:
+        """Whether ``worktree`` is the one this window shows."""
+        return worktree.path == self._owner_path()
+
     def last_used(self, worktree: Worktree) -> float:
         """Its time for Recently Used. This window's own counts as the most recent, so
         the list doesn't move when the window is activated (spec §5.4)."""
-        if worktree.path == self._owner_path():
+        if self.is_owner(worktree):
             return float("inf")
         at = self.ctx.recent.last_opened(worktree.path)
         return NEVER_USED if at is None else at

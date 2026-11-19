@@ -140,12 +140,12 @@ class WorktreesPanelTests(unittest.TestCase):
                 return self.tree.topLevelItem(r)
         raise KeyError(name)
 
-    def test_lists_each_worktree_with_its_state_the_main_one_first(self):
+    def test_lists_each_worktree_with_its_state_this_window_s_then_the_main_one_first(self):
         head = git(self.main, "rev-parse", "HEAD").strip()
         p = str(self.tmp)
         self.assertEqual(self.rows(), [
-            ["main", "main", "clean", "", f"{p}/main"],
             ["feature", "feature", "1 changed file", "", f"{p}/feature"],
+            ["main", "main", "clean", "", f"{p}/main"],
             ["gone", "gone", "missing folder", "", f"{p}/gone"],
             ["loose", f"detached at {head[:8]}", "clean · locked", "", f"{p}/loose"],
         ])
@@ -319,23 +319,30 @@ class WorktreesPanelTests(unittest.TestCase):
         self.panel.open_action.trigger()
         self.assertEqual(self.opened, [str(self.main), str(self.tmp / "loose")])
 
-    def test_sort_by_keeps_the_main_worktree_first_and_the_selection(self):
+    def test_sort_by_keeps_this_window_s_then_the_main_worktree_first_and_the_selection(self):
         """RZG-43: Git Order, Recently Used, Name, Branch and Path; State and ↑↓ don't sort."""
         self.assertEqual([a.text() for a in self.panel.sort.actions()[:5]],
                          ["Git Order", "Recently Used", "Name", "Branch", "Path"])
         self.panel.sort.choose("git")
         names = lambda: [r[0] for r in self.rows()]
-        self.assertEqual(names(), ["main", "feature", "gone", "loose"])  # git's order
+        self.assertEqual(names(), ["feature", "main", "gone", "loose"])  # git's order
         self.item("loose").setSelected(True)
         labels = self.panel._labels
         click_column_label(labels, NAME)
-        self.assertEqual(names(), ["main", "feature", "gone", "loose"])
+        self.assertEqual(names(), ["feature", "main", "gone", "loose"])
         self.assertEqual(labels.sort_indicator, ("Name", False))
-        click_column_label(labels, NAME)
-        self.assertEqual(names(), ["main", "loose", "gone", "feature"])
+        click_column_label(labels, NAME)  # Z to A: the two pinned rows stay on top
+        self.assertEqual(names(), ["feature", "main", "loose", "gone"])
         self.assertEqual(self.panel.selected_path(), str(self.tmp / "loose"))
-        self.panel.sort.choose("branch")  # "detached at …", feature, gone
-        self.assertEqual(names(), ["main", "loose", "feature", "gone"])
+        self.panel.sort.choose("branch")  # "detached at …", gone
+        self.assertEqual(names(), ["feature", "main", "loose", "gone"])
+        self.panel.sort.set_reversed(True)
+        self.assertEqual(names(), ["feature", "main", "gone", "loose"])
+        for key in ("git", "recent", "path"):
+            for reverse in (False, True):
+                self.panel.sort.choose(key)
+                self.panel.sort.set_reversed(reverse)
+                self.assertEqual(names()[:2], ["feature", "main"], (key, reverse))
         self.assertFalse(labels.is_sortable(STATE))
         self.assertFalse(labels.is_sortable(SYNC))
 
@@ -347,7 +354,7 @@ class WorktreesPanelTests(unittest.TestCase):
         """A window on the worktree ``name`` was opened or activated now (RZG-87)."""
         recent.touch(mock.Mock(root=self.tmp / name, main_root=self.main))
 
-    def test_recently_used_is_the_default_this_window_s_worktree_next_after_main(self):
+    def test_recently_used_is_the_default_this_window_s_worktree_first_then_main(self):
         """RZG-50: most recent first; never used last, in git's order."""
         self.assertEqual(self.panel.sort.order.key, "recent")
         recent = RecentRepos(clock=itertools.count(1).__next__)
@@ -356,31 +363,31 @@ class WorktreesPanelTests(unittest.TestCase):
         self.use(recent, "feature")  # this window's: the most recent anyway
         panel = WorktreesPanel(dataclasses.replace(self.ctx, recent=recent))
         self.addCleanup(panel.deleteLater)
-        self.assertEqual(self.names(panel), ["main", "feature", "loose", "gone"])
+        self.assertEqual(self.names(panel), ["feature", "main", "loose", "gone"])
         self.use(recent, "gone")  # another window activated on it
-        self.assertEqual(self.names(panel), ["main", "feature", "gone", "loose"])
-        # Reversed: oldest first, never used at the top; this window's last.
+        self.assertEqual(self.names(panel), ["feature", "main", "gone", "loose"])
+        # Reversed: oldest first, never used at the top, after the pinned two (RZG-99).
         git(self.main, "worktree", "add", "-q", "-b", "fresh", str(self.tmp / "fresh"))
         self.settle()
-        self.assertEqual(self.names(panel), ["main", "feature", "gone", "loose", "fresh"])
+        self.assertEqual(self.names(panel), ["feature", "main", "gone", "loose", "fresh"])
         panel.sort.set_reversed(True)
-        self.assertEqual(self.names(panel), ["main", "fresh", "loose", "gone", "feature"])
+        self.assertEqual(self.names(panel), ["feature", "main", "fresh", "loose", "gone"])
 
     def test_a_new_use_keeps_the_selection_and_only_moves_rows_in_recently_used(self):
         self.item("loose").setSelected(True)
         self.use(self.ctx.recent, "loose")
-        self.assertEqual(self.names(), ["main", "feature", "loose", "gone"])
+        self.assertEqual(self.names(), ["feature", "main", "loose", "gone"])
         self.assertEqual(self.panel.selected_path(), str(self.tmp / "loose"))
         self.panel.sort.choose("git")
         self.assertEqual(self.ctx.sorts.order("worktrees").key, "git")  # saved: not the default
         self.use(self.ctx.recent, "gone")
-        self.assertEqual(self.names(), ["main", "feature", "gone", "loose"])  # git's order
+        self.assertEqual(self.names(), ["feature", "main", "gone", "loose"])  # git's order
 
     def test_states_fill_the_right_rows_after_a_sort(self):
-        self.panel.sort.set_reversed(True)  # git's order, reversed: main first still
+        self.panel.sort.set_reversed(True)  # git's order, reversed: this window's first still
         self.settle()
         states = {r[0]: r[2] for r in self.rows()}
-        self.assertEqual(self.rows()[0][0], "main")
+        self.assertEqual(self.rows()[0][0], "feature")
         self.assertEqual(states["feature"], "1 changed file")
         self.assertEqual(states["main"], "clean")
         self.assertEqual(states["gone"], "missing folder")
@@ -390,6 +397,40 @@ class WorktreesPanelTests(unittest.TestCase):
         self.panel._render_state(str(self.tmp / "feature"), None)
         self.assertEqual(self.item("feature").text(STATE), "1 changed file")
         self.assertEqual(self.item("loose").text(STATE), "")
+
+    def test_a_window_on_the_main_worktree_shows_it_once_first(self):
+        """RZG-99: this window's worktree and the main one are the same row."""
+        session = make_panel_context().session
+        self.addCleanup(session.shutdown)
+        session.open(self.main)
+        wait_idle(session)
+        reader = WorktreeReader(session)
+        self.addCleanup(reader.shutdown)
+        panel = WorktreesPanel(dataclasses.replace(self.ctx, session=session, worktrees=reader))
+        self.addCleanup(panel.deleteLater)
+        deadline = time.monotonic() + 10
+        reader.refresh()
+        while reader.busy or panel._tree is None:
+            self.assertLess(time.monotonic(), deadline, "reader still busy")
+            QCoreApplication.processEvents()
+            QThread.msleep(2)
+        panel.sort.choose("name")
+        panel.sort.set_reversed(True)
+        self.assertEqual(self.names(panel), ["main", "loose", "gone", "feature"])
+        self.assertTrue(panel._tree.topLevelItem(0).font(0).bold())
+
+    def test_the_pinned_row_selects_opens_and_has_its_menu(self):
+        """RZG-99: the pinned row works as any other."""
+        pinned = self.tree.topLevelItem(0)
+        self.assertEqual(pinned.text(0), "feature")
+        pinned.setSelected(True)
+        self.assertEqual(self.panel.selected_path(), str(self.tmp / "feature"))
+        self.tree.itemDoubleClicked.emit(pinned, 0)
+        self.assertEqual(self.opened, [str(self.tmp / "feature")])
+        rect = self.tree.visualItemRect(pinned)
+        with mock.patch.object(self.panel, "menu_for") as menu_for:
+            self.panel._show_menu(rect.center())
+        self.assertEqual(menu_for.call_args.args[0].path, str(self.tmp / "feature"))
 
     def test_a_missing_worktree_can_t_be_opened(self):
         self.item("gone").setSelected(True)

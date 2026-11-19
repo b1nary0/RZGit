@@ -109,6 +109,10 @@ class SortMenu(QMenu):
         """``items`` under their groups, in the current order; None when not grouped."""
         return self.options.grouped(items, self._order, of)
 
+    def top(self, items: Iterable[Any], of: Callable[[Any], Any] | None = None) -> list[Any]:
+        """The pinned rows of ``items``, shown above the groups (``SortOptions.top``)."""
+        return self.options.top(items, self._order, of)
+
     # ---- column labels ---------------------------------------------------------
 
     def attach(self, header: ColumnHeader) -> None:

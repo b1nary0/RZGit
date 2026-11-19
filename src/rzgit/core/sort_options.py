@@ -4,8 +4,10 @@ A panel declares its orders as a ``SortOptions``: the first option is the
 natural order (git's or the app's own, no key function): the way back, and the
 default unless ``default_key`` names another. ``apply`` is a stable sort, so ties
 keep the natural order.
-``groups`` are its groupings: ``grouped`` sorts, then puts the rows under
-their groups, in the grouping's order. ``SortMenu`` (ui/widgets) is the menu
+``first`` pins rows at the top in every order (RZG-99): those passing its first
+test, then its second, then the rest. ``groups`` are its groupings: ``grouped``
+sorts, then puts the other rows under their groups, in the grouping's order;
+``top`` gives the pinned ones, shown above the groups. ``SortMenu`` (ui/widgets) is the menu
 and column labels that choose them.
 """
 
@@ -68,7 +70,7 @@ class Group(Generic[T]):
 @dataclass(frozen=True)
 class SortOptions(Generic[T]):
     options: tuple[SortOption[T], ...]  # the first is the natural order
-    first: Callable[[T], bool] | None = None  # rows kept at the top in every order
+    first: tuple[Callable[[T], bool], ...] = ()  # pinned rows' tests, in order (RZG-99)
     default_key: str | None = None  # the default option; None: the natural order
     groups: tuple[GroupOption[T], ...] = ()  # the groupings (RZG-53); none: not groupable
 
@@ -118,6 +120,11 @@ class SortOptions(Generic[T]):
         """Whether ``order`` runs against its option's values (Z to A, oldest first)."""
         return self.option(order.key).descending != order.reversed
 
+    def _pin(self, value: T) -> int:
+        """Where a row is pinned: the index of the first test it passes;
+        ``len(first)`` (after them all) when it isn't."""
+        return next((i for i, test in enumerate(self.first) if test(value)), len(self.first))
+
     def apply(self, items: Iterable[Any], order: SortOrder,
               of: Callable[[Any], T] | None = None) -> list[Any]:
         """``items`` in ``order``: stable, so ties keep the given (natural) order.
@@ -131,22 +138,32 @@ class SortOptions(Generic[T]):
         else:
             sort_key = option.sort_key
             result = sorted(items, key=lambda item: sort_key(value(item)), reverse=descending)
-        if self.first is not None:
-            first = self.first
-            result = ([i for i in result if first(value(i))]
-                      + [i for i in result if not first(value(i))])
+        if self.first:
+            result.sort(key=lambda item: self._pin(value(item)))  # stable: keeps the order
         return result
+
+    def top(self, items: Iterable[Any], order: SortOrder,
+            of: Callable[[Any], T] | None = None) -> list[Any]:
+        """The pinned rows of ``items`` (``first``), in pinned order: what a grouped
+        panel shows above its groups."""
+        value = of or (lambda item: item)
+        pinned = len(self.first)
+        return [item for item in self.apply(items, order, of) if self._pin(value(item)) < pinned]
 
     def grouped(self, items: Iterable[Any], order: SortOrder,
                 of: Callable[[Any], T] | None = None) -> list[Group[T]] | None:
         """``items`` in ``order``, under their groups in the grouping's order (none
-        empty); None when ``order`` isn't grouped. The sort applies inside each group."""
+        empty); None when ``order`` isn't grouped. The sort applies inside each group.
+        Pinned rows (``first``) are in no group: ``top`` gives them."""
         grouping = self.grouping(order.group)
         if grouping is None:
             return None
         value = of or (lambda item: item)
         groups: dict[str, Group[T]] = {}
+        pinned = len(self.first)
         for item in self.apply(items, order, of):
+            if self._pin(value(item)) < pinned:
+                continue
             name = grouping.group_of(value(item))
             groups.setdefault(name, Group(grouping.key, name)).items.append(item)
         return sorted(groups.values(), key=lambda g: grouping.rank(g.name))
