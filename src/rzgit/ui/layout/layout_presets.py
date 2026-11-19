@@ -58,12 +58,13 @@ def _areas(arrangement: Arrangement, sidebar: LayoutNode,
 # In every preset Staged Files, Commit and Commit Files are directly below
 # (Unstaged) Files, as in GitKraken: Commit Files takes the place of the other
 # three while a commit is selected (spec §5.4). Its size is 0: it always takes
-# theirs (§6.2). Standard: Branches, Worktrees, Unstaged Files, Staged Files,
-# Commit and Stashes stacked in the Sidebar, left of the Main pane.
+# theirs (§6.2). Commit is the bottom panel of its column, with only Commit Files
+# below it (RZG-93). Standard: Branches, Worktrees, Stashes, Unstaged Files,
+# Staged Files and Commit stacked in the Sidebar, left of the Main pane.
 DEFAULT_LAYOUT = _areas(
     Arrangement.SIDEBAR_LEFT,
-    SplitNode(V, (BRANCHES, WORKTREES, FILES, STAGED, COMMIT, COMMIT_FILES, STASH),
-              sizes=(180, 140, 220, 120, 160, 0, 170)),
+    SplitNode(V, (BRANCHES, WORKTREES, STASH, FILES, STAGED, COMMIT, COMMIT_FILES),
+              sizes=(180, 140, 170, 220, 120, 160, 0)),
     (220, 880))
 
 PRESETS = (

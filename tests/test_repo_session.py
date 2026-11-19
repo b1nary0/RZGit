@@ -1,4 +1,6 @@
+import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -191,14 +193,20 @@ class RepoSessionTests(unittest.TestCase):
 
     def test_refresh_emits_only_what_changed(self):
         self.open_and_clear()
-        commit_file(self.path, "a.txt", "2", "second")
+        (self.path / "a.txt").write_text("2")
+        git(self.path, "add", "a.txt")
+        # A later date than the first commit's, always: a commit in the same second would
+        # leave the branch's date (Branch.date) as it was, and then the branches wouldn't change.
+        env = {**os.environ, "GIT_COMMITTER_DATE": "2099-01-01T00:00:00Z"}
+        subprocess.run(["git", "commit", "-q", "-m", "second"], cwd=self.path, check=True,
+                       capture_output=True, env=env)
         self.session.refresh()
         wait_idle(self.session)
-        # A new commit moves HEAD's sha and its branch's ref, and changes history,
-        # status and the count; the branch and the branch list (names, which is
-        # current) stay.
-        self.assertEqual(self.rec.names(), ["head_sha_changed", "refs_changed", "history_changed",
-                                            "status_changed", "commit_count_changed"])
+        # A new commit moves HEAD's sha, its branch's tip date and its ref, and changes
+        # history, status and the count; the branch names and which is current stay.
+        self.assertEqual(self.rec.names(), ["head_sha_changed", "branches_changed", "refs_changed",
+                                            "history_changed", "status_changed",
+                                            "commit_count_changed"])
 
     # ---- refs (RZG-77) ----------------------------------------------------
 

@@ -347,8 +347,8 @@ def shot_overview(app: App) -> None:
     app.panel("history").request_activation()
     p = picture(app)
     p.badge(1, app.panel("controls"), "center")
-    for number, panel_id in enumerate(("branches", "worktrees", "files", "staged", "commit",
-                                       "stash"), start=2):
+    for number, panel_id in enumerate(("branches", "worktrees", "stash", "files", "staged",
+                                       "commit"), start=2):
         p.badge(number, pane(app.panel(panel_id)), "header")
     p.badge(8, tabs(app, "history"), "right")
     p.badge(9, app.window.statusBar(), "inside-right")

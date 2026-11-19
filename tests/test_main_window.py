@@ -350,7 +350,8 @@ class MainWindowTests(unittest.TestCase):
                          ["commit_files"])
         self.assertTrue(panels["commit_files"].isVisible())
         files_at = sidebar.indexOf(panels["commit_files"].parentWidget())
-        self.assertEqual(sidebar.sizes()[files_at], sum(working[1:files_at + 1]))
+        freed = sum(working[sidebar.indexOf(panels[pid].parentWidget())] for pid in swapped)
+        self.assertEqual(sidebar.sizes()[files_at], freed)
         # Commit Details below History and Diff, at its height from the tabs above it.
         details = panels["commit_details"]
         self.assertTrue(details.isVisible())

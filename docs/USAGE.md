@@ -74,10 +74,10 @@ pane** holds the larger panels. With the Standard layout, the panels are:
 | 1 | Controls | Buttons for Open Repository, Refresh, Fetch, Pull and Push, and the branch button on the right. |
 | 2 | Branches | The local branches. The current branch is in bold. |
 | 3 | Worktrees | The repository's worktrees. It only appears once there are at least two. |
-| 4 | Unstaged Files | Files with changes that are not staged yet, including new files. |
-| 5 | Staged Files | Files with staged changes. It only appears when something is staged. |
-| 6 | Commit | The message of the commit you are writing. It only appears when something is staged. |
-| 7 | Stashes | The stashes, newest first. |
+| 4 | Stashes | The stashes, newest first. |
+| 5 | Unstaged Files | Files with changes that are not staged yet, including new files. |
+| 6 | Staged Files | Files with staged changes. It only appears when something is staged. |
+| 7 | Commit | The message of the commit you are writing, at the bottom. It only appears when something is staged. |
 | 8 | History and Diff | The list of commits, and the changes in the selected file, as two tabs. |
 | 9 | The status bar | The folder, the branch, the number of commits and the number of changed files. |
 
@@ -113,6 +113,8 @@ working in.
   left, above Staged Files and Commit.
 - **Stacked** puts the Main pane across the top, with the branches and files side by side
   below it.
+
+In each of them, Commit is the bottom panel of the Sidebar, directly below Staged Files.
 
 **Save Layout As…** saves the current arrangement under a name of your choice, and that
 name then appears in the Layout menu. **Manage Layouts…** renames and deletes the layouts

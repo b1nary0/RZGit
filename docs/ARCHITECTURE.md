@@ -1962,11 +1962,14 @@ panel. Each has the Controls panel alone in the Controls area, and an arrangemen
 Main pane holds `MAIN` in every preset: History and Diff are tabs of one group, with History current, and Commit Details below
 the group in a vertical split of their own (`MAIN`: `Split(V, [Tabs([history, diff]),
 commit_details], sizes=(500, 220))`, RZG-65). Staged Files, Commit and Commit Files are
-directly below Unstaged Files (`files`), in that order:
+directly below Unstaged Files (`files`), in that order, and **Commit is the bottom panel
+of its Sidebar column** in every preset (RZG-93): only Commit Files is below it, and it
+has no space of its own until a commit is selected.
 - **Standard** (`DEFAULT_LAYOUT`, `SIDEBAR_LEFT`, sizes (220, 880)): the Sidebar holds
-  Branches, Worktrees, Unstaged Files, Staged Files, Commit, Commit Files and Stashes
-  stacked: `Split(V, [branches, worktrees, files, staged, commit, commit_files, stash],
-  sizes=(180, 140, 220, 120, 160, 0, 170))`. Commit Files' size is 0 in every preset: it
+  Branches, Worktrees, Stashes, Unstaged Files, Staged Files, Commit and Commit Files
+  stacked: `Split(V, [branches, worktrees, stash, files, staged, commit, commit_files],
+  sizes=(180, 140, 170, 220, 120, 160, 0))`. The repository's lists are at the top and
+  staging and committing at the bottom. Commit Files' size is 0 in every preset: it
   has no space of its own (§6.2, swaps).
 - **Sidebar Tabs** (`SIDEBAR_LEFT`): the Sidebar holds Branches, Worktrees, Unstaged Files
   and Stashes as tabs, with Staged Files, Commit and Commit Files below the tabs.

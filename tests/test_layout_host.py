@@ -115,7 +115,7 @@ class LayoutHostTests(unittest.TestCase):
         self.assertTrue(all(isinstance(f, PanelFrame) for f in frames))
         self.assertEqual([f.panel for f in frames],
                          [self.host.panels["branches"], self.host.panels["worktrees"],
-                          self.host.panels["files"]])
+                          self.host.panels["stash"]])
         self.assertEqual(content.orientation(), Qt.Orientation.Vertical)
         tabs, details = content.widget(0), content.widget(1)
         self.assertIsInstance(tabs, QTabWidget)  # History and Diff
@@ -123,8 +123,8 @@ class LayoutHostTests(unittest.TestCase):
                          [self.host.panels["history"], self.host.panels["diff"]])
         self.assertEqual(tabs.currentIndex(), 0)
         self.assertIs(details.panel, self.host.panels["commit_details"])  # below them
-        self.assertEqual([sidebar.widget(i).panel.panel_id for i in range(3, 6)],
-                         ["staged", "commit", "commit_files"])
+        self.assertEqual([sidebar.widget(i).panel.panel_id for i in range(3, 7)],
+                         ["files", "staged", "commit", "commit_files"])  # Commit last (RZG-93)
 
     def test_tabs_use_the_panel_header_and_follow_it(self):
         apply_to(self.host, TABS)
@@ -231,8 +231,8 @@ class LayoutHostTests(unittest.TestCase):
         self.host.show_panel("files")
         self.assertEqual(self.host.hidden, {})
         sidebar = self.sidebar()
-        self.assertEqual([sidebar.widget(i).panel.panel_id for i in range(3)],
-                         ["branches", "worktrees", "files"])
+        self.assertEqual([sidebar.widget(i).panel.panel_id for i in range(4)],
+                         ["branches", "worktrees", "stash", "files"])
         self.assertEqual(len(changes), 3)  # apply, hide, show
 
     def test_the_last_panel_can_not_be_hidden(self):
