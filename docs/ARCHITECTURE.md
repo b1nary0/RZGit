@@ -1795,6 +1795,14 @@ than rebuilding them.
   tab comes to the front; a refresh never does.
   - The session's latest diff is shown at once (no "Loading…") only when it was read the
     way the panel wants it now: the same file, `diff_whole` and `diff_context` (RZG-97).
+  - **A new context count keeps the change in place** (RZG-103): the hunk at the top of
+    the view (the first whose `@@` header is on screen, else the one the top line is in)
+    keeps its header at the same height, so its new context shows above and below its
+    changes. It is found again by its place in the list: the hunks are the same at any
+    count (§4.1). `DiffView.place()` records it as `Place.hunk` (its number, and its
+    header's row less the top row), and `go_to(place, by_hunk=True)` scrolls to it and
+    selects the selected lines again. Show Whole File's toggle keeps the top line instead
+    (its hunks are others).
 
 **CommitPanel** writes a commit. It sits directly below Files in every preset (§6.1), as
 in GitKraken: a one-line **summary** (`QLineEdit`) with its length counter inside it on the

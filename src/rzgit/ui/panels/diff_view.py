@@ -156,24 +156,40 @@ class DiffView(QPlainTextEdit):
             self.horizontalScrollBar().setValue(h)
 
     def place(self) -> Place:
-        """Where the view is, by line rather than by row: the selected lines, and
-        the line at the top. ``go_to`` finds them again in other rows."""
+        """Where the view is, by line rather than by row: the selected lines, the
+        line at the top, and the hunk at the top. ``go_to`` finds them again in
+        other rows."""
         selected = frozenset(_line_key(self._rows[n]) for n in self.selection.rows)
-        first = self.firstVisibleBlock().blockNumber()
-        top = next((_line_key(r) for r in self._rows[max(first, 0):]
+        first = max(self.firstVisibleBlock().blockNumber(), 0)
+        top = next((_line_key(r) for r in self._rows[first:]
                     if r.old_no is not None or r.new_no is not None), None)
-        return Place(selected, top)
+        return Place(selected, top, self._top_hunk(first))
 
-    def go_to(self, place: Place, show_selection: bool = True) -> None:
+    def _top_hunk(self, first: int) -> tuple[int, int] | None:
+        """The hunk at the top, as (its number, its header's row less ``first``):
+        the first whose header is on screen, else the one row ``first`` is in."""
+        headers = [n for n, r in enumerate(self._rows) if r.kind is RowKind.HUNK]
+        page = self.verticalScrollBar().pageStep()
+        on_screen = [k for k, n in enumerate(headers) if first <= n < first + page]
+        above = [k for k, n in enumerate(headers) if n <= first]
+        k = on_screen[0] if on_screen else above[-1] if above else None
+        return None if k is None else (k, headers[k] - first)
+
+    def go_to(self, place: Place, show_selection: bool = True, by_hunk: bool = False) -> None:
         """Select ``place``'s lines again and, with ``show_selection``, scroll the
-        first of them into the middle; otherwise (or with none) put its top line
-        back at the top, or the nearest line after it."""
+        first of them into the middle; with ``by_hunk``, put its hunk's header back
+        at the same height (the same hunks, read with other context); otherwise
+        (or with none) put its top line back at the top, or the nearest line after it."""
         rows = [n for n, r in enumerate(self._rows)
                 if _line_key(r) in place.selected and self.selection.selectable(n)]
         if rows:
             self.selection.set_rows(rows)
         bar = self.verticalScrollBar()
-        if rows and show_selection:
+        headers = [n for n, r in enumerate(self._rows) if r.kind is RowKind.HUNK]
+        if by_hunk and place.hunk is not None and place.hunk[0] < len(headers):
+            k, offset = place.hunk
+            bar.setValue(max(0, headers[k] - offset))
+        elif rows and show_selection:
             bar.setValue(max(0, rows[0] - bar.pageStep() // 2))
         elif place.top is not None:
             n = _nearest(self._rows, place.top)
@@ -660,6 +676,7 @@ LineKey = tuple[RowKind, int | None, int | None]
 class Place:
     selected: frozenset[LineKey]
     top: LineKey | None
+    hunk: tuple[int, int] | None = None  # the top hunk: its number, its header's row less the top's
 
 
 def _line_key(row: DiffRow) -> LineKey:

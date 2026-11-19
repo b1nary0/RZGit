@@ -114,6 +114,7 @@ class DiffPanel(Panel):
         self._stretches: list[Stretch] = []  # the shown rows' foldable stretches
         self._fold_new = True  # the next render sets the folds as a diff opens
         self._place: list[Place] | None = None  # to go back to once the toggled diff is in
+        self._by_hunk = False  # ... by its top hunk (a new context count), not its top line
         self._unified = self._split = self._left = self._right = None
         # Find (RZG-74): the matches in the shown views, as (side, match), in order.
         self._matches: list[tuple[int, FindMatch]] = []
@@ -321,7 +322,7 @@ class DiffPanel(Panel):
             self._request(self._file)  # the diff on screen stays until the new one is in
         elif (key == CONTEXT_LINES.key and self._file is not None
               and not self.ctx.actions.whole_file_diff.isChecked()):
-            self._keep_place()  # the same lines stay in view once the new diff is in
+            self._keep_place(by_hunk=True)  # the change stays put, its context grows around it
             self._request(self._file)
 
     def _load_full(self) -> None:
@@ -340,10 +341,12 @@ class DiffPanel(Panel):
         else:
             self._loading.start()
 
-    def _keep_place(self) -> None:
-        """Find the same lines in the diff asked for next, once it's in."""
+    def _keep_place(self, by_hunk: bool = False) -> None:
+        """Find the same lines in the diff asked for next, once it's in; with
+        ``by_hunk``, keep the top hunk's header where it is (spec §5.4)."""
         shown = self._shown_views() if self._shown == self._file else []
         self._place = [view.place() for view in shown] or None
+        self._by_hunk = by_hunk
 
     def _show(self, file: FileSelection, diff: FileDiff | None) -> None:
         self._loading.stop()
@@ -370,7 +373,7 @@ class DiffPanel(Panel):
                 views = self._shown_views()
                 if len(views) == len(place):
                     for view, at in zip(views, place):
-                        view.go_to(at)
+                        view.go_to(at, by_hunk=self._by_hunk)
 
     def _shown_views(self) -> list[DiffView]:
         """The view or views on screen now (side by side, left then right)."""

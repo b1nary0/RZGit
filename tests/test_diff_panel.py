@@ -743,6 +743,45 @@ class DiffPanelWholeFileTests(unittest.TestCase):
         self.assertEqual(shown(), list(range(1, 101)))
         self.assertEqual(sum(r.kind is RowKind.HUNK for r in view.rows), 2)
 
+    def header_rows(self, view):
+        return [n for n, r in enumerate(view.rows) if r.kind is RowKind.HUNK]
+
+    def first_row(self, view):
+        return view.verticalScrollBar().value()
+
+    def test_more_context_grows_above_the_change_too(self):
+        """RZG-103: at the top, the first hunk's header stays at the top, so its new
+        lines above the change show; the top line isn't what's kept."""
+        view = self.view()
+        self.assertEqual((self.first_row(view), view.rows[1].new_no), (0, 27))
+        self.ctx.prefs.set(diff_panel.CONTEXT_LINES, 10)
+        self.settle()
+        self.assertEqual(self.first_row(view), 0)
+        self.assertIs(view.rows[0].kind, RowKind.HUNK)
+        self.assertEqual(view.rows[1].new_no, 20)  # the 7 new lines above it are on screen
+
+    def test_the_hunk_on_screen_keeps_its_height_and_the_selection_stays(self):
+        self.ctx.prefs.set(diff_panel.CONTEXT_LINES, 10)
+        self.settle()
+        for side_by_side in (False, True):
+            with self.subTest(side_by_side=side_by_side):
+                self.actions.side_by_side_diff.setChecked(side_by_side)
+                self.settle()
+                views = [self.panel._left, self.panel._right] if side_by_side else [self.view()]
+                view = views[-1]
+                seventy = next(n for n, r in enumerate(view.rows) if r.text == "SEVENTY")
+                view.selection.set_rows([seventy])
+                second = self.header_rows(view)[1]
+                for v in views:
+                    v.verticalScrollBar().setValue(second - 3)  # its header 3 rows down
+                self.ctx.prefs.set(diff_panel.CONTEXT_LINES, 20)
+                self.settle()
+                for v in views:
+                    self.assertEqual(self.first_row(v), self.header_rows(v)[1] - 3)
+                self.assertEqual([view.rows[n].text for n in view.selection.rows], ["SEVENTY"])
+                self.ctx.prefs.set(diff_panel.CONTEXT_LINES, 10)
+                self.settle()
+
     def test_the_whole_file_ignores_the_context_lines(self):
         self.whole()
         with mock.patch.object(self.session, "request_diff") as request:
