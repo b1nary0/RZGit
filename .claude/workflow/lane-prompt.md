@@ -17,8 +17,8 @@ You are lane {{LANE}}, one of several parallel lanes working on RZGit (a PySide6
 
 ## Python and tests (important)
 The shared venv is /home/JPOD/dev/RZGit/.venv. Its editable install points at the MAIN checkout's src, so always put your own src first. From your worktree root:
-  PYTHONPATH=src /home/JPOD/dev/RZGit/.venv/bin/python -m unittest discover -v -s tests -t .
-Full-suite runs go through the test runner in verify.md (stage 2), which shows the count on your tab.
+  PYTHONPATH=src /home/JPOD/dev/RZGit/.venv/bin/python /home/JPOD/dev/RZGit/.claude/workflow/run_tests.py --runs 1 [-v] [tests.test_<module> ...]
+Every test run goes through this runner, including targeted runs while building (name the modules or tests, as unittest does), so your tab shows the count. Never call `python -m unittest` directly.
 Do the same for any script that imports rzgit, or have it insert your worktree's src at sys.path[0]. Check once that `rzgit.__file__` resolves into your worktree.
 
 ## The workflow
