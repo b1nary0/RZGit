@@ -148,11 +148,39 @@ class AppThemeTests(unittest.TestCase):
         self.assertEqual(font.pointSizeF(), LIGHT_THEME.fonts.point_size(FontKind.MONO))
 
 
+class UpstreamCountTests(unittest.TestCase):
+    """The ↓n and ↑n on Pull and Push (spec §7.1, RZG-94)."""
+
+    def test_readable_on_the_bar_and_on_a_hovered_or_pressed_button(self):
+        for theme in ALL_THEMES:
+            c = theme.colors
+            for name in ("upstream_behind", "upstream_ahead"):
+                for background in ("toolbar_bg", "button_hover", "button_pressed"):
+                    self.assertGreaterEqual(contrast(getattr(c, name), getattr(c, background)),
+                                            4.5, (theme.name, name, background))
+
+    def test_a_count_stands_out_from_its_label(self):
+        for theme in ALL_THEMES:
+            c = theme.colors
+            for name in ("upstream_behind", "upstream_ahead"):
+                self.assertGreaterEqual(min_delta_e(getattr(c, name), c.text), 12,
+                                        (theme.name, name))
+
+    def test_behind_and_ahead_differ(self):
+        for theme in THEMES:
+            c = theme.colors
+            self.assertGreaterEqual(delta_e(c.upstream_behind, c.upstream_ahead), 15, theme.name)
+        for _base, variant in VARIANTS:  # however the colours are seen
+            c = variant.colors
+            self.assertGreaterEqual(min_delta_e(c.upstream_behind, c.upstream_ahead), 30,
+                                    variant.name)
+
+
 # The colour tokens a colour-blind variant changes (spec §7.1); every other is its base's.
 CB_COLOURS = {"warning", "diff_added_bg", "diff_added_word", "diff_added_selected_bg",
               "diff_removed_bg", "diff_removed_word", "diff_removed_selected_bg",
               "diff_line_button", "diff_line_button_hover", "diff_line_button_border",
-              "diff_line_button_text"}
+              "diff_line_button_text", "upstream_ahead"}
 # Pairs that must stay apart however the colours are seen, and by how much (CIEDE2000).
 STATUS_PAIRS = (("added", "deleted", 30), ("modified", "renamed", 12),
                 ("modified", "conflict", 12), ("renamed", "conflict", 12))

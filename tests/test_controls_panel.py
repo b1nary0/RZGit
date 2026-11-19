@@ -1,13 +1,19 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from PySide6.QtWidgets import QLineEdit, QToolButton
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QLineEdit, QToolButton, QWidget
 
+from rzgit.core.network_worker import NetworkCommand, NetworkKind
 from rzgit.core.repo_session import Refresh
+from rzgit.git.git_models import Branch
 from rzgit.ui.app_actions import BranchOp
+from rzgit.ui.theme.app_theme import LIGHT_THEME
 from rzgit.ui.panels.controls_panel import (
-    FILTER_AT, LABEL_WIDTH, MIN_LABEL_WIDTH, ControlsPanel,
+    COUNT_GAP, FILTER_AT, LABEL_WIDTH, MIN_LABEL_WIDTH, ControlsPanel,
 )
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
@@ -222,3 +228,102 @@ class ControlsPanelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _colours(widget: QWidget, left: int = 0, right: int | None = None) -> set[tuple[int, int, int]]:
+    """The colours ``widget`` paints, between x = left and right."""
+    image = widget.grab().toImage()
+    right = image.width() if right is None else right
+    return {QColor(image.pixel(x, y)).getRgb()[:3]
+            for x in range(left, right) for y in range(image.height())}
+
+
+def _has(colours: set[tuple[int, int, int]], colour: str, slack: int = 30) -> bool:
+    """Whether any of ``colours`` is ``colour``, give or take antialiasing."""
+    want = QColor(colour).getRgb()[:3]
+    return any(sum(abs(a - b) for a, b in zip(c, want)) <= slack for c in colours)
+
+
+class CountButtonTests(unittest.TestCase):
+    """The ↓n on Pull and ↑n on Push, in colours of their own (spec §5.4, RZG-94)."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def setUp(self):
+        self.ctx = make_panel_context()
+        self.addCleanup(self.ctx.session.shutdown)
+        self.panel = ControlsPanel(self.ctx)
+        self.panel.show()  # a hidden widget's resize events wait until it is shown
+        self.addCleanup(self.panel.close)
+        actions = self.ctx.actions
+        buttons = {b.defaultAction(): b for b in self.panel.findChildren(QToolButton)}
+        self.pull, self.push = buttons[actions.pull], buttons[actions.push]
+        self.colors = LIGHT_THEME.colors
+
+    def show(self, ahead, behind, network=None):
+        session = self.ctx.session
+        branch = Branch("main", True, upstream="origin/main", ahead=ahead, behind=behind,
+                        remote="origin")
+        kind = type(session)
+        with mock.patch.object(kind, "branches", (branch,)), \
+                mock.patch.object(kind, "remotes", ("origin",)), \
+                mock.patch.object(kind, "head", "main"), \
+                mock.patch.object(kind, "repo", object()), \
+                mock.patch.object(kind, "network", network):
+            session.network_changed.emit(network)
+        qt_app().processEvents()  # the layout gives the buttons their new size hints
+
+    def test_the_count_is_its_own_label_beside_the_text(self):
+        plain = self.pull.sizeHint().width()
+        self.show(ahead=2, behind=3)
+        for button, count, role in ((self.pull, "↓3", "upstream-behind"),
+                                    (self.push, "↑2", "upstream-ahead")):
+            self.assertEqual(button.text(), button.defaultAction().iconText())  # no count
+            self.assertNotIn(count, button.text())
+            label = button.count
+            self.assertEqual((label.text(), label.isHidden(), label.property("role")),
+                             (count, False, role))
+            self.assertTrue(label.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
+        self.assertEqual(self.ctx.actions.pull.text(), "&Pull ↓3")  # the menu keeps it all
+        self.assertGreater(self.pull.sizeHint().width(), plain + self.pull.count.sizeHint().width())
+
+    def test_the_count_sits_inside_the_button_after_its_text(self):
+        self.show(ahead=0, behind=12)
+        geometry = self.pull.count.geometry()
+        self.assertTrue(self.pull.rect().contains(geometry))
+        image = self.pull.grab().toImage()
+        text = [x for x in range(geometry.left()) for y in range(image.height())
+                if _has({QColor(image.pixel(x, y)).getRgb()[:3]}, self.colors.text, slack=90)]
+        gap = geometry.left() - max(text) - 1  # from the end of "Pull" to the count
+        self.assertGreaterEqual(gap, COUNT_GAP - 1)
+        self.assertLessEqual(gap, COUNT_GAP + 3)
+
+    def test_the_count_is_drawn_in_its_colour_and_the_text_is_not(self):
+        self.show(ahead=2, behind=3)
+        for button, token in ((self.pull, self.colors.upstream_behind),
+                              (self.push, self.colors.upstream_ahead)):
+            self.assertTrue(_has(_colours(button.count), token), token)
+            text = _colours(button, right=button.count.geometry().left())
+            self.assertTrue(_has(text, self.colors.text))
+            self.assertFalse(_has(text, token, slack=60))  # the label keeps the text colour
+
+    def test_a_disabled_button_mutes_its_count(self):
+        self.show(ahead=2, behind=3, network=NetworkCommand(NetworkKind.FETCH))
+        self.assertFalse(self.pull.isEnabled())
+        self.assertEqual(self.pull.count.text(), "↓3")
+        drawn = _colours(self.pull.count)
+        self.assertTrue(_has(drawn, self.colors.text_muted))
+        self.assertFalse(_has(drawn, self.colors.upstream_behind, slack=60))
+
+    def test_without_a_count_a_plain_button(self):
+        self.show(ahead=2, behind=3)
+        self.show(ahead=0, behind=0)
+        for button in (self.pull, self.push):
+            self.assertTrue(button.count.isHidden())
+            self.assertEqual(button.sizeHint(), QToolButton.sizeHint(button))
+        pushing = NetworkCommand(NetworkKind.PUSH, remote="origin", branch="main")
+        self.show(ahead=2, behind=3, network=pushing)  # Pushing…: no count while it runs
+        self.assertTrue(self.push.count.isHidden())
+        self.assertEqual(self.push.text(), "Pushing")

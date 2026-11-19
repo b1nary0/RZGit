@@ -25,6 +25,23 @@ PULL_TEXT = "&Pull"
 PULLING_TEXT = "Pulling…"
 PUSH_TEXT = "Pus&h"  # P, u and s are taken in the Repository menu; Stas&h shares h
 PUSHING_TEXT = "Pushing…"
+COUNT_PROPERTY = "upstreamCount"  # the ↓n or ↑n on Pull or Push (spec §8, RZG-94)
+
+
+def upstream_count(action: QAction) -> str:
+    """The count Pull or Push shows (``↓3``, ``↑1``), "" without one (spec §8, RZG-94).
+
+    The Controls panel draws it in a colour of its own beside the button's icon text,
+    which is the text without it; the menu has the whole text."""
+    return action.property(COUNT_PROPERTY) or ""
+
+
+def _set_text(action: QAction, text: str, count: str = "") -> None:
+    """``text`` and ``count`` as the menu text; ``text`` alone as the icon text."""
+    action.setProperty(COUNT_PROPERTY, count)  # first: setText tells the button
+    action.setText(f"{text} {count}" if count else text)
+    # Qt's own icon text from ``text``: no "&" mark, no "…" (Pulling… is Pulling).
+    action.setIconText(text.replace("&", "").replace("…", "").strip())
 
 
 class BranchOp(StrEnum):
@@ -330,14 +347,14 @@ class AppActions(QObject):
         can_pull = branch is not None and bool(branch.remote) and branch.behind is not None
         self.pull.setEnabled(pulling or (idle and can_pull))
         if pulling:
-            self.pull.setText(PULLING_TEXT)
+            _set_text(self.pull, PULLING_TEXT)
             self.pull.setToolTip("Pulling… Click to cancel")
         elif can_pull:
             behind = branch.behind  # type: ignore[union-attr]
-            self.pull.setText(f"{PULL_TEXT} ↓{behind}" if behind else PULL_TEXT)
+            _set_text(self.pull, PULL_TEXT, f"↓{behind}" if behind else "")
             self.pull.setToolTip(f"Pull {branch.upstream} into {branch.name}")  # type: ignore[union-attr]
         else:
-            self.pull.setText(PULL_TEXT)
+            _set_text(self.pull, PULL_TEXT)
             self.pull.setToolTip("Pull: the current branch has no upstream")
 
     def _update_push(self, pushing: bool, idle: bool) -> None:
@@ -349,15 +366,15 @@ class AppActions(QObject):
         can_push = branch is not None and bool(session.remotes)
         self.push.setEnabled(pushing or (idle and can_push))
         if pushing:
-            self.push.setText(PUSHING_TEXT)
+            _set_text(self.push, PUSHING_TEXT)
             self.push.setToolTip("Pushing… Click to cancel")
         elif branch is not None and pushes_to_upstream(branch):
             ahead = branch.ahead
-            self.push.setText(f"{PUSH_TEXT} ↑{ahead}" if ahead else PUSH_TEXT)
+            _set_text(self.push, PUSH_TEXT, f"↑{ahead}" if ahead else "")
             self.push.setToolTip(f"Push {branch.name} to {branch.upstream}")
         elif can_push:
-            self.push.setText(PUSH_TEXT)
+            _set_text(self.push, PUSH_TEXT)
             self.push.setToolTip(f"Push {branch.name} to a remote and track it")  # type: ignore[union-attr]
         else:
-            self.push.setText(PUSH_TEXT)
+            _set_text(self.push, PUSH_TEXT)
             self.push.setToolTip("Push: no remote, or no branch with commits")

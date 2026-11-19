@@ -21,7 +21,7 @@ from rzgit.core.repo_session import RepoSession
 from rzgit.core.selection import Selection
 from rzgit.git.git_models import Branch, FileStatus
 from rzgit.git.repo import GitError, Repo
-from rzgit.ui.app_actions import AppActions
+from rzgit.ui.app_actions import AppActions, upstream_count
 from rzgit.ui.pull_dialogs import MERGE, REBASE, STASH, WITH_CHANGES, PullDialogs
 from tests.support import SignalRecorder, commit_file, git, make_repo, qt_app, wait_idle
 from tests.test_network_worker import wait_network
@@ -366,11 +366,14 @@ class PullActionTests(unittest.TestCase):
             self.assertTrue(pull.isEnabled())
             self.assertEqual((pull.text(), pull.toolTip()),
                              ("&Pull ↓3", "Pull origin/main into main"))
+            # RZG-94: the button has the text without it, and the count apart.
+            self.assertEqual((pull.iconText(), upstream_count(pull)), ("Pull", "↓3"))
         with mock.patch.object(type(self.session), "branches",
                                (Branch("main", True, upstream="origin/main", ahead=1,
                                        behind=0, remote="origin"),)):
             self.session.branches_changed.emit(())
             self.assertEqual(pull.text(), "&Pull")
+            self.assertEqual((pull.iconText(), upstream_count(pull)), ("Pull", ""))
         with mock.patch.object(type(self.session), "branches",  # its upstream is gone
                                (Branch("main", True, upstream="origin/main", remote="origin"),)):
             self.session.branches_changed.emit(())
@@ -395,6 +398,7 @@ class PullActionTests(unittest.TestCase):
                 self.session.network_changed.emit(pulling)
                 self.assertEqual((pull.text(), pull.toolTip(), pull.isEnabled()),
                                  ("Pulling…", "Pulling… Click to cancel", True))
+                self.assertEqual((pull.iconText(), upstream_count(pull)), ("Pulling", ""))
                 self.assertFalse(fetch.isEnabled())
                 pull.trigger()
                 cancel.assert_called_once_with()
@@ -405,6 +409,7 @@ class PullActionTests(unittest.TestCase):
                 self.session.network_changed.emit(fetching)
                 self.assertFalse(pull.isEnabled())
                 self.assertEqual(pull.text(), "&Pull ↓1")
+                self.assertEqual((pull.iconText(), upstream_count(pull)), ("Pull", "↓1"))
                 self.assertTrue(fetch.isEnabled())
             self.assertEqual(requested, [True])
             self.session.network_changed.emit(None)

@@ -36,6 +36,8 @@ class Role(StrEnum):
     HEADER_MENU = "header-menu"  # the ⋯ button of a section header's menu (spec §6.2)
     BRANCH_BUTTON = "branch-button"  # the Controls panel's current branch and its menu (§5.4)
     SETTINGS_PAGE = "settings-page"  # the Settings window's page, in a subtle outline (§8.2)
+    UPSTREAM_BEHIND = "upstream-behind"  # the ↓n on Pull (§5.4, RZG-94)
+    UPSTREAM_AHEAD = "upstream-ahead"  # the ↑n on Push
 
 
 def set_surface(widget: QWidget, surface: Surface) -> None:

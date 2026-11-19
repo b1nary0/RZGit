@@ -1,18 +1,20 @@
 """The bar of controls across the top: Open, Refresh, Fetch, Pull, Push, the branch button (spec §5.4).
 
 It replaces the toolbar: the buttons show the same ``AppActions`` objects as the
-menus, so text, shortcut and enabled state come from one place.
+menus, so text, shortcut and enabled state come from one place. Pull and Push show
+their ↓n and ↑n in colours of their own (RZG-94).
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QResizeEvent
+from PySide6.QtCore import QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QAction, QIcon, QPaintEvent, QResizeEvent
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLineEdit, QMenu, QSizePolicy, QToolButton, QWidgetAction,
+    QHBoxLayout, QLabel, QLineEdit, QMenu, QSizePolicy, QStyle, QStyleOptionToolButton,
+    QStylePainter, QToolButton, QWidgetAction,
 )
 
-from rzgit.ui.app_actions import BranchOp
+from rzgit.ui.app_actions import BranchOp, upstream_count
 from rzgit.ui.panels.panel import Panel
 from rzgit.ui.theme.style_roles import Role, set_role
 
@@ -20,6 +22,7 @@ FILTER_AT = 15  # more branches than this: a filter box on top of the menu
 LABEL_WIDTH = 360  # px; a longer label is cut short in the middle
 MIN_LABEL_WIDTH = 60  # px: in a narrow window, the label gives up width down to this
 SHA_LENGTH = 8
+COUNT_GAP = 4  # px between Pull's or Push's text and its count
 NO_REPO = "No repository"
 
 
@@ -43,9 +46,10 @@ class ControlsPanel(Panel):
         layout.setContentsMargins(6, 6, 6, 5)
         layout.setSpacing(2)
         actions = self.ctx.actions
-        for action in (actions.open_repo, actions.refresh, actions.fetch, actions.pull,
-                       actions.push):
+        for action in (actions.open_repo, actions.refresh, actions.fetch):
             layout.addWidget(_button(action))
+        layout.addWidget(_CountButton(actions.pull, Role.UPSTREAM_BEHIND))
+        layout.addWidget(_CountButton(actions.push, Role.UPSTREAM_AHEAD))
         layout.addStretch(1)
 
         self._branch = _BranchButton()
@@ -131,6 +135,107 @@ class ControlsPanel(Panel):
         self.ctx.actions.request_branch(BranchOp.SWITCH, name)
 
 
+class _CountButton(QToolButton):
+    """Pull or Push: its action's icon text, then its count (``upstream_count``) in a
+    label of its own, so the stylesheet colours it by ``role`` (spec §5.4, RZG-94).
+    With a count, the button is wider by the label and draws its icon and text where
+    it would without one; the background still fills the whole button."""
+
+    def __init__(self, action: QAction, role: Role) -> None:
+        super().__init__()
+        _set_up(self, action)
+        self.count = QLabel(self)
+        set_role(self.count, role)
+        # A click or hover on the count is the button's.
+        self.count.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.count.hide()
+        action.changed.connect(self._show_count)
+        self._show_count()
+
+    def _show_count(self) -> None:
+        count = upstream_count(self.defaultAction())
+        shown = not self.count.isHidden()
+        if count == self.count.text() and shown == bool(count):
+            return
+        self.count.setText(count)
+        self.count.setVisible(bool(count))
+        self.updateGeometry()
+        self._place_count()
+        self.update()
+
+    def _label_rect(self, option: QStyleOptionToolButton) -> QRect:
+        """Where the style lays out the icon and text in the button without a count:
+        its contents, between equal margins (as QToolButton.sizeHint sizes them)."""
+        fm = self.fontMetrics()
+        icon = option.iconSize.width()
+        text = fm.size(Qt.TextFlag.TextShowMnemonic, option.text).width()
+        text += 2 * fm.horizontalAdvance(" ")
+        style = option.toolButtonStyle
+        if style == Qt.ToolButtonStyle.ToolButtonIconOnly:
+            width = icon
+        elif style == Qt.ToolButtonStyle.ToolButtonTextBesideIcon:
+            width = icon + 4 + text  # Qt's own 4 px between them
+        elif style == Qt.ToolButtonStyle.ToolButtonTextUnderIcon:
+            width = max(icon, text)
+        else:
+            width = text
+        margin = (super().sizeHint().width() - width) // 2
+        return QRect(margin, 0, width, self.height())
+
+    def _count_x(self, option: QStyleOptionToolButton) -> int:
+        """The count's left edge: COUNT_GAP after the icon or text the style draws."""
+        rect = self._label_rect(option)
+        fm = self.fontMetrics()
+        text = fm.size(Qt.TextFlag.TextShowMnemonic, option.text).width()
+        if option.toolButtonStyle == Qt.ToolButtonStyle.ToolButtonTextBesideIcon:
+            end = rect.left() + option.iconSize.width() + 4 + text  # drawn from the left
+        elif option.toolButtonStyle == Qt.ToolButtonStyle.ToolButtonIconOnly:
+            end = rect.right() + 1
+        else:  # centred
+            end = rect.left() + (rect.width() + text) // 2
+        return end + COUNT_GAP
+
+    def _option(self) -> QStyleOptionToolButton:
+        option = QStyleOptionToolButton()
+        self.initStyleOption(option)  # the style it follows, resolved
+        return option
+
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        if self.count.isHidden():
+            return hint
+        option = self._option()
+        right = hint.width() - self._label_rect(option).right() - 1  # the margin, again
+        width = self._count_x(option) + self.count.sizeHint().width() + right
+        return QSize(max(width, hint.width()), hint.height())
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._place_count()
+
+    def _place_count(self) -> None:
+        if self.count.isHidden():
+            return
+        size = self.count.sizeHint()
+        self.count.setGeometry(self._count_x(self._option()), (self.height() - size.height()) // 2,
+                               size.width(), size.height())
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        if self.count.isHidden():
+            super().paintEvent(event)
+            return
+        painter = QStylePainter(self)
+        option = self._option()
+        label = QStyleOptionToolButton(option)
+        option.text, option.icon = "", QIcon()  # the background alone, over the whole button
+        painter.drawComplexControl(QStyle.ComplexControl.CC_ToolButton, option)
+        label.rect = self._label_rect(label)
+        painter.drawControl(QStyle.ControlElement.CE_ToolButtonLabel, label)
+
+
 class _BranchButton(QToolButton):
     """The branch button. It asks for its label's width, up to LABEL_WIDTH, but
     gives it up first when the bar is narrow: the label is then cut short in the
@@ -197,9 +302,13 @@ def _menu_text(name: str) -> str:
 def _button(action: QAction) -> QToolButton:
     """A button like a toolbar's: flat, no keyboard focus, the action's icon text."""
     button = QToolButton()
+    _set_up(button, action)
+    return button
+
+
+def _set_up(button: QToolButton, action: QAction) -> None:
     button.setDefaultAction(action)
     button.setAutoRaise(True)
     button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     button.setIconSize(QSize(16, 16))
     button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonFollowStyle)
-    return button

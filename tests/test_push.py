@@ -15,7 +15,7 @@ from rzgit.core.repo_session import RepoSession
 from rzgit.core.selection import Selection
 from rzgit.git.git_models import Branch
 from rzgit.git.repo import GitError, Repo
-from rzgit.ui.app_actions import AppActions
+from rzgit.ui.app_actions import AppActions, upstream_count
 from rzgit.ui.push_dialogs import PushDialogs, default_remote
 from tests.support import SignalRecorder, commit_file, git, qt_app
 from tests.test_network_worker import wait_network
@@ -253,8 +253,11 @@ class PushActionTests(unittest.TestCase):
         self.assertFalse(self.actions.push.isEnabled())  # no repository
         ahead = Branch("main", True, upstream="origin/main", ahead=2, behind=0, remote="origin")
         self.assertEqual(self.show((ahead,)), ("Pus&h ↑2", "Push main to origin/main", True))
+        push = self.actions.push  # RZG-94: the button's text, and the count apart
+        self.assertEqual((push.iconText(), upstream_count(push)), ("Push", "↑2"))
         even = Branch("main", True, upstream="origin/main", ahead=0, behind=1, remote="origin")
         self.assertEqual(self.show((even,))[0], "Pus&h")
+        self.assertEqual((push.iconText(), upstream_count(push)), ("Push", ""))
 
     def test_without_an_upstream_it_pushes_to_track_it(self):
         for branch in (Branch("main", True),
@@ -285,6 +288,7 @@ class PushActionTests(unittest.TestCase):
                 self.session.network_changed.emit(pushing)
                 self.assertEqual((push.text(), push.toolTip(), push.isEnabled()),
                                  ("Pushing…", "Pushing… Click to cancel", True))
+                self.assertEqual((push.iconText(), upstream_count(push)), ("Pushing", ""))
                 self.assertFalse(pull.isEnabled() or fetch.isEnabled())
                 push.trigger()
                 cancel.assert_called_once_with()

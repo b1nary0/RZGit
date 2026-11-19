@@ -455,6 +455,10 @@ panel, and the status bar shows their progress while they run. While one of them
 its menu entry and button say so ("Fetching…", "Pulling…" or "Pushing…"), and choosing
 it again cancels the command. Only one of them runs at a time.
 
+On the Pull and Push buttons, how far the branch is behind (**↓**) or ahead (**↑**) is
+coloured, so it stands out: the count behind in blue, the count ahead in violet (orange
+with colour-blind friendly colours). It is greyed out with its button.
+
 **Fetch** downloads new commits from every remote without changing your branches.
 
 **Pull** brings the current branch up to date with its upstream branch. When the branch is
@@ -473,9 +477,9 @@ forces a push. If the remote rejects it, the error is shown and nothing changes.
 
 **Themes.** **View → Theme** chooses **Light**, **Dark**, or **System**, which follows your
 desktop's setting. **Colour-blind Friendly Colours**, in the same menu, shows added and
-removed lines, file statuses and the graph's lines in colours built on blue and orange
-instead of green and red, so they stay distinct with the common kinds of colour
-blindness. The theme changes at once in every
+removed lines, file statuses, the graph's lines and the count ahead on Push in colours
+built on blue and orange instead of green and red, so they stay distinct with the common
+kinds of colour blindness. The theme changes at once in every
 window.
 
 ![The Settings window](screenshots/settings.png)

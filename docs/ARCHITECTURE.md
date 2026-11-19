@@ -1125,6 +1125,21 @@ The first three are extracted from the original `main_window.py` with the same b
 | CommitPanel | `commit` | Sidebar | the commit message being written | commits the staged changes |
 | WorktreesPanel | `worktrees` | Sidebar | "Worktrees": each worktree's name, state and ahead/behind (branch and path on request); collapsed with only one worktree | opens a worktree, through `actions.request_open_worktree` and `request_open_worktree_here`; asks for worktree operations (`request_worktree`) |
 
+**The counts on Pull and Push** (ControlsPanel, RZG-94): the `↓n` on Pull and the `↑n` on
+Push are drawn in colours of their own (`upstream_behind`, `upstream_ahead`, §7.1), while
+the label keeps the button's text colour. A tool button can't colour part of its text, so
+each of the two is a `_CountButton`:
+- It shows its action's icon text ("Pull"), as any tool button does, and its action's
+  count (`upstream_count(action)`, §8) in a `QLabel` of its own on the right, with the
+  `upstream-behind` or `upstream-ahead` style role. The label ignores the mouse, so a click
+  or hover on it is the button's.
+- With a count, the button's size hint is wider by the label and a 4 px gap, and it draws
+  its icon and text in the part left of the label; its background (hover, pressed) still
+  fills the whole button. Without one (0, no upstream, or while it runs) there's no label,
+  and it is a plain tool button.
+- A disabled button's label is disabled with it, so the stylesheet mutes it
+  (`text_muted`), like the label's text.
+
 **The branch button** (ControlsPanel, RZG-56) names the current branch and switches to
 another. It sits at the right end of the Controls panel, beside the Branches panel, which
 keeps the other operations. Like Branches, it never runs git or shows a dialog.
@@ -2266,6 +2281,7 @@ class ThemeColors:   menubar_bg: str; toolbar_bg: str; tab_bg: str; header_bg: s
                      accent: str; button_*: str; scroll_*: str; diff_*: str (incl. diff_hunk_bg, diff_hunk_text, diff_line_button*, diff_*_selected_bg, diff_*_word); …
                      diff_find_match: str   # every Find match in the diff (RZG-74): text ≥ 4.5:1 on it; ΔE ≥ 6 from the diff backgrounds, content_bg and text_selection, under every simulated vision
                      diff_find_current: str   # the current Find match's outline: ≥ 3:1 on diff_find_match, text_selection and every diff background
+                     upstream_behind, upstream_ahead: str   # Pull's ↓n and Push's ↑n on the Controls panel (RZG-94)
 @dataclass(frozen=True)
 class StatusColors:  modified, added, deleted, renamed, copied, type_changed, conflict, untracked: str
                      def for_code(self, code: str) -> str | None   # porcelain letter → colour; None if unknown
@@ -2336,10 +2352,16 @@ def colour_blind_theme(base: AppTheme) -> AppTheme   # LIGHT_THEME → LIGHT_CB_
   the rows, not as a row. Its text is at least 4.5:1 on both `floating_button_bg` and
   `floating_button_hover`. The shadow is drawn translucent, so it can be a plain dark
   colour.
+- **Upstream counts** (RZG-94): `upstream_behind` colours Pull's `↓n` (incoming) and
+  `upstream_ahead` Push's `↑n` (outgoing). They aren't the diff's or the statuses' green
+  and red, which read as added and deleted: behind is a blue, ahead a violet. Each is at
+  least 4.5:1 on the bar (`toolbar_bg`) and on a button's `button_hover` and
+  `button_pressed`, and at least ΔE 12 from `text`, so a count stands out from its label.
+  A disabled button's count is `text_muted`, like its label.
 - **Colour-blind variants** (RZG-33): `LIGHT_CB_THEME` and `DARK_CB_THEME` derive from
   their base with `dataclasses.replace`, so they share every token except those that tell
-  kinds apart: `status.*`, `graph.lanes`, `diff_added*` / `diff_removed*`, `diff_line_button*` and
-  `warning`. Those use one palette built on blue and orange instead of green and red
+  kinds apart: `status.*`, `graph.lanes`, `diff_added*` / `diff_removed*`, `diff_line_button*`,
+  `upstream_ahead` (orange, beside behind's blue) and `warning`. Those use one palette built on blue and orange instead of green and red
   (Okabe–Ito): added is blue, deleted orange. Tests simulate deuteranopia, protanopia and
   tritanopia (Machado et al. 2009) and require a minimum ΔE between the pairs that must
   differ, and at least the base theme's contrast. Their `name` is the base's plus
@@ -2370,7 +2392,8 @@ SEGMENT_HEADER for the header strip of a segment inside a panel (§5.2),
 PLACEHOLDER for a muted "nothing to show" message, DIFF_VIEW for the borderless diff text,
 HINT and HINT_WARNING for a small muted note and the same past a limit, HEADER_MENU for
 the ⋯ button of a section header's menu, §6.2, SETTINGS_PAGE for the Settings window's
-outlined page, §8.2).
+outlined page, §8.2, UPSTREAM_BEHIND and UPSTREAM_AHEAD for the count on Pull and Push,
+§5.4).
 Widgets get them as Qt dynamic properties through `set_surface()` / `set_role()`, and the
 stylesheet targets those (`QWidget[surface="sidebar"]`). The theme decides what "sidebar"
 looks like; panels only say what they are.
@@ -2592,7 +2615,11 @@ Per-widget sheets are slow to apply and scatter the rules.
   command starts until it ends.
 - **Pull** (RZG-71, `actions.pull`, in the Repository menu and on the Controls panel after
   Fetch) reads **Pull ↓n** when the current branch is n commits behind its upstream
-  (`Branch.behind`), else **Pull**. It is enabled when the current branch has an upstream
+  (`Branch.behind`), else **Pull**. The menu has that text; the Controls panel's button has
+  the icon text **Pull**, and the count `↓n` from `upstream_count(action)`, in a colour of
+  its own (RZG-94, §5.4). `upstream_count` reads a property `AppActions` sets on Pull and
+  Push before their text, so the button gets the count without taking the text apart;
+  it is "" without a count. It is enabled when the current branch has an upstream
   that isn't gone and no network command runs. While its fetch runs it reads **Pulling**
   (the menu **Pulling…**), "Click to cancel", and triggering it cancels; Fetch is
   disabled meanwhile, and Pull while a fetch runs. The integration step is local and
@@ -2610,7 +2637,8 @@ Per-widget sheets are slow to apply and scatter the rules.
   - Already up to date: no box; the ↓n goes when the branches reload.
 - **Push** (RZG-72, `actions.push`, in the Repository menu and on the Controls panel after
   Pull) reads **Push ↑n** when the current branch is n commits ahead of an upstream it
-  pushes to (§4.1), else **Push**. It is enabled when the repository has a remote, HEAD
+  pushes to (§4.1), else **Push**. As for Pull, the button has **Push** and the count
+  `↑n` in a colour of its own (RZG-94). It is enabled when the repository has a remote, HEAD
   is on a branch with commits, and no network command runs. While it runs it reads
   **Pushing** (the menu **Pushing…**), "Click to cancel", and triggering it cancels;
   Fetch and Pull are disabled meanwhile, and Push while they run. The status bar label

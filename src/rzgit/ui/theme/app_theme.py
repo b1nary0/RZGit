@@ -75,6 +75,9 @@ class ThemeColors:
     diff_line_button_hover: str  # ... with the pointer on it
     diff_line_button_border: str
     diff_line_button_text: str
+    # the counts on Pull and Push (spec §5.4, RZG-94): ≥ 4.5:1 on the bar, hover and pressed
+    upstream_behind: str  # Pull's ↓n: commits to bring in
+    upstream_ahead: str  # Push's ↑n: commits to send
 
 
 @dataclass(frozen=True)
@@ -296,6 +299,8 @@ LIGHT_THEME = AppTheme(
         diff_line_button_hover="#1a6a32",
         diff_line_button_border="#145226",  # dark green: white would vanish on the light gutter
         diff_line_button_text="#ffffff",
+        upstream_behind="#0a4a8a",  # dark blue: 4.5:1 even on a pressed button
+        upstream_ahead="#58289a",  # violet
     ),
     status=StatusColors(
         modified="#4a7fc1",
@@ -375,6 +380,8 @@ DARK_THEME = AppTheme(
         diff_line_button_hover="#33985f",
         diff_line_button_border="#ffffff",
         diff_line_button_text="#ffffff",
+        upstream_behind="#8cc8ff",  # light blue
+        upstream_ahead="#d8b4ff",  # light violet
     ),
     status=StatusColors(
         modified="#4ea7fc",
@@ -428,6 +435,7 @@ LIGHT_CB_THEME = _colour_blind_variant(
     diff_line_button="#0a6ab0",
     diff_line_button_hover="#08568f",
     diff_line_button_border="#063e68",
+    upstream_ahead="#7a3400",  # dark orange, beside behind's blue
 )
 
 
@@ -455,6 +463,7 @@ DARK_CB_THEME = _colour_blind_variant(
     diff_removed_selected_bg="#533c22",
     diff_line_button="#2a73b8",
     diff_line_button_hover="#3080c4",
+    upstream_ahead="#f2b54a",  # orange
 )
 
 

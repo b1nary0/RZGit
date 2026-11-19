@@ -197,6 +197,15 @@ QToolButton[role="branch-button"]::menu-indicator {
 QWidget[role="segment-header"] {
     background: $header_bg;
 }
+QLabel[role="upstream-behind"] {
+    color: $upstream_behind;
+}
+QLabel[role="upstream-ahead"] {
+    color: $upstream_ahead;
+}
+QLabel[role="upstream-behind"]:disabled, QLabel[role="upstream-ahead"]:disabled {
+    color: $text_muted;  /* a disabled button's count, like its label (RZG-94) */
+}
 QFrame[role="settings-page"] {
     border: 1px solid $border;
     border-radius: 4px;
