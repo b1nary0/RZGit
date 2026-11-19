@@ -32,7 +32,7 @@ Follow the Core Workflow description; in short:
 1. **Review:** go through the questions with the user, with recommendations. Record the answers under `**Decisions** (date)` in the issue. A change made while building is noted in the Result.
 2. **Plan:** a short plan. Wait for "start".
 3. **Build:** set the issue **In Progress**, and its **parent epic In Progress** too. Then `docs/ARCHITECTURE.md` first, then the code and tests.
-4. **Verify:** the suite 5× (2× for a small issue, done in the coordinator), an offscreen render compared with main, and a Wayland launch on the test repository (the `local-settings` skill's `test-repo`) with timings.
+4. **Verify:** the `verify` skill, with `.claude/workflow/verify.md`.
 5. **Report:** set it **In Review**. Add `**Result (date, uncommitted):**` before the Notes: what was done, any changes from the decisions, and the test, mutation-check and timing results.
 6. **Commit** only on the user's yes:
    - one commit `RZG-N: <title without the prefix>`, ending with the Co-Authored-By line

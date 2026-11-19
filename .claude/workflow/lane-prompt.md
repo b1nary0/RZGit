@@ -18,7 +18,7 @@ You are lane {{LANE}}, one of several parallel lanes working on RZGit (a PySide6
 ## Python and tests (important)
 The shared venv is /home/JPOD/dev/RZGit/.venv. Its editable install points at the MAIN checkout's src, so always put your own src first. From your worktree root:
   PYTHONPATH=src /home/JPOD/dev/RZGit/.venv/bin/python -m unittest discover -v -s tests -t .
-For the full-suite runs below, use the runner instead: `PYTHONPATH=src /home/JPOD/dev/RZGit/.venv/bin/python /home/JPOD/dev/RZGit/.claude/workflow/run_tests.py --runs N` (add `-v` to name each test). It runs the suite N times and shows the lane's progress (tests finished out of the total) as a bar on your tab.
+Full-suite runs go through the test runner in verify.md (stage 2), which shows the count on your tab.
 Do the same for any script that imports rzgit, or have it insert your worktree's src at sys.path[0]. Check once that `rzgit.__file__` resolves into your worktree.
 
 ## The workflow
@@ -30,20 +30,11 @@ Then:
 1. **Review:** go through the issue's questions with the user, each with a recommendation. Record the answers under **Decisions** in the issue.
 2. **Plan:** a short plan. Wait for the user to say "start".
 3. **Build:** set the issue In Progress, and its parent epic too, if any. Update docs/ARCHITECTURE.md first, then the code and tests.
-4. **Verify:**
-   - The full suite 5x: the runner with `--runs 5`.
-   - An offscreen render compared with `{{BASE}}`:
-     - Make a temporary worktree of `{{BASE}}`: `git worktree add --detach <fresh mktemp -d path>/head {{BASE}}`.
-     - Use a fresh `mktemp -d` settings folder (XDG_CONFIG_HOME).
-     - Remove the worktree afterwards with `git worktree remove <literal path>`.
-   - **The test repository** is this machine's local setting: `TEST_REPO=$(python3 /home/JPOD/dev/RZGit/.claude/skills/local-settings/local_settings.py get test-repo)`. If that fails, stop and ask the user for the path, then set it with `/local-settings set test-repo <path>` (or the `set` command it prints). Never guess one.
-   - A real Wayland launch (QT_QPA_PLATFORM=wayland) against the test repository, with startup timing. Other lanes may be running launches and test suites at the same time, so say the timings are noisy.
-   - Anything that writes to a repository uses your own scratch clone: `git clone --no-hardlinks "$TEST_REPO" <mktemp -d path>/test-repo`. Never write to the test repository itself.
-   - Mutation checks: break each key piece and confirm a test fails. Restore from a scratchpad copy, never with `git checkout`.
+4. **Verify:** follow the `verify` skill (/home/JPOD/dev/RZGit/.claude/skills/verify/SKILL.md) with this repository's /home/JPOD/dev/RZGit/.claude/workflow/verify.md. Read both when you get to this step: they're always the current ones.
 5. **Report:** set the issue In Review and add a "**Result (date, uncommitted):**" note.
 6. **Commit** only when the user says yes. Then:
    - Check the main checkout is still on `{{BASE}}` (`git -C /home/JPOD/dev/RZGit branch --show-current`). If it isn't, stop and ask the user.
-   - `git rebase {{BASE}}`, resolving conflicts if it moved (other lanes land on it too). Rerun the full suite once (the runner, `--runs 1`).
+   - `git rebase {{BASE}}`, resolving conflicts if it moved (other lanes land on it too). Rerun the tests once (verify.md, stage 2: the rerun before landing).
    - One commit titled `{{LANE}}: <issue title without the [Feature]/[Architecture] prefix>`, ending with the line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
    - Land it: `git -C /home/JPOD/dev/RZGit merge --ff-only {{LANE}}`. If that fails because `{{BASE}}` moved, rebase again, rerun the suite and retry.
    - Never force anything, never merge non-fast-forward, never commit in the main checkout, never push.

@@ -1,6 +1,6 @@
 # Workflow settings: RZGit
 
-The shared workflow skills (`lanes`, `work-graph`, `linear`, `sync-workflow`) read this file for everything that
+The shared workflow skills (`lanes`, `work-graph`, `linear`, `sync-workflow`, `verify`) read this file for everything that
 differs between repositories. It's per repository and never synced.
 
 | Setting            | Value                                                        |
@@ -26,7 +26,7 @@ always `main`.
 ## Small issues
 
 Small means a few files, no new module, no change to the architecture, and about one short sitting (for example:
-always open on the History tab). The full suite runs **2×** instead of 5×.
+always open on the History tab). Its lighter verification is in `verify.md`.
 
 ## Overlap hints for planning
 
