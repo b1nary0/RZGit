@@ -2650,6 +2650,10 @@ Per-widget sheets are slow to apply and scatter the rules.
     working directory): `$TERMINAL` if set and found (split like a shell would), else the first of
     `konsole`, `gnome-terminal`, `xfce4-terminal`, `x-terminal-emulator` on the `PATH`
     (`find_terminal`). If neither works, a box says so. No git runs.
+- **The menu bar** is File, Edit, Repository, View (RZG-89). Edit holds only Settings…
+  for now: Copy, Select All and Find stay the panels' own shortcuts, since window-level
+  actions on the same keys would clash with them. When Edit gets more entries, Settings…
+  goes last, after a separator (the KDE and GNOME place for preferences).
 - **`MainWindow`** is a thin shell: menus built from `AppActions`, the status
   bar summary (from session signals: path · branch · commits · changed files), error dialogs (from `error_occurred`), and a
   `LayoutHost` as the central widget. The Open, Quit and Reset Layout handlers live here
@@ -2856,7 +2860,7 @@ window while it's open (§8.1). Layouts and columns aren't in it either.
     com.visualstudio.code`; empty means `code`. If its program isn't found, the entry is
     disabled. `vscode_launcher.py` (RZG-96; RZG-75 reuses it).
 - **The window:** `SettingsWindow` (`ui/settings_window.py`) is a top-level window, not
-  modal, one for the app: **File → Settings…** (`AppActions.settings`, Ctrl+,) shows it
+  modal, one for the app: **Edit → Settings…** (`AppActions.settings`, Ctrl+,, RZG-89) shows it
   and raises it if open (`AppWindows.show_settings`; a `MainWindow` without `AppWindows`
   has its own). It doesn't keep the app running (`WA_QuitOnClose` off), and it closes with
   the last main window.

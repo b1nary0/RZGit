@@ -181,7 +181,7 @@ class SettingsWindowTests(unittest.TestCase):
 
 
 class OpeningTests(unittest.TestCase):
-    """File → Settings… (Ctrl+,), one window for the app (spec §8.2)."""
+    """Edit → Settings… (Ctrl+,), one window for the app (spec §8.2)."""
 
     @classmethod
     def setUpClass(cls):
@@ -204,12 +204,19 @@ class OpeningTests(unittest.TestCase):
         self.windows.shutdown()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
-    def test_the_file_menu_entry_and_shortcut(self):
+    def test_the_edit_menu_entry_and_shortcut(self):
+        """RZG-89: Edit → Settings…, between File and Repository; no longer in File."""
         window = self.windows.new_window()
         action = window.ctx.actions.settings
         self.assertEqual(action.shortcut().toString(), "Ctrl+,")
-        file_menu = window.menuBar().actions()[0].menu()
-        self.assertIn(action, file_menu.actions())
+        bar = window.menuBar().actions()
+        self.assertEqual([a.text() for a in bar], ["&File", "&Edit", "&Repository", "&View"])
+        file_menu, edit_menu = bar[0].menu(), bar[1].menu()
+        self.assertEqual(edit_menu.actions(), [action])
+        self.assertNotIn(action, file_menu.actions())
+        # File: no two separators in a row, and none at either end.
+        kinds = [a.isSeparator() for a in file_menu.actions()]
+        self.assertFalse(kinds[0] or kinds[-1] or any(a and b for a, b in zip(kinds, kinds[1:])))
 
     def test_one_window_for_the_app_closed_with_the_last_main_window(self):
         one, two = self.windows.new_window(), self.windows.new_window()

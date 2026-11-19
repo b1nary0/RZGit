@@ -125,7 +125,7 @@ class AppActions(QObject):
         self.quit = self._action(
             "application-exit", "&Quit", QKeySequence.StandardKey.Quit
         )
-        # File → Settings… (spec §8.2): connected by MainWindow.
+        # Edit → Settings… (spec §8.2, RZG-89): connected by MainWindow.
         self.settings = self._action("configure", "Se&ttings…", "Ctrl+,")
         self.reset_layout = self._action("view-restore", "&Reset Layout")
         self.side_by_side_diff = self._action("view-split-left-right", "&Side by Side Diff")

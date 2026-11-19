@@ -504,9 +504,11 @@ built on blue and orange instead of green and red, so they stay distinct with th
 kinds of colour blindness. The theme changes at once in every
 window.
 
+![The Edit menu](screenshots/menu-edit.png)
+
 ![The Settings window](screenshots/settings.png)
 
-**Settings.** **File → Settings…** (Ctrl+,) opens the Settings window, which has a page
+**Settings.** **Edit → Settings…** (Ctrl+,) opens the Settings window, which has a page
 for each group of settings. A change takes effect at once, in every window, and nothing
 needs a restart.
 

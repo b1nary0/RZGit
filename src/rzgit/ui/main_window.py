@@ -94,10 +94,12 @@ class MainWindow(QMainWindow):
                                           self.open_in_window, file_menu))
         file_menu.addAction(actions.refresh)
         file_menu.addSeparator()
-        file_menu.addAction(actions.settings)  # spec §8.2
-        actions.settings.triggered.connect(self.show_settings)
-        file_menu.addSeparator()
         file_menu.addAction(actions.quit)
+
+        # Edit, between File and Repository: Settings… alone for now (spec §8, §8.2).
+        edit_menu = self.menuBar().addMenu("&Edit")
+        edit_menu.addAction(actions.settings)
+        actions.settings.triggered.connect(self.show_settings)
 
         actions.discard.triggered.connect(self.discard_selected)
         actions.discard_lines_requested.connect(self.discard_lines)
