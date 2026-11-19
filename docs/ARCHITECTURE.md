@@ -89,6 +89,7 @@ src/rzgit/
     recent_repos.py             RecentRepos: the repositories and worktrees opened recently (§6.3)
     app_settings.py             AppSettings: typed wrapper over QSettings (last_repo, layout, …)
     old_name_migration.py       migrate_old_name: copies the settings and drafts of the old name (RZGitClient) once (§6.3)
+    gc_on_main_thread.py        GcOnMainThread: Python's garbage collection, on the main thread only (§4.1)
   ui/
     main_window.py              MainWindow: thin shell (menus, status bar, LayoutHost)
     app_windows.py              AppWindows: the open main windows; open a window on a path, or raise it
@@ -290,6 +291,17 @@ class RepoSession(QObject):
   - On quit, the session waits for the running git command (it can't be interrupted).
   - `busy_changed(True)` when the first job is queued, `False` when the queue is empty. The
     window shows it in the status bar at once. Tests wait with `wait_idle()`.
+  - **Garbage is collected on the main thread only** (RZG-101). Python's cyclic collector
+    runs on whichever thread is allocating when a threshold is crossed, the worker too. A
+    cycle that holds main-thread widgets would then be destroyed on the worker: a widget's
+    `QBasicTimer` (item views, text edits) is stopped through the current thread's event
+    dispatcher, which the worker doesn't have, so the timer stays registered and later
+    fires at freed memory (a segfault, with no warning). `GcOnMainThread`
+    (`core/gc_on_main_thread.py`) turns automatic collection off (`gc.disable()`, for the
+    whole process) and collects from a main-thread `QTimer` every 500 ms, only the
+    generations over their thresholds (`gc.get_count()` against `gc.get_threshold()`),
+    so it costs what automatic collection did. `app.main()` installs it right after the
+    `QApplication`, and the tests' `qt_app()` too. `install()` is idempotent.
 - **History loads in pages** of `HISTORY_PAGE` (500) commits, from `HEAD`.
   - **Order and parents** (RZG-58): `Repo.log()` reads each commit's parents (`%P`, into
     `Commit.parents`) for the branch graph (§5.4), and passes `--date-order` (the default)

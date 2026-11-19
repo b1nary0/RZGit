@@ -26,9 +26,12 @@ def qt_app() -> QApplication:
     """
     from PySide6.QtWidgets import QApplication
 
+    from rzgit.core.gc_on_main_thread import GcOnMainThread
+
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
+    GcOnMainThread.install(app)  # as the app does (spec §4.1)
     return app
 
 

@@ -8,6 +8,7 @@ from rzgit import __version__
 from rzgit.core.app_settings import AppSettings
 from rzgit.core.column_prefs import ColumnPrefs
 from rzgit.core.commit_drafts import CommitDrafts, drafts_folder
+from rzgit.core.gc_on_main_thread import GcOnMainThread
 from rzgit.core.old_name_migration import migrate_old_name
 from rzgit.core.preferences import Preferences
 from rzgit.core.recent_repos import RecentRepos
@@ -20,6 +21,7 @@ from rzgit.ui.theme.theme_manager import ThemeManager, ThemeMode
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv if argv is None else argv
     app = QApplication(argv)
+    GcOnMainThread.install(app)  # never collect on the git worker (spec §4.1)
     app.setApplicationName("RZGit")
     app.setOrganizationName("RZGit")
     app.setApplicationVersion(__version__)

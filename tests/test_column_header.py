@@ -152,6 +152,8 @@ class ColumnHeaderTests(unittest.TestCase):
 
     def test_the_hovered_label_is_tracked(self):
         self.header.resizeSection(0, 100)
+        # From elsewhere first: a pointer already at the point doesn't move, so it sends no hover.
+        QTest.mouseMove(self.header.viewport(), QPoint(50, 5))
         QTest.mouseMove(self.header.viewport(), QPoint(150, 5))
         self.assertEqual(self.header.hover_section, 1)
 
