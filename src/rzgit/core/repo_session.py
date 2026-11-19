@@ -60,7 +60,8 @@ class Refresh(Flag):
     COUNT = auto()  # commits reachable from HEAD; never in the same job as HISTORY
     STASHES = auto()
     REMOTES = auto()  # the remotes' names and remote.pushDefault (spec §4.1)
-    ALL = HEAD | BRANCHES | REFS | HISTORY | STATUS | STASHES | COUNT | REMOTES
+    WORKSPACE_FILES = auto()  # tracked *.code-workspace files (spec §4.1, RZG-96)
+    ALL = HEAD | BRANCHES | REFS | HISTORY | STATUS | STASHES | COUNT | REMOTES | WORKSPACE_FILES
     LAST_COMMIT = auto()  # HEAD's message, for amending: only when asked for, not in ALL
 
 
@@ -70,7 +71,7 @@ _RESET = Refresh.ALL | Refresh.LAST_COMMIT
 
 # The order parts load and emit in (spec §4.1), and their value with no repo.
 _PARTS = (Refresh.HEAD, Refresh.BRANCHES, Refresh.REFS, Refresh.HISTORY, Refresh.STATUS, Refresh.STASHES,
-          Refresh.COUNT, Refresh.REMOTES, Refresh.LAST_COMMIT)
+          Refresh.COUNT, Refresh.REMOTES, Refresh.WORKSPACE_FILES, Refresh.LAST_COMMIT)
 _EMPTY: dict[Refresh, object] = {
     Refresh.HEAD: (None, None),  # (branch, sha): two values, two signals (spec §4.1)
     Refresh.BRANCHES: (),
@@ -80,6 +81,7 @@ _EMPTY: dict[Refresh, object] = {
     Refresh.STASHES: (),
     Refresh.COUNT: None,
     Refresh.REMOTES: Remotes(),
+    Refresh.WORKSPACE_FILES: (),
     Refresh.LAST_COMMIT: None,
 }
 
@@ -103,6 +105,7 @@ class RepoSession(QObject):
     notice_occurred = Signal(str)  # a command worked, but not quite as asked
     busy_changed = Signal(bool)  # True while git work is queued or running
     remotes_changed = Signal(object)  # tuple[str, ...]: the remotes' names
+    workspace_files_changed = Signal(object)  # tuple[str, ...]: tracked *.code-workspace files
     # Network commands, on a worker of their own (spec §4.1).
     network_changed = Signal(object)  # NetworkCommand | None: the one running
     network_progress = Signal(str)  # its latest progress line
@@ -164,6 +167,7 @@ class RepoSession(QObject):
             Refresh.STASHES: self.stashes_changed,
             Refresh.COUNT: self.commit_count_changed,
             Refresh.REMOTES: self.remotes_changed,
+            Refresh.WORKSPACE_FILES: self.workspace_files_changed,
             Refresh.LAST_COMMIT: self.last_commit_changed,
         }
         # Network commands (spec §4.1): their own worker, so loads go on meanwhile.
@@ -232,6 +236,11 @@ class RepoSession(QObject):
     def push_default(self) -> str | None:
         """``remote.pushDefault``, or None if unset (RZG-72)."""
         return self._values[Refresh.REMOTES].push_default  # type: ignore[attr-defined]
+
+    @property
+    def workspace_files(self) -> tuple[str, ...]:
+        """Tracked ``*.code-workspace`` files, relative to the root (RZG-96)."""
+        return self._values[Refresh.WORKSPACE_FILES]  # type: ignore[return-value]
 
     @property
     def network(self) -> NetworkCommand | None:
@@ -961,6 +970,8 @@ def _load(repo: Repo, part: Refresh) -> object:
         return repo.commit_count()
     if part is Refresh.REMOTES:
         return Remotes(tuple(repo.remotes()), repo.push_default())
+    if part is Refresh.WORKSPACE_FILES:
+        return tuple(repo.workspace_files())
     if part is Refresh.LAST_COMMIT:
         return repo.last_commit()
     raise ValueError(f"not a single part: {part!r}")

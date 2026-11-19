@@ -351,6 +351,12 @@ class Repo:
         out = self.git("ls-files", "-z", "--cached", "--others", "--exclude-standard")
         return [p for p in out.split("\0") if p]
 
+    def workspace_files(self) -> list[str]:
+        """Tracked VS Code workspace files (``*.code-workspace``, in any folder),
+        relative to the root, in git's order (spec §4.1, RZG-96)."""
+        out = self.git("ls-files", "-z", "--", "*.code-workspace")  # a pattern: not _literal
+        return [p for p in out.split("\0") if p]
+
     def untracked_folders(self) -> list[str]:
         """Untracked folders git doesn't ignore, empty ones too, relative to the
         root and without the trailing slash. Only the top one of an untracked tree."""

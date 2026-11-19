@@ -6,7 +6,7 @@ objects, so text, icon, shortcut and enabled state are set in one place.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from enum import StrEnum
 
 from PySide6.QtCore import QObject, Signal, Slot
@@ -26,6 +26,9 @@ PULLING_TEXT = "Pulling…"
 PUSH_TEXT = "Pus&h"  # P, u and s are taken in the Repository menu; Stas&h shares h
 PUSHING_TEXT = "Pushing…"
 COUNT_PROPERTY = "upstreamCount"  # the ↓n or ↑n on Pull or Push (spec §8, RZG-94)
+OPEN_IN_VSCODE_TEXT = "Open with &VS Code"  # a context menu entry (spec §8, RZG-96)
+NO_FILE_TO_OPEN = "Select a file to open, not a folder."
+NO_VSCODE_CHECK = "VS Code isn't set up."  # before MainWindow's VSCodeLauncher sets the check
 
 
 def upstream_count(action: QAction) -> str:
@@ -103,6 +106,8 @@ class AppActions(QObject):
     pull_requested = Signal()
     # Push, when not cancelling one; PushDialogs asks where if need be, then pushes (spec §8).
     push_requested = Signal()
+    # Open with VS Code; VSCodeLauncher starts it (spec §8, RZG-96).
+    open_in_vscode_requested = Signal(object, object)  # tuple[str, ...] paths, int | None line
 
     def __init__(self, session: RepoSession, selection: Selection,
                  parent: QObject | None = None):
@@ -171,6 +176,8 @@ class AppActions(QObject):
         self.amend.toggled.connect(self._on_amend_toggled)
         self._amend_sha: str | None = None
         self._confirm_amend: Callable[[LastCommit], bool] = lambda _last: True
+        self._vscode_check: Callable[[tuple[str, ...]], str | None] = (
+            lambda _paths: NO_VSCODE_CHECK)
         # Stash Changes… (spec §8): connected by StashDialogs, which asks for the message.
         self.stash_changes = self._action("document-save", "Stas&h Changes…")
         # Show Worktrees (spec §8): MainWindow shows the Worktrees panel and raises it.
@@ -260,6 +267,26 @@ class AppActions(QObject):
             self._session.stage(paths)
         else:
             self._session.unstage(paths)
+
+    def set_vscode_check(self, check: Callable[[tuple[str, ...]], str | None]) -> None:
+        """Why Open with VS Code can't open paths (relative to the root), or None
+        if it can: VSCodeLauncher's."""
+        self._vscode_check = check
+
+    def open_in_vscode(self, paths: Sequence[str], parent: QObject,
+                       line: int | None = None) -> QAction:
+        """A context menu's Open with VS Code entry for ``paths`` (relative to the
+        root): one per menu, as its files are the menu's. With ``line``, the first
+        opens there. Disabled with no paths, or when the check says why, in its tooltip."""
+        paths = tuple(paths)
+        action = QAction(QIcon.fromTheme("vscode", QIcon.fromTheme("document-edit")),
+                         OPEN_IN_VSCODE_TEXT, parent)
+        why = self._vscode_check(paths) if paths else NO_FILE_TO_OPEN
+        action.setEnabled(why is None)
+        if why is not None:
+            action.setToolTip(why)
+        action.triggered.connect(lambda: self.open_in_vscode_requested.emit(paths, line))
+        return action
 
     def request_discard_lines(self, diff: FileDiff, lines: Iterable[tuple[int, int]]) -> None:
         """Ask for the chosen lines of ``diff`` to be discarded, once confirmed."""

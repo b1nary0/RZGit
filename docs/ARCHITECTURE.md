@@ -86,6 +86,7 @@ src/rzgit/
     repo_watcher.py             RepoWatcher: refreshes the session when the repository changes on disk
     inotify_watcher.py          InotifyWatcher: Linux inotify on a QSocketNotifier (folders → named events)
     worktree_reader.py          WorktreeReader: a repository's worktrees and their state, kept up to date
+    vscode_target.py            VSCodeTarget: which VS Code window a worktree's files open in, and the command line (plain Python)
     recent_repos.py             RecentRepos: the repositories and worktrees opened recently (§6.3)
     app_settings.py             AppSettings: typed wrapper over QSettings (last_repo, layout, …)
     old_name_migration.py       migrate_old_name: copies the settings and drafts of the old name (RZGitClient) once (§6.3)
@@ -101,6 +102,7 @@ src/rzgit/
     pull_dialogs.py             PullDialogs: Pull's boxes (changes, diverged)
     push_dialogs.py             PushDialogs: Push's box (push and track)
     worktree_dialogs.py         WorktreeDialogs, NewWorktreeDialog: New Worktree…, Remove, Prune; folder, terminal
+    vscode_launcher.py          VSCodeLauncher: Open with VS Code (the command setting, starting it)
     app_icon.py                 app_icon(): the app's QIcon, built from assets/icon (app.py sets it)
     assets/                     image files shipped as package data (no modules)
       icon/                     the app icon: its SVG source and PNGs at 16–512 px
@@ -199,6 +201,7 @@ class RepoSession(QObject):
     notice_occurred  = Signal(str)   # a command worked, but not quite as asked
     busy_changed     = Signal(bool)  # True while git work is queued or running
     remotes_changed  = Signal(object)  # tuple[str, ...]  (the remotes' names, RZG-62; also on a new push_default)
+    workspace_files_changed = Signal(object)  # tuple[str, ...]  (tracked *.code-workspace files, RZG-96)
     refs_changed     = Signal(object)  # tuple[Ref, ...]  (branches and tags, RZG-77)
     network_changed  = Signal(object)  # NetworkCommand | None  (the one running)
     network_progress = Signal(str)     # its latest progress line
@@ -207,7 +210,7 @@ class RepoSession(QObject):
 
     def open(self, path) -> bool          # path, or a Repo already read (§8.1)
     def close(self) -> None
-    def refresh(self, parts: Refresh = Refresh.ALL) -> None   # Flag: HEAD|BRANCHES|REFS|HISTORY|STATUS|STASHES|COUNT|REMOTES
+    def refresh(self, parts: Refresh = Refresh.ALL) -> None   # Flag: HEAD|BRANCHES|REFS|HISTORY|STATUS|STASHES|COUNT|REMOTES|WORKSPACE_FILES
     def load_more_history(self) -> None   # the next page of history, in the background
     def set_history_order(self, order: HistoryOrder) -> None   # DATE or TOPO; reloads history
     def request_diff(self, file: FileSelection | None, full: bool = False,
@@ -250,7 +253,7 @@ class RepoSession(QObject):
 
     # Latest values, so a panel created later renders at once (read-only properties):
     repo, head, head_sha, branches, history, history_order, status, stashes, commit_count, remotes,
-    push_default,
+    push_default, workspace_files,
     history_complete, diff_file, diff, diff_whole, diff_context,
     commit_files_sha, commit_files, commit_details_sha, commit_details, last_commit
 ```
@@ -591,6 +594,11 @@ class RepoSession(QObject):
   `remote.pushDefault` (RZG-72; `Repo.push_default()`, None if unset): the value is a
   `Remotes(names, push_default)`, and `remotes_changed` sends the names when either
   changes. `session.remotes` is the names, `session.push_default` the other.
+- **Workspace files** (RZG-96) are a part, `Refresh.WORKSPACE_FILES`, in `Refresh.ALL`,
+  after the remotes: `Repo.workspace_files()` (`git ls-files -z -- '*.code-workspace'`)
+  gives the tracked VS Code workspace files, relative to the root, as
+  `workspace_files_changed(tuple[str, ...])`. Open with VS Code picks its window with them
+  (§8). The watcher doesn't reload them: a new one counts after Refresh or reopening.
 - **Refs** (RZG-77) are a part, `Refresh.REFS`, in `Refresh.ALL`, after the branches:
   `Repo.refs()` (`git for-each-ref refs/heads refs/remotes refs/tags`) gives each
   branch and tag as a `Ref(name, sha)` (`git_models.py`): its full name
@@ -1401,6 +1409,11 @@ can't collapse), it shows the placeholder "No commit selected".
 - **Staging:** the context menu shows that panel's actions (§8): Stage, Discard and Stage
   All in Unstaged Files; Unstage and Unstage All in Staged Files. Double-click, or Enter,
   moves the selected rows to the other panel.
+- **Open with VS Code** (RZG-96) ends the context menu of all three lists, after a
+  separator; in Commit Files it is the whole menu. It opens the selected **file** rows
+  (`actions.open_in_vscode(paths, menu)`, §8): a selected folder or heading adds nothing,
+  so with only folders selected the entry is disabled ("Select a file to open, not a
+  folder."). It opens the working-tree file, also from Commit Files.
 - **The selection follows the action:** after Stage the files' rows in Staged Files are
   selected, after Unstage their rows in Unstaged Files, through `selection.follow()`
   (§4.2). The rest of "what stays selected after a refresh" is Selection's too.
@@ -1691,7 +1704,12 @@ than rebuilding them.
   Stage/Unstage Selected Lines and, for a tracked file's unstaged diff, Discard Hunk… and
   Discard Selected Lines…, then Copy. Commit diffs have none of these. A staged rename, or a
   diff with unreadable text, has no links or line buttons, and its menu entries are
-  disabled, saying why.
+  disabled, saying why. Last, after a separator, every diff's menu has **Open with VS
+  Code** (RZG-96, §8): the shown file, at the line under the pointer
+  (`diff_rows.new_line_at(rows, n)`: the row's new line number; for a removed line, a
+  hunk header or a fold row, the next new line, else the last one before it; none at all
+  opens the file at the top). The number is the shown diff's new side: in a staged or
+  commit diff, the working-tree file may have moved on.
   Discards go through `AppActions.request_discard_lines`: the window confirms (§8). The diff
   that comes back keeps the scroll position.
 - **Show Whole File** (RZG-60): the checkable **Show Whole File** action (§8), from the View
@@ -2506,6 +2524,32 @@ Per-widget sheets are slow to apply and scatter the rules.
   file panels' context menus. Stage and Unstage call `selection.follow()` first, so the
   moved rows are selected in the other panel (§4.2). Discard is connected by MainWindow, which asks for
   confirmation first (listing the files, and that untracked ones go to the trash).
+- **Open with VS Code** (RZG-96) opens files in VS Code, in the window of this worktree:
+  - **The entry:** context menus make it with `actions.open_in_vscode(paths, parent,
+    line=None)`, a new `QAction` per menu, as its files are the menu's. It is enabled
+    when `paths` isn't empty and the check MainWindow's `VSCodeLauncher` set
+    (`set_vscode_check`) finds no problem. Disabled, its tooltip says why: "Select a file
+    to open, not a folder.", "No VS Code command found. Set it in Settings (Tools).", or
+    "Not in the working tree." (none of the files is there: deleted, or only in a
+    commit). No shortcut. Triggered, it sends `open_in_vscode_requested(paths, line)`.
+  - **The window:** `code <file>` alone opens the file in a window whose folder holds it,
+    else the last active one: a lane's worktree is outside the main checkout, so its files
+    would land in the main checkout's window. So the command names the worktree's own
+    target first, which VS Code reuses if a window has it open, or opens a new window
+    for: `code <target> <file>…`, or `code <target> --goto <file>:<line>` from the Diff
+    panel. `VSCodeTarget(root, workspace_files)` (`core/vscode_target.py`) picks the
+    target: when the repository tracks exactly one `*.code-workspace` file
+    (`session.workspace_files`, §4.1) and this worktree has it, that file (its folder
+    paths are relative, so each worktree's copy opens that worktree); otherwise the
+    worktree's folder. A worktree open as a folder while the workspace file is passed
+    gets a second window: VS Code can't be asked what it has open (`docs/USAGE.md` says so).
+  - **The files:** `present(paths)` keeps those that are files in the working tree, in
+    one `code` call, so they open in the same window; the rest are skipped. Paths are
+    absolute, so none starts with `-`.
+  - **`VSCodeLauncher`** (`ui/vscode_launcher.py`, made by MainWindow) holds the command
+    setting (§8.2), sets the check, and starts the command with `QProcess.startDetached`
+    in the worktree's folder, as Open Terminal does. If it can't be started, a warning
+    says so. It runs no git.
 - **Discard lines:** the Diff panel calls `actions.request_discard_lines(diff, lines)`, which
   sends `discard_lines_requested`. MainWindow asks first ("Discard 3 changed lines of
   path?", can't be undone) and then calls `session.discard_lines`.
@@ -2796,7 +2840,10 @@ window while it's open (§8.1). Layouts and columns aren't in it either.
     the locale's short format. `history_model.py`.
   - **Tools:** *Terminal command* (`""`): what Open in Terminal starts, split as a shell
     would; when it's empty or its program isn't found, `$TERMINAL` and then the list, as
-    before (§5.4). `worktree_dialogs.py`. RZG-75's editor command will go here.
+    before (§5.4). `worktree_dialogs.py`. *VS Code command* (`""`, shown as `code`): what
+    Open with VS Code starts (§8), split as a shell would, e.g. `codium` or `flatpak run
+    com.visualstudio.code`; empty means `code`. If its program isn't found, the entry is
+    disabled. `vscode_launcher.py` (RZG-96; RZG-75 reuses it).
 - **The window:** `SettingsWindow` (`ui/settings_window.py`) is a top-level window, not
   modal, one for the app: **File → Settings…** (`AppActions.settings`, Ctrl+,) shows it
   and raises it if open (`AppWindows.show_settings`; a `MainWindow` without `AppWindows`

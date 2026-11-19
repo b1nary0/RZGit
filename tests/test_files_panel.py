@@ -9,6 +9,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QTreeWidgetItemIterator
 
 from rzgit.core.selection import FileSelection, FileSource
+from rzgit.ui.app_actions import NO_FILE_TO_OPEN, OPEN_IN_VSCODE_TEXT
 from rzgit.ui.panels.files_panel import FilesPanel
 from rzgit.ui.panels.staged_panel import StagedPanel
 from rzgit.ui.theme.app_theme import LIGHT_THEME
@@ -326,7 +327,9 @@ class FilesPanelTests(unittest.TestCase):
             with self.subTest(panel.title):
                 menu = panel._list._menu()
                 self.addCleanup(menu.deleteLater)
-                self.assertEqual([a for a in menu.actions() if not a.isSeparator()], want)
+                found = [a for a in menu.actions() if not a.isSeparator()]
+                self.assertEqual(found[:-1], want)
+                self.assertEqual(found[-1].text(), OPEN_IN_VSCODE_TEXT)  # RZG-96
 
 
     # ---- folder tree (RZG-25) -----------------------------------------------
@@ -428,6 +431,41 @@ class FilesPanelTests(unittest.TestCase):
         self.assertIsNone(self.ctx.selection.file)  # a folder: nothing for Diff
         self.assertEqual(self.ctx.actions.selected(W), (
             "src/app/ui/panel.py", "src/app/ui/theme.py", "src/app/core.py"))
+
+    def vscode_entry(self, source):
+        menu = (self.unstaged if source is W else self.staged)._list._menu()
+        self.addCleanup(menu.deleteLater)
+        self.assertTrue(menu.toolTipsVisible())
+        return menu.actions()[-1]
+
+    def test_open_with_vs_code_opens_the_selected_files_not_a_folders(self):
+        self.make_nested_changes()
+        self.open()
+        self.ctx.actions.set_vscode_check(lambda paths: None)
+        asked = []
+        self.ctx.actions.open_in_vscode_requested.connect(lambda p, l: asked.append((p, l)))
+        tree = self.tree(W)
+        tree.selectionModel().setCurrentIndex(tree.indexFromItem(self.folder("src/app", W)),
+                                              QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        entry = self.vscode_entry(W)
+        self.assertEqual((entry.text(), entry.isEnabled(), entry.toolTip()),
+                         (OPEN_IN_VSCODE_TEXT, False, NO_FILE_TO_OPEN))
+        tree.selectionModel().select(tree.indexFromItem(self.item("docs/a.md", W)),
+                                     QItemSelectionModel.SelectionFlag.Select)
+        tree.selectionModel().select(tree.indexFromItem(self.item("a.txt", W)),
+                                     QItemSelectionModel.SelectionFlag.Select)
+        entry = self.vscode_entry(W)
+        self.assertTrue(entry.isEnabled())
+        entry.trigger()
+        self.assertEqual(asked, [(("docs/a.md", "a.txt"), None)])  # in tree order
+
+    def test_open_with_vs_code_says_why_it_is_disabled(self):
+        (self.repo / "a.txt").write_text("changed")
+        self.open()
+        self.select(W, "a.txt")
+        self.ctx.actions.set_vscode_check(lambda paths: f"no {paths}")
+        entry = self.vscode_entry(W)
+        self.assertEqual((entry.isEnabled(), entry.toolTip()), (False, "no ('a.txt',)"))
 
     def test_staging_a_folder_stages_its_files_and_the_selection_follows(self):
         self.make_nested_changes()

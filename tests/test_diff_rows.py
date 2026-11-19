@@ -10,6 +10,7 @@ from rzgit.ui.panels.diff_rows import (
     FOLD_KEEP,
     FOLD_MIN_LINES,
     fold,
+    new_line_at,
     split_partners,
     split_rows,
     stretches,
@@ -35,6 +36,25 @@ DIFF = FileDiff("f", (Hunk(HEADER, 1, 1, (
     DiffLine(C, 4, 3, "end"),
     DiffLine(A, None, 4, "tail", no_newline=True),
 )),))
+
+
+class NewLineAtTests(unittest.TestCase):
+    """The line Open with VS Code opens a row at (RZG-96)."""
+
+    def test_a_row_s_own_new_line_else_the_next_else_the_last(self):
+        hidden = (DiffRow(K.CONTEXT, "x", 5, 7), DiffRow(K.CONTEXT, "y", 6, 8))
+        rows = (DiffRow(K.HUNK, "@@"), DiffRow(K.CONTEXT, "a", 1, 1),
+                DiffRow(K.REMOVED, "b", 2, None), DiffRow(K.ADDED, "c", None, 2),
+                DiffRow(K.FOLD, "2 lines", hidden=hidden), DiffRow(K.REMOVED, "z", 9, None),
+                DiffRow(K.FILLER))
+        self.assertEqual([new_line_at(rows, n) for n in range(len(rows))],
+                         [1, 1, 2, 2, 7, 8, 8])
+        self.assertEqual(new_line_at(rows, 99), 8)
+
+    def test_none_without_new_lines(self):
+        self.assertIsNone(new_line_at((DiffRow(K.REMOVED, "gone", 1, None),), 0))
+        self.assertIsNone(new_line_at((), 0))
+        self.assertEqual(new_line_at(unified_rows(DIFF), 0), 1)  # the hunk's first line
 
 
 class UnifiedRowsTests(unittest.TestCase):

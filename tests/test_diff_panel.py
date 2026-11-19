@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QApplication
 
 from rzgit.core.diff_patch import hunk_lines
 from rzgit.core.selection import FileSelection, FileSource
-from rzgit.ui.app_actions import HunkHeaders
+from rzgit.ui.app_actions import OPEN_IN_VSCODE_TEXT as VSCODE, HunkHeaders
 from rzgit.ui.panels import diff_panel
 from rzgit.ui.panels.diff_panel import DiffPanel
 from rzgit.ui.panels.diff_rows import RowKind, TextPos, unified_rows
@@ -298,7 +298,8 @@ class DiffPanelHunkTests(unittest.TestCase):
         menu = self.menu(self.panel._unified, 4)  # a changed line of the first hunk
         self.assertEqual(self.entries(menu), [
             ("Stage Hunk", True), ("Stage Selected Lines", True),
-            ("Discard Hunk…", True), ("Discard Selected Lines…", True), ("Copy", False)])
+            ("Discard Hunk…", True), ("Discard Selected Lines…", True), ("Copy", False),
+            (VSCODE, False)])
 
     def test_stage_the_clicked_line_only(self):
         self.select("a.txt")
@@ -316,7 +317,7 @@ class DiffPanelHunkTests(unittest.TestCase):
         self.assertEqual(view._link, "Unstage Hunk")
         menu = self.menu(view, 4)
         self.assertEqual([t for t, _ in self.entries(menu)],
-                         ["Unstage Hunk", "Unstage Selected Lines", "Copy"])
+                         ["Unstage Hunk", "Unstage Selected Lines", "Copy", VSCODE])
         self.trigger(menu, "Unstage Hunk")
         self.assertNotIn("FIVE", self.index("a.txt"))
         self.assertIn("NINETY", self.index("a.txt"))
@@ -326,7 +327,7 @@ class DiffPanelHunkTests(unittest.TestCase):
         view = self.panel._unified
         menu = self.menu(view, 1)
         self.assertEqual([t for t, _ in self.entries(menu)],
-                         ["Stage Hunk", "Stage Selected Lines", "Copy"])
+                         ["Stage Hunk", "Stage Selected Lines", "Copy", VSCODE])
         self.trigger(menu, "Stage Selected Lines")
         self.assertEqual(self.index("new.txt"), "one\n")
 
@@ -362,7 +363,20 @@ class DiffPanelHunkTests(unittest.TestCase):
         wait_idle(self.session)
         view = self.panel._unified
         self.assertEqual(view._link, "")
-        self.assertEqual(self.entries(self.menu(view, 1)), [("Copy", False)])
+        self.assertEqual(self.entries(self.menu(view, 1)), [("Copy", False), (VSCODE, False)])
+
+    def test_open_with_vs_code_opens_the_shown_file_at_the_line_under_the_pointer(self):
+        self.select("a.txt")
+        self.ctx.actions.set_vscode_check(lambda paths: None)
+        asked = []
+        self.ctx.actions.open_in_vscode_requested.connect(lambda p, l: asked.append((p, l)))
+        view = self.panel._unified
+        n = next(n for n, r in enumerate(view.rows) if r.kind is RowKind.ADDED)
+        menu = self.menu(view, n)
+        self.assertEqual(self.entries(menu)[-1], (VSCODE, True))
+        self.assertTrue(menu.actions()[-2].isSeparator())
+        self.trigger(menu, VSCODE)
+        self.assertEqual(asked, [(("a.txt",), view.rows[n].new_no)])
 
     def click_button(self, view, row_index):
         """Click the gutter button of ``view.rows[row_index]``, scrolled into view."""

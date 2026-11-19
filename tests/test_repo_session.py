@@ -227,6 +227,28 @@ class RepoSessionTests(unittest.TestCase):
         wait_idle(self.session)
         self.assertEqual(self.rec.names(), ["refs_changed"])
 
+    def test_workspace_files_are_a_part_of_everything(self):
+        """RZG-96: the tracked *.code-workspace files, in any folder; not untracked ones."""
+        (self.path / "tools").mkdir()
+        (self.path / "tools" / "x.code-workspace").write_text("{}")
+        (self.path / "loose.code-workspace").write_text("{}")
+        git(self.path, "add", "tools/x.code-workspace")
+        rec = SignalRecorder(self.session, "workspace_files_changed")
+        self.open_and_clear()
+        self.assertEqual(self.session.workspace_files, ("tools/x.code-workspace",))
+        self.assertEqual(rec.values("workspace_files_changed"), [("tools/x.code-workspace",)])
+        self.assertIn(Refresh.WORKSPACE_FILES, Refresh.ALL)
+        git(self.path, "add", "loose.code-workspace")
+        self.session.refresh(Refresh.STATUS)  # not reloaded with the status
+        wait_idle(self.session)
+        self.assertEqual(self.session.workspace_files, ("tools/x.code-workspace",))
+        self.session.refresh()
+        wait_idle(self.session)
+        self.assertEqual(self.session.workspace_files,
+                         ("loose.code-workspace", "tools/x.code-workspace"))
+        self.session.close()
+        self.assertEqual(self.session.workspace_files, ())
+
     def test_refresh_without_repo_does_nothing(self):
         self.session.refresh()
         wait_idle(self.session)

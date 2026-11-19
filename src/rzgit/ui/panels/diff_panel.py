@@ -32,6 +32,7 @@ from rzgit.ui.panels.diff_rows import (
     Stretch,
     TextPos,
     fold,
+    new_line_at,
     split_partners,
     split_rows,
     stretches,
@@ -522,6 +523,10 @@ class DiffPanel(Panel):
         copy = menu.addAction("Copy")
         copy.setEnabled(bool(view.selection) or view.text_range() is not None)
         copy.triggered.connect(view.copy)
+        if self._shown is not None:  # RZG-96: the working-tree file, at the line under the pointer
+            menu.addSeparator()
+            line = new_line_at(view.rows, view.cursorForPosition(pos).blockNumber())
+            menu.addAction(self.ctx.actions.open_in_vscode((self._shown.path,), menu, line))
         return menu
 
     def _show_message(self, text: str, show_anyway: bool = False,

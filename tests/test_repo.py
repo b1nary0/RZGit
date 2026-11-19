@@ -713,6 +713,17 @@ class RepoWatchListingTests(unittest.TestCase):
     def test_listed_files_leave_out_ignored_ones(self):
         self.assertEqual(sorted(self.repo.listed_files()), [".gitignore", "src/a/y.c", "t.txt"])
 
+    def test_workspace_files_are_the_tracked_ones_in_any_folder(self):
+        """RZG-96: a pattern, not a literal path; untracked ones don't count."""
+        self.assertEqual(self.repo.workspace_files(), [])
+        for name in ("a b.code-workspace", "src/a/deep.code-workspace", "untracked.code-workspace",
+                     "src/a/not.code-workspace.bak"):
+            (self.path / name).write_text("{}")
+        git(self.path, "add", "a b.code-workspace", "src/a/deep.code-workspace",
+            "src/a/not.code-workspace.bak")
+        self.assertEqual(self.repo.workspace_files(),
+                         ["a b.code-workspace", "src/a/deep.code-workspace"])
+
     def test_untracked_folders_include_empty_ones(self):
         self.assertEqual(sorted(self.repo.untracked_folders()), ["empty", "src"])
 

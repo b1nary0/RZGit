@@ -3,7 +3,7 @@
 The body of the Unstaged Files (``FilesPanel``), Staged Files
 (``StagedPanel``) and Commit Files (``CommitFilesPanel``) panels: a panel
 never imports another, so they share this widget. With ``FileSource.COMMIT``
-it lists ``session.commit_files``, and has no staging menu or double-click. Each row is one ``FileSelection``. A list shows only the rows of
+it lists ``session.commit_files``, and has no staging actions or double-click. Each row is one ``FileSelection``. A list shows only the rows of
 ``selection.files`` that are its own, so one of the two holds the selection
 at a time, and Selection decides what stays selected after a refresh (§4.2).
 With Show Files as Tree on, files sit under folder rows (``file_tree.py``);
@@ -369,20 +369,28 @@ class FileList(QWidget):
         self._tree.forget_folded()
 
     def _show_menu(self, pos: QPoint) -> None:
-        if not any(self._menu_actions):
-            return
         menu = self._menu()
         menu.exec(self._tree.viewport().mapToGlobal(pos))
         menu.deleteLater()
 
     def _menu(self) -> QMenu:
-        """The context menu: the panel's staging actions (spec §8)."""
+        """The context menu: the panel's staging actions (spec §8), then Open with
+        VS Code on the selected file rows (RZG-96). Separators at an end don't show."""
         menu = QMenu(self)
+        menu.setToolTipsVisible(True)  # a disabled entry says why
         first, rest = self._menu_actions
         menu.addActions(first)
         menu.addSeparator()
         menu.addActions(rest)
+        menu.addSeparator()
+        menu.addAction(self.ctx.actions.open_in_vscode(self.selected_file_paths(), menu))
         return menu
+
+    def selected_file_paths(self) -> tuple[str, ...]:
+        """The paths of the selected file rows, in tree order: not the files under
+        a selected folder or heading (Open with VS Code opens files only)."""
+        selected = {id(i) for i in self._tree.selectedItems()}
+        return tuple(f.path for i in self._items() if id(i) in selected and (f := self._file(i)))
 
     # ---- items -----------------------------------------------------------
 

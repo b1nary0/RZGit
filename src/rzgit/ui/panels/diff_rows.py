@@ -235,6 +235,25 @@ def _rows(line: DiffLine, hunk: int, index: int) -> list[DiffRow]:
     return [row, _NOTE] if line.no_newline else [row]
 
 
+# ---- the line to open (RZG-96) ------------------------------------------------
+
+
+def new_line_at(rows: Sequence[DiffRow], n: int) -> int | None:
+    """The new-side line number to open row ``n`` at: its own; for a removed
+    line, a hunk header, a filler or a fold row, the next new line (a fold row's
+    first); else the last one before it. None if no row has one."""
+    def lines(found: Sequence[DiffRow]):
+        for row in found:
+            yield row
+            yield from row.hidden
+    n = max(0, min(n, len(rows)))
+    after = next((r.new_no for r in lines(rows[n:]) if r.new_no is not None), None)
+    if after is not None:
+        return after
+    return next((r.new_no for r in reversed(list(lines(rows[:n]))) if r.new_no is not None),
+                None)
+
+
 # ---- copying text (RZG-73) ---------------------------------------------------
 
 _NOT_COPIED = (RowKind.HUNK, RowKind.FILLER, RowKind.NOTE)

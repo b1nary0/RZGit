@@ -251,6 +251,18 @@ from the Diff panel, as described in [Diffs](#diffs).
 Right-click a file to get the same commands. Unstaged Files offers **Stage**, **Discard
 Changes…** and **Stage All**, and Staged Files offers **Unstage** and **Unstage All**.
 
+**Opening files in VS Code.** **Open with VS Code**, at the bottom of the right-click
+menu, opens the selected files in VS Code. It opens files only: a selected folder adds
+nothing. The files open in the VS Code window of this worktree, never in another
+project's window. When the repository tracks exactly one `*.code-workspace` file, RZGit
+opens this worktree's copy of it; otherwise it opens the worktree's folder. If no window
+has it open, VS Code opens a new one. If you have the worktree open as a *folder* and the
+repository has a workspace file, VS Code opens a second window for the workspace, because
+it can't be asked what it has open. Open the workspace file instead to use one window. A
+file that is no longer in the working tree (deleted, for example) is skipped. When none
+of the selected files is there, the entry is greyed out, and its tooltip says why. The
+*VS Code command* setting (Settings → Tools) says which command starts VS Code.
+
 **Discarding.** **Repository → Discard Changes…** (Ctrl+Backspace) throws away the unstaged
 changes of the selected files. It lists the files and asks you to confirm first, because
 this can't be undone. Staged changes are kept, and new files that git doesn't track are
@@ -316,7 +328,10 @@ Clicking it stages or unstages that line, or all the selected lines if it is one
 them. Right-click the diff for **Stage Hunk** and **Stage Selected Lines** (or **Unstage
 Hunk** and **Unstage Selected Lines** for staged changes) and, for the unstaged changes of
 a tracked file, **Discard Hunk…** and **Discard Selected Lines…**, which ask before they
-discard anything. The diff of a commit is read-only.
+discard anything. The diff of a commit is read-only. **Open with VS Code**, at the bottom
+of the menu, opens the file in VS Code at the line under the pointer (see *Opening files
+in VS Code* above). The line number comes from the diff, so in a staged or commit diff it
+can be a little off if the file has changed since.
 
 **Selecting and copying text.** You can select the diff's text like text in an editor:
 drag to select, double-click a word, or triple-click a line. Ctrl+A selects all the text
@@ -355,7 +370,9 @@ with git's own line breaks, and **Select All**. Right-click a parent for **Copy 
 In a wide window, the message and the details sit side by side.
 
 **Commit Files** (3) lists the files the commit changed, in the same way as Unstaged
-Files. Select a file to see its changes in the Diff panel.
+Files. Select a file to see its changes in the Diff panel. Right-click a file for **Open
+with VS Code**, which opens the file as it is in your working tree now, not as it was in
+the commit.
 
 Select **Uncommitted changes** at the top of History to go back to your own work.
 
@@ -499,7 +516,9 @@ needs a restart.
   the **Context lines above and below a change** (3 by default).
 - **History:** the **Date format**, which is either the ISO format with or without
   seconds, or your locale's short format.
-- **Tools:** the **Terminal command** that Open Terminal starts.
+- **Tools:** the **Terminal command** that Open Terminal starts, and the **VS Code
+  command** that Open with VS Code starts (`code` when empty; for example `codium`, or
+  `flatpak run com.visualstudio.code`).
 
 **Restore Defaults** at the bottom resets either every setting or only the settings of the
 page you are looking at.

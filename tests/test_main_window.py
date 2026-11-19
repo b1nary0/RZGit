@@ -23,10 +23,11 @@ from rzgit.ui.layout.layout_model import (
     to_dict,
 )
 from rzgit.ui.layout.layout_presets import DEFAULT_LAYOUT
-from rzgit.ui.app_actions import HunkHeaders, StashOp
+from rzgit.ui.app_actions import NO_VSCODE_CHECK, HunkHeaders, StashOp
 from rzgit.ui.main_window import MainWindow, commit_summary
 from rzgit.ui.theme.app_theme import DARK_CB_THEME, DARK_THEME, LIGHT_THEME
 from rzgit.ui.theme.theme_manager import ThemeManager, ThemeMode
+from rzgit.ui.vscode_launcher import VSCodeLauncher
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
 
@@ -201,6 +202,17 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(set(again.layout_host.panels), {"controls", "worktrees", "files", "history", "diff", "staged", "commit", "commit_details", "commit_files", "stash"})
         again.layout_host.show_panel("branches")  # and comes back where it was
         self.assertEqual(strip_sizes(again.layout_host.state()), strip_sizes(DEFAULT_LAYOUT))
+
+    def test_open_with_vs_code_is_wired_to_the_window_s_launcher(self):
+        """RZG-96: the launcher sets the entry's check and answers its requests."""
+        window = self.start()
+        self.assertIsInstance(window.vscode, VSCodeLauncher)
+        action = window.ctx.actions.open_in_vscode(("gone.txt",), window)
+        self.addCleanup(action.deleteLater)
+        self.assertNotEqual(action.toolTip(), NO_VSCODE_CHECK)  # the launcher's check
+        with mock.patch.object(window.vscode, "start_detached") as start:
+            window.ctx.actions.open_in_vscode_requested.emit(("gone.txt",), None)
+        start.assert_not_called()
 
     def test_no_toolbar_the_controls_panel_has_its_buttons(self):
         window = self.start()

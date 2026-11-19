@@ -6,6 +6,7 @@ from unittest import mock
 from PySide6.QtCore import QCoreApplication, QEvent
 
 from rzgit.core.selection import FileSelection, FileSource
+from rzgit.ui.app_actions import OPEN_IN_VSCODE_TEXT
 from rzgit.ui.panels.commit_files_panel import CommitFilesPanel
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
@@ -97,9 +98,23 @@ class CommitFilesPanelTests(unittest.TestCase):
         with mock.patch.object(self.ctx.actions, "move") as move:
             tree.itemDoubleClicked.emit(tree.topLevelItem(0), 0)
             move.assert_not_called()
-        with mock.patch("rzgit.ui.panels.file_list.QMenu") as menu:
-            self.panel._list._show_menu(tree.rect().center())
-            menu.assert_not_called()
+        menu = self.panel._list._menu()  # only Open with VS Code (RZG-96)
+        self.addCleanup(menu.deleteLater)
+        self.assertEqual([a.text() for a in menu.actions() if a.isVisible() and
+                          not a.isSeparator()], [OPEN_IN_VSCODE_TEXT])
+
+    def test_open_with_vs_code_opens_the_working_tree_file(self):
+        self.choose(self.third)
+        tree = self.panel._list._tree
+        item = next(tree.topLevelItem(i) for i in range(2) if tree.topLevelItem(i).text(0) == "a.txt")
+        tree.setCurrentItem(item)
+        self.ctx.actions.set_vscode_check(lambda paths: None)
+        asked = []
+        self.ctx.actions.open_in_vscode_requested.connect(lambda p, l: asked.append((p, l)))
+        menu = self.panel._list._menu()
+        self.addCleanup(menu.deleteLater)
+        menu.actions()[-1].trigger()
+        self.assertEqual(asked, [(("a.txt",), None)])
 
     def test_the_header_counts_only_once_the_files_arrive(self):
         self.selection.commit = self.third
