@@ -36,7 +36,13 @@ A real Wayland launch (`QT_QPA_PLATFORM=wayland`) against the test repository, w
 
 ## 5. Mutation checks
 
-Break each key piece of the change and confirm a test fails. Run every test run made while a file is mutated with `PYTHONDONTWRITEBYTECODE=1`: a same-size restore within the same second otherwise leaves a stale `.pyc` that still holds the mutation (RZG-66). If one is suspected, delete that one file by its literal path.
+Break each key piece of the change and confirm a test fails. Run each check through the runner, naming only the tests it concerns, so the lane's tab shows the count:
+
+```
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /home/JPOD/dev/RZGit/.venv/bin/python /home/JPOD/dev/RZGit/.claude/workflow/run_tests.py tests.test_<module>
+```
+
+Expect it to fail (exit code 1). Run every test run made while a file is mutated with `PYTHONDONTWRITEBYTECODE=1`: a same-size restore within the same second otherwise leaves a stale `.pyc` that still holds the mutation (RZG-66). If one is suspected, delete that one file by its literal path.
 
 ## 6. Other platforms
 
