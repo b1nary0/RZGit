@@ -13,6 +13,7 @@ differs between repositories. It's per repository and never synced.
 | Lane worktree      | `/home/JPOD/dev/RZGit-RZG-N`, branch `RZG-N`                 |
 | Small-items lane   | worktree `/home/JPOD/dev/RZGit-small`, tab `RZG-small`, hook name `small` |
 | Lanes by default   | yes: lanes is the default way to work an RZG issue          |
+| Test runs          | `-m unittest\b|run_tests\.py` (a regular expression over a lane's process command lines; see the lanes skill's "Test runs"). `.claude/workflow/run_tests.py --runs N` runs the suite N times and writes the progress file |
 | Local settings     | `~/dev/RZGit.local.json`, this machine's only (the `local-settings` skill: `test-repo`) |
 
 `<main>` in the shared skills means the main checkout above.

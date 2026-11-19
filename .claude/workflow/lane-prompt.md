@@ -18,6 +18,7 @@ You are lane {{LANE}}, one of several parallel lanes working on RZGit (a PySide6
 ## Python and tests (important)
 The shared venv is /home/JPOD/dev/RZGit/.venv. Its editable install points at the MAIN checkout's src, so always put your own src first. From your worktree root:
   PYTHONPATH=src /home/JPOD/dev/RZGit/.venv/bin/python -m unittest discover -v -s tests -t .
+For the full-suite runs below, use the runner instead: `PYTHONPATH=src /home/JPOD/dev/RZGit/.venv/bin/python /home/JPOD/dev/RZGit/.claude/workflow/run_tests.py --runs N` (add `-v` to name each test). It runs the suite N times and shows the lane's progress (tests finished out of the total) as a bar on your tab.
 Do the same for any script that imports rzgit, or have it insert your worktree's src at sys.path[0]. Check once that `rzgit.__file__` resolves into your worktree.
 
 ## The workflow
@@ -30,7 +31,7 @@ Then:
 2. **Plan:** a short plan. Wait for the user to say "start".
 3. **Build:** set the issue In Progress, and its parent epic too, if any. Update docs/ARCHITECTURE.md first, then the code and tests.
 4. **Verify:**
-   - The full suite 5x (the command above).
+   - The full suite 5x: the runner with `--runs 5`.
    - An offscreen render compared with `{{BASE}}`:
      - Make a temporary worktree of `{{BASE}}`: `git worktree add --detach <fresh mktemp -d path>/head {{BASE}}`.
      - Use a fresh `mktemp -d` settings folder (XDG_CONFIG_HOME).
@@ -42,7 +43,7 @@ Then:
 5. **Report:** set the issue In Review and add a "**Result (date, uncommitted):**" note.
 6. **Commit** only when the user says yes. Then:
    - Check the main checkout is still on `{{BASE}}` (`git -C /home/JPOD/dev/RZGit branch --show-current`). If it isn't, stop and ask the user.
-   - `git rebase {{BASE}}`, resolving conflicts if it moved (other lanes land on it too). Rerun the full suite once.
+   - `git rebase {{BASE}}`, resolving conflicts if it moved (other lanes land on it too). Rerun the full suite once (the runner, `--runs 1`).
    - One commit titled `{{LANE}}: <issue title without the [Feature]/[Architecture] prefix>`, ending with the line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
    - Land it: `git -C /home/JPOD/dev/RZGit merge --ff-only {{LANE}}`. If that fails because `{{BASE}}` moved, rebase again, rerun the suite and retry.
    - Never force anything, never merge non-fast-forward, never commit in the main checkout, never push.
