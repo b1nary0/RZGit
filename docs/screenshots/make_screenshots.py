@@ -2,7 +2,9 @@
 
 Run it from the repository root after a change to the UI:
 
-    .venv/bin/python docs/screenshots/make_screenshots.py
+    .venv/bin/python docs/screenshots/make_screenshots.py [SHOT ...]
+
+Name shots (for example ``readme``) to make only those.
 
 It clones this repository into a fresh temporary folder and sets up some
 work there: a few changed files, one of them staged, a stash, a branch and a
@@ -10,8 +12,9 @@ second worktree. It then opens RZGit on the clone offscreen, in the Light
 theme, with settings in another fresh temporary folder, so your own settings
 and repositories are never read or changed. Each picture is the window (or a
 part of it) with its subject outlined in the theme's accent colour, the rest
-dimmed slightly, and numbered badges that the guide refers to. The PNG files
-are written next to this script.
+dimmed slightly, and numbered badges that the guide refers to. The README's
+two pictures (``readme``) are the plain window, larger, in Light and in Dark.
+The PNG files are written next to this script.
 """
 
 from __future__ import annotations
@@ -38,7 +41,7 @@ os.environ["XDG_DATA_HOME"] = str(_SCRATCH / "data")
 from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap  # noqa: E402
 from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QApplication, QMenu,  # noqa: E402
-                               QTabWidget, QToolButton, QWidget)  # noqa: E402
+                               QScrollBar, QTabWidget, QToolButton, QWidget)  # noqa: E402
 
 from outline_shape import outline_path, overlap_groups  # noqa: E402  (beside this script)
 from rzgit.core.app_settings import AppSettings  # noqa: E402
@@ -57,12 +60,15 @@ from rzgit.ui.theme.app_theme import LIGHT_THEME  # noqa: E402
 from rzgit.ui.theme.theme_manager import ThemeManager, ThemeMode  # noqa: E402
 
 WINDOW_SIZE = QSize(1280, 860)  # big enough for every panel, small enough to read
+README_SIZE = QSize(1600, 1000)  # the README's pictures: every Sidebar panel shows all it holds
+SIDEBAR = ("branches", "worktrees", "stash", "files", "staged", "commit")
 DIM_ALPHA = 80  # of 255: how much the parts that aren't the subject are dimmed
 OUTLINE_WIDTH = 3
 OUTLINE_RADIUS = 6
 BADGE_SIZE = 24
 MARGIN = 12  # around a part of the window shown alone
 ICON_THEME = "breeze"  # the light Breeze icons, as on a KDE desktop
+ICON_THEME_DARK = "breeze-dark"  # and the dark ones, in the Dark theme
 
 
 # ---- the repository -------------------------------------------------------------
@@ -565,19 +571,79 @@ def shot_settings(app: App) -> None:
     window.close()
 
 
+def squeezed(app: App) -> list[str]:
+    """The Sidebar panels that can't show all they hold: a scroll bar with somewhere to go."""
+    out = []
+    for panel_id in SIDEBAR:
+        bars = pane(app.panel(panel_id)).findChildren(QScrollBar)
+        if any(bar.maximum() > bar.minimum() for bar in bars):
+            out.append(panel_id)
+    return out
+
+
+def fit(app: App, panel_id: str) -> None:
+    """Make ``panel_id``'s pane just tall enough to show all it holds, from the tallest
+    pane beside it, as a user dragging the divider would."""
+    for _ in range(40):
+        if panel_id not in squeezed(app):
+            return
+        grow(app, panel_id, 8)
+
+
+def shot_readme(app: App) -> None:
+    """The README's pictures: a window of its own at README_SIZE, plain (no dimming or
+    badges), once in Light and once in Dark, with a neutral path in the status bar."""
+    main_window = app.window
+    app.window = app.windows.new_window()
+    app.window.resize(README_SIZE)
+    app.window.show()
+    app.window.session.open(app.repo)
+    app.settle()
+    app.uncommitted()
+    app.select_file("README.md", FileSource.WORKTREE)
+    app.panel("history").request_activation()
+    # Worktrees and Staged Files keep their height in the default layout, however big the
+    # window, so they're sized to their rows here (until RZG-90 makes panels fit their
+    # contents).
+    for panel_id in ("worktrees", "staged"):
+        fit(app, panel_id)
+    for mode, icons, name in ((ThemeMode.LIGHT, ICON_THEME, "readme-light"),
+                              (ThemeMode.DARK, ICON_THEME_DARK, "readme-dark")):
+        QIcon.setThemeName(icons)
+        app.theme.set_mode(mode)
+        app.settle()
+        if squeezed(app):
+            raise SystemExit(f"{name}: at {README_SIZE.width()}×{README_SIZE.height()}, "
+                             f"{', '.join(squeezed(app))} can't show all they hold; "
+                             "make README_SIZE bigger")
+        bar = app.window.statusBar()
+        bar.showMessage(bar.currentMessage().replace(str(_SCRATCH), "~"))
+        save(app.window.grab(), name)
+    QIcon.setThemeName(ICON_THEME)
+    app.theme.set_mode(ThemeMode.LIGHT)
+    app.window.close()
+    app.window = main_window
+    app.settle()
+
+
 SHOTS: list[Callable[[App], None]] = [
     shot_overview, shot_menus, shot_controls, shot_history, shot_history_filter,
     shot_changes, shot_files, shot_diff, shot_commit_details, shot_commit_window,
     shot_branches, shot_stashes, shot_worktrees,
-    shot_settings,
+    shot_settings, shot_readme,
 ]
 
 
 def main() -> int:
     print(f"scratch folder: {_SCRATCH}")
+    names = sys.argv[1:]  # only these shots (e.g. "readme"); all of them without any
+    unknown = [n for n in names if f"shot_{n}" not in {s.__name__ for s in SHOTS}]
+    if unknown:
+        raise SystemExit(f"no such shot: {', '.join(unknown)}")
     app = App(make_clone())
     for shot in SHOTS:
-        shot(app)
+        if not names or shot.__name__.removeprefix("shot_") in names:
+            shot(app)
     app.window.close()
     app.windows.shutdown()
     print(f"done; the scratch folder {_SCRATCH} can be removed")

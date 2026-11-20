@@ -5,6 +5,11 @@
   </picture>
 </p>
 
+<p align="center">
+  <a href="docs/screenshots/readme-light.png"><img src="docs/screenshots/readme-light.png" alt="RZGit in the Light theme" width="49%"></a>
+  <a href="docs/screenshots/readme-dark.png"><img src="docs/screenshots/readme-dark.png" alt="RZGit in the Dark theme" width="49%"></a>
+</p>
+
 # RZGit
 
 **[How to use RZGit](docs/USAGE.md)**: every feature, with pictures and a table of the
