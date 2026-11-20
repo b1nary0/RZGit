@@ -34,6 +34,7 @@ from rzgit.ui.push_dialogs import PushDialogs
 from rzgit.ui.recent_repos_menu import RecentReposMenu
 from rzgit.ui.settings_window import SettingsWindow, show_window
 from rzgit.ui.stash_dialogs import StashDialogs
+from rzgit.ui.vscode_definition import VSCodeDefinition
 from rzgit.ui.vscode_launcher import VSCodeLauncher
 from rzgit.ui.worktree_dialogs import WorktreeDialogs
 
@@ -136,6 +137,7 @@ class MainWindow(QMainWindow):
             window_for=lambda root: self.windows.window_for(root) if self.windows else None,
             prefs=self.ctx.prefs)
         self.vscode = VSCodeLauncher(self, self.session, actions, prefs=self.ctx.prefs)
+        self.vscode_definition = VSCodeDefinition(self, self.vscode, actions)  # RZG-75
         actions.set_amend_confirmer(self.confirm_amend)
 
         actions.reset_layout.triggered.connect(self.reset_layout)

@@ -1,0 +1,27 @@
+{
+  "name": "rzgit-vscode",
+  "publisher": "rzgit",
+  "displayName": "RZGit",
+  "description": "Lets RZGit open a symbol's definition in this window (Go to Definition in VS Code).",
+  "version": "0.1.0",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": false
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js"
+}

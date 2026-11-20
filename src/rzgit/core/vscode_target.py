@@ -36,11 +36,13 @@ class VSCodeTarget:
         """The ``paths`` (relative to the root) that are files in the working tree."""
         return tuple(p for p in paths if (self.root / p).is_file())
 
-    def argv(self, command: Sequence[str], paths: Sequence[str],
-             line: int | None = None) -> list[str]:
+    def argv(self, command: Sequence[str], paths: Sequence[str] = (),
+             line: int | None = None, col: int | None = None) -> list[str]:
         """``command`` with the target and ``paths``, made absolute (so none starts
-        with ``-``); with ``line``, the first path opens there (``--goto``)."""
+        with ``-``); with ``line`` (and ``col``, RZG-75), the first path opens there
+        (``--goto``). With no paths, the target alone: it raises or opens the window."""
         files = [str(self.root / p) for p in paths]
         if line is not None and files:
-            return [*command, str(self.target), "--goto", f"{files[0]}:{line}", *files[1:]]
+            goto = f"{files[0]}:{line}" + (f":{col}" if col is not None else "")
+            return [*command, str(self.target), "--goto", goto, *files[1:]]
         return [*command, str(self.target), *files]

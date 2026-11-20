@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from enum import StrEnum
 
+from rzgit.core.symbol_at import symbol_at
 from rzgit.git.git_models import DiffLine, FileDiff, LineKind
 
 NO_NEWLINE = "\\ No newline at end of file"
@@ -252,6 +253,20 @@ def new_line_at(rows: Sequence[DiffRow], n: int) -> int | None:
         return after
     return next((r.new_no for r in reversed(list(lines(rows[:n]))) if r.new_no is not None),
                 None)
+
+
+# ---- the symbol to look up (RZG-75) -------------------------------------------
+
+_CODE = (RowKind.CONTEXT, RowKind.ADDED, RowKind.REMOVED)
+
+
+def symbol_line_at(rows: Sequence[DiffRow], at: TextPos) -> tuple[str, int | None]:
+    """The symbol at ``at`` (a code row's identifier the column is in or next
+    to) and the new-side line to look for it at (``new_line_at``); "" for none."""
+    if not 0 <= at.row < len(rows) or rows[at.row].kind not in _CODE:
+        return "", None
+    found = symbol_at(rows[at.row].text, at.col)
+    return (found[1], new_line_at(rows, at.row)) if found is not None else ("", None)
 
 
 # ---- copying text (RZG-73) ---------------------------------------------------

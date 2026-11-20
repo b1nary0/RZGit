@@ -335,6 +335,33 @@ of the menu, opens the file in VS Code at the line under the pointer (see *Openi
 in VS Code* above). The line number comes from the diff, so in a staged or commit diff it
 can be a little off if the file has changed since.
 
+**Going to a definition in VS Code.** Put the text cursor on a name in the diff, such as
+a function, class or variable, and press **F12**. Or right-click the name and choose
+**Go to Definition in VS Code**. VS Code comes to the front, in the window of this
+worktree (opening it if need be), and shows where that name is defined, using VS Code's
+own language support:
+
+- It always goes to the definition: for a C++ function declared in a header, the
+  function body, not the declaration.
+- RZGit looks for the name in the file as it is now, near the diff's line. If it has
+  moved, for example in an old commit's diff, VS Code searches the workspace for a symbol
+  with exactly that name. Only if different symbols have that name does it let you pick
+  one.
+- On KDE with Wayland, the desktop doesn't let VS Code come to the front by itself: its
+  taskbar entry asks for attention instead.
+- A window that has just opened can take a few seconds, while its language support
+  starts. If nothing is found, VS Code says so.
+- This needs the small **RZGit extension** in VS Code. The first time you press F12
+  without it, RZGit offers to install it. You can also install it, or install it again
+  after an update, from **Settings → Tools → VS Code extension: Install…**. Windows
+  that are already open start it at once; after an update, they use the new version
+  after *Developer: Reload Window*. It also works in a folder you haven't trusted
+  (Restricted Mode), as far as the language support there does.
+- Without the extension, VS Code opens the file with the cursor on the name. Pressing F12
+  there goes to its definition.
+- The extension listens only for RZGit, on a socket that only your user can open, and
+  only opens files of its own workspace.
+
 **Selecting and copying text.** You can select the diff's text like text in an editor:
 drag to select, double-click a word, or triple-click a line. Ctrl+A selects all the text
 of one side, and Ctrl+C or **Copy** in the right-click menu copies the selected code
@@ -533,7 +560,8 @@ needs a restart.
   seconds, or your locale's short format.
 - **Tools:** the **Terminal command** that Open Terminal starts, and the **VS Code
   command** that Open with VS Code starts (`code` when empty; for example `codium`, or
-  `flatpak run com.visualstudio.code`).
+  `flatpak run com.visualstudio.code`). **VS Code extension: Install…** installs the
+  RZGit extension that Go to Definition in VS Code uses.
 
 **Restore Defaults** at the bottom resets either every setting or only the settings of the
 page you are looking at.
@@ -568,6 +596,7 @@ when the focus is in the panel or field named.
 | `Ctrl+F` | Opens the find bar. | The Diff panel |
 | `F3` | Goes to the next match. | The Diff panel |
 | `Shift+F3` | Goes to the previous match. | The Diff panel |
+| `F12` | Goes to the definition of the name at the text cursor, in VS Code. | The Diff panel |
 | `Esc` | Closes the find bar, or clears the selection in the diff. | The Diff panel |
 | `Ctrl+A` | Selects all the text of the diff (of one side, side by side), or of a message. | The Diff panel; Commit Details |
 | `Ctrl+C` | Copies the selected text. In a diff, it copies only the code. | The Diff panel; Commit Details |

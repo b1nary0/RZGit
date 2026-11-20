@@ -2,12 +2,14 @@
 
 It shows the declared settings (``core.preferences``), grouped by page, and on
 Appearance the theme as well. A change applies at once; the buttons are Restore
-Defaults and Close.
+Defaults and Close. A page may also have buttons that run something (a
+``PageButton``, declared like a setting, RZG-75).
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from enum import Enum
 
 from PySide6.QtCore import QSignalBlocker, Qt
@@ -23,6 +25,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QMessageBox,
+    QPushButton,
     QSpinBox,
     QStackedWidget,
     QVBoxLayout,
@@ -42,6 +45,33 @@ THEME_MODES = ((ThemeMode.SYSTEM, "System"), (ThemeMode.LIGHT, "Light"),
                (ThemeMode.DARK, "Dark"))
 FONT_SIZE_MIN = 4.0  # the size box's lowest; 0, the setting's default, shows the theme's
 _INT_LIMIT = 2_147_483_647  # QSpinBox's range, for a setting without one
+
+
+@dataclass(frozen=True)
+class PageButton:
+    """A row of a page with a button that runs something, not a setting (RZG-75)."""
+
+    page: str
+    label: str  # the row's
+    text: str  # the button's
+    run: Callable[[SettingsWindow], None]
+    help: str = ""  # the tooltip
+
+
+_BUTTONS: list[PageButton] = []
+
+
+def declare_page_button(button: PageButton) -> PageButton:
+    """Add ``button`` to the Settings window, after its page's settings, as the
+    module that runs it is imported (like ``declare``)."""
+    if any(b.page == button.page and b.label == button.label for b in _BUTTONS):
+        raise ValueError(f"page button declared twice: {button.page}: {button.label}")
+    _BUTTONS.append(button)
+    return button
+
+
+def declared_page_buttons() -> list[PageButton]:
+    return list(_BUTTONS)
 
 
 class Restore(Enum):
@@ -72,8 +102,10 @@ class _SizeBox(QDoubleSpinBox):
 
 class SettingsWindow(QWidget):
     def __init__(self, prefs: Preferences, theme: ThemeManager | None = None,
-                 settings: Sequence[Setting] | None = None, parent: QWidget | None = None):
-        """``settings``: the ones to show (every declared one if None). ``theme``:
+                 settings: Sequence[Setting] | None = None, parent: QWidget | None = None,
+                 buttons: Sequence[PageButton] | None = None):
+        """``settings``: the ones to show (every declared one if None). ``buttons``:
+        the page buttons (every declared one if None and ``settings`` is). ``theme``:
         Appearance's Theme and Colour-blind rows drive it (none without it), and
         the font settings show its font while they are at their default."""
         super().__init__(parent, Qt.WindowType.Window)
@@ -82,6 +114,10 @@ class SettingsWindow(QWidget):
         self._prefs, self._theme = prefs, theme
         self._settings = {s.key: s for s in (declared() if settings is None else settings)}
         self.editors: dict[str, QWidget] = {}  # by setting key
+        if buttons is None:
+            buttons = declared_page_buttons() if settings is None else ()
+        self._buttons = tuple(buttons)
+        self.page_buttons: dict[str, QPushButton] = {}  # by "page: label"
         self.theme_mode_box: QComboBox | None = None
         self.colour_blind_box: QCheckBox | None = None
 
@@ -120,6 +156,10 @@ class SettingsWindow(QWidget):
     # ---- pages ----------------------------------------------------------------
 
     @property
+    def prefs(self) -> Preferences:
+        return self._prefs
+
+    @property
     def page_names(self) -> list[str]:
         return list(self._pages)
 
@@ -136,6 +176,8 @@ class SettingsWindow(QWidget):
             pages[APPEARANCE] = []
         for setting in self._settings.values():
             pages.setdefault(setting.page, []).append(setting)
+        for button in self._buttons:
+            pages.setdefault(button.page, [])
         order = [p for p in PAGES if p in pages] + [p for p in pages if p not in PAGES]
         return {page: pages[page] for page in order}
 
@@ -155,6 +197,14 @@ class SettingsWindow(QWidget):
             else:
                 form.addRow(setting.label + ":", editor)
                 form.labelForField(editor).setToolTip(setting.help)
+        for button in self._buttons:
+            if button.page == page:
+                push = QPushButton(button.text)
+                push.setToolTip(button.help)
+                push.clicked.connect(lambda _=False, b=button: b.run(self))
+                self.page_buttons[f"{page}: {button.label}"] = push
+                form.addRow(button.label + ":", push)
+                form.labelForField(push).setToolTip(button.help)
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addLayout(form)

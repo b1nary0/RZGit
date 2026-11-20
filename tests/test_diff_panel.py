@@ -9,13 +9,20 @@ from PySide6.QtWidgets import QApplication
 
 from rzgit.core.diff_patch import all_lines, copy_patch, hunk_lines
 from rzgit.core.selection import FileSelection, FileSource
-from rzgit.ui.app_actions import OPEN_IN_VSCODE_TEXT as VSCODE, HunkHeaders
+from rzgit.ui.app_actions import GO_TO_DEFINITION_TEXT, NO_SYMBOL, HunkHeaders
+from rzgit.ui.app_actions import OPEN_IN_VSCODE_TEXT as VSCODE
 from rzgit.ui.panels import diff_panel
 from rzgit.ui.panels.diff_panel import DiffPanel
-from rzgit.ui.panels.diff_rows import RowKind, TextPos, unified_rows
+from rzgit.ui.panels.diff_rows import (
+    RowKind,
+    TextPos,
+    new_line_at,
+    unified_rows,
+)
 from rzgit.ui.theme.app_theme import LIGHT_THEME
 from tests.support import commit_file, git, make_panel_context, make_repo, qt_app, wait_idle
 
+DEFINITION = GO_TO_DEFINITION_TEXT + "\tF12"  # the Diff panel's entry (RZG-75)
 A = FileSelection("a.txt", FileSource.WORKTREE)
 B = FileSelection("b.txt", FileSource.WORKTREE)
 PATCH_ENTRIES = ["Copy as Patch", "Save as Patch"]  # submenus (RZG-76)
@@ -313,7 +320,7 @@ class DiffPanelHunkTests(unittest.TestCase):
             ("Stage Hunk", True), ("Stage Selected Lines", True),
             ("Discard Hunk…", True), ("Discard Selected Lines…", True), ("Copy", False),
             *((text, True) for text in PATCH_ENTRIES),
-            (VSCODE, False)])
+            (VSCODE, False), (DEFINITION, False)])
 
     def test_stage_the_clicked_line_only(self):
         self.select("a.txt")
@@ -331,7 +338,8 @@ class DiffPanelHunkTests(unittest.TestCase):
         self.assertEqual(view._link, "Unstage Hunk")
         menu = self.menu(view, 4)
         self.assertEqual([t for t, _ in self.entries(menu)],
-                         ["Unstage Hunk", "Unstage Selected Lines", "Copy", *PATCH_ENTRIES, VSCODE])
+                         ["Unstage Hunk", "Unstage Selected Lines", "Copy", *PATCH_ENTRIES, VSCODE,
+                          DEFINITION])
         self.trigger(menu, "Unstage Hunk")
         self.assertNotIn("FIVE", self.index("a.txt"))
         self.assertIn("NINETY", self.index("a.txt"))
@@ -341,7 +349,8 @@ class DiffPanelHunkTests(unittest.TestCase):
         view = self.panel._unified
         menu = self.menu(view, 1)
         self.assertEqual([t for t, _ in self.entries(menu)],
-                         ["Stage Hunk", "Stage Selected Lines", "Copy", *PATCH_ENTRIES, VSCODE])
+                         ["Stage Hunk", "Stage Selected Lines", "Copy", *PATCH_ENTRIES, VSCODE,
+                          DEFINITION])
         self.trigger(menu, "Stage Selected Lines")
         self.assertEqual(self.index("new.txt"), "one\n")
 
@@ -379,7 +388,7 @@ class DiffPanelHunkTests(unittest.TestCase):
         self.assertEqual(view._link, "")
         self.assertEqual(self.entries(self.menu(view, 1)),
                          [("Copy", False), *((text, True) for text in PATCH_ENTRIES),
-                          (VSCODE, False)])
+                          (VSCODE, False), (DEFINITION, False)])
 
     def test_open_with_vs_code_opens_the_shown_file_at_the_line_under_the_pointer(self):
         self.select("a.txt")
@@ -389,10 +398,62 @@ class DiffPanelHunkTests(unittest.TestCase):
         view = self.panel._unified
         n = next(n for n, r in enumerate(view.rows) if r.kind is RowKind.ADDED)
         menu = self.menu(view, n)
-        self.assertEqual(self.entries(menu)[-1], (VSCODE, True))
-        self.assertTrue(menu.actions()[-2].isSeparator())
+        self.assertEqual(self.entries(menu)[-2], (VSCODE, True))
+        self.assertTrue(menu.actions()[-3].isSeparator())
         self.trigger(menu, VSCODE)
         self.assertEqual(asked, [(("a.txt",), view.rows[n].new_no)])
+
+    def cursor_at(self, view, row_index, col):
+        """Put ``view``'s text cursor at ``col`` of ``view.rows[row_index]``."""
+        view.select_text(TextPos(row_index, col), TextPos(row_index, col))
+
+    def test_go_to_definition_asks_for_the_symbol_under_the_pointer(self):
+        # RZG-75: below Open with VS Code, for the word under the pointer (x=30: "line").
+        self.select("a.txt")
+        self.ctx.actions.set_definition_check(lambda: None)
+        asked = []
+        self.ctx.actions.definition_requested.connect(lambda *a: asked.append(a))
+        view = self.panel._unified
+        n = next(n for n, r in enumerate(view.rows) if r.kind is RowKind.REMOVED)
+        menu = self.menu(view, n)
+        self.assertEqual(self.entries(menu)[-1], (DEFINITION, True))
+        self.trigger(menu, DEFINITION)
+        # A removed line: the next new line (new_line_at), as Open with VS Code does.
+        self.assertEqual(asked, [("line", "a.txt", new_line_at(view.rows, n))])
+
+    def test_go_to_definition_is_disabled_off_a_symbol(self):
+        self.select("a.txt")
+        self.ctx.actions.set_definition_check(lambda: None)
+        view = self.panel._unified
+        self.assertEqual(view.rows[0].kind, RowKind.HUNK)
+        menu = self.menu(view, 0)  # a hunk header isn't code
+        action = next(a for a in menu.actions() if a.text() == DEFINITION)
+        self.assertFalse(action.isEnabled())
+        self.assertEqual(action.toolTip(), NO_SYMBOL)
+
+    def test_f12_asks_for_the_symbol_at_the_text_cursor(self):
+        self.select("a.txt")
+        self.ctx.actions.set_definition_check(lambda: None)
+        asked = []
+        self.ctx.actions.definition_requested.connect(lambda *a: asked.append(a))
+        view = self.panel._unified
+        n = next(n for n, r in enumerate(view.rows) if r.text == "LINE 7")
+        self.cursor_at(view, n, 6)  # on "7": digits alone aren't a symbol
+        view.setFocus()
+        QTest.keyClick(view, Qt.Key.Key_F12)
+        self.assertEqual(asked, [])
+        self.cursor_at(view, n, 2)  # in "LINE"
+        QTest.keyClick(view, Qt.Key.Key_F12)
+        self.assertEqual(asked, [("LINE", "a.txt", view.rows[n].new_no)])
+
+    def test_f12_does_nothing_when_vs_code_isnt_set_up(self):
+        self.select("a.txt")  # the check is AppActions' own: VS Code isn't set up
+        asked = []
+        self.ctx.actions.definition_requested.connect(lambda *a: asked.append(a))
+        view = self.panel._unified
+        self.cursor_at(view, 1, 1)
+        self.assertFalse(self.panel.go_to_definition())
+        self.assertEqual(asked, [])
 
     def click_button(self, view, row_index):
         """Click the gutter button of ``view.rows[row_index]``, scrolled into view."""

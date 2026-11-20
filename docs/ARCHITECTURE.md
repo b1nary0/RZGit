@@ -87,6 +87,9 @@ src/rzgit/
     inotify_watcher.py          InotifyWatcher: Linux inotify on a QSocketNotifier (folders → named events)
     worktree_reader.py          WorktreeReader: a repository's worktrees and their state, kept up to date
     vscode_target.py            VSCodeTarget: which VS Code window a worktree's files open in, and the command line (plain Python)
+    vscode_socket.py            socket_path, definition_request, parse_reply: talking to the RZGit VS Code extension (plain Python, §8)
+    symbol_at.py                symbol_at, find_symbol_near: the identifier at a column, and where it is in a file (plain Python, §8)
+    vsix_builder.py             build_vsix: packs the VS Code extension's folder into a .vsix (plain Python, §8)
     recent_repos.py             RecentRepos: the repositories and worktrees opened recently (§6.3)
     file_saver.py               FileSaver: writes a file atomically; the last folder of each kind of save (§8.3)
     app_settings.py             AppSettings: typed wrapper over QSettings (last_repo, layout, …)
@@ -105,8 +108,11 @@ src/rzgit/
     worktree_dialogs.py         WorktreeDialogs, NewWorktreeDialog: New Worktree…, Remove, Prune; folder, terminal
     vscode_launcher.py          VSCodeLauncher: Open with VS Code (the command setting, starting it)
     save_dialog.py              SaveDialog: asks where to save, saves with FileSaver, says if it failed (§8.3)
+    vscode_definition.py        VSCodeDefinition: Go to Definition in VS Code, through the extension's socket (§8)
+    vscode_extension_installer.py  VSCodeExtensionInstaller: builds and installs the RZGit VS Code extension (§8, §8.2)
     app_icon.py                 app_icon(): the app's QIcon, built from assets/icon (app.py sets it)
-    assets/                     image files shipped as package data (no modules)
+    assets/                     files shipped as package data (no Python modules)
+      vscode/                   the RZGit VS Code extension: package.json, extension.js (plain JavaScript, §8)
       icon/                     the app icon: its SVG source and PNGs at 16–512 px
       logo/                     mark + "RZGit"; _dark (for dark backgrounds) and _light files
       splash/                   splash images, solid and transparent; _dark and _light
@@ -1724,6 +1730,12 @@ than rebuilding them.
   hunk header or a fold row, the next new line, else the last one before it; none at all
   opens the file at the top). The number is the shown diff's new side: in a staged or
   commit diff, the working-tree file may have moved on.
+  Below it, **Go to Definition in VS Code** (RZG-75, §8) for the symbol under the pointer,
+  and **F12** (a `QShortcut` on the panel, `WidgetWithChildrenShortcut`) for the symbol at
+  the text cursor of the focused view (the right one when none is). The symbol is
+  `symbol_at(row.text, col)` (an identifier the column is in or next to); the line is
+  `new_line_at(rows, n)`, as above. Both go through `actions.go_to_definition(...)`; with no
+  symbol there the entry is disabled ("No symbol here.") and F12 does nothing.
   Discards go through `AppActions.request_discard_lines`: the window confirms (§8). The diff
   that comes back keeps the scroll position.
 - **Copy and Save as Patch** (RZG-76): after Copy, every diff's menu (commit diffs too, both
@@ -2586,6 +2598,65 @@ Per-widget sheets are slow to apply and scatter the rules.
     setting (§8.2), sets the check, and starts the command with `QProcess.startDetached`
     in the worktree's folder, as Open Terminal does. If it can't be started, a warning
     says so. It runs no git.
+- **Go to Definition in VS Code** (RZG-75) opens the definition of a symbol in the
+  diff, in this worktree's VS Code window, with VS Code's own language support:
+  - **The entry:** `actions.go_to_definition(symbol, path, line, parent)` makes the Diff
+    panel's menu entry; `actions.request_definition(symbol, path, line)` is F12's. Both
+    check with the check `VSCodeDefinition` set (`set_definition_check`): "No repository
+    is open." or "No VS Code command found. Set it in Settings (Tools)."; an empty symbol
+    is "No symbol here.". The file need not be in the working tree: then only the name
+    is searched. Triggered, they send `definition_requested(symbol, path, line)`.
+  - **The extension** (`ui/assets/vscode/`, id `rzgit.rzgit-vscode`, plain JavaScript, no
+    build step, no npm dependencies) runs in every VS Code window, from start-up. Each
+    window listens on a Unix socket named after its workspace: `<base>/vscode-<h>.sock`,
+    where `<base>` is `$XDG_RUNTIME_DIR/rzgit` (else `<tmp>/rzgit-<uid>`), made `0700`,
+    and `<h>` is the first 16 hex digits of the SHA-256 of the window's workspace file,
+    else its first folder: the path `VSCodeTarget.target` passes, so RZGit finds the
+    window of its worktree. `core/vscode_socket.py` and the extension compute it the same
+    way (a test runs both). A stale socket file is replaced; it is removed on close.
+  - **The protocol:** one JSON line each way. RZGit sends `{"cmd": "definition",
+    "symbol": …, "file": <absolute path or null>, "line": <1-based or null>, "col":
+    <1-based UTF-16 column or null>}`; the extension answers `{"ok": …, "how":
+    "definition" | "symbol" | "pick" | "none", "message": …}`. It accepts nothing else,
+    and no file outside its workspace folders.
+  - **The lookup**, in the extension, always goes to a definition, never to a list of
+    a declaration and its definition:
+    - With a file and a position whose word is the symbol: the definition provider
+      there (`vscode.executeDefinitionProvider`), less what the declaration provider
+      gives (`vscode.executeDeclarationProvider`), and less headers (`.h`, `.hpp`, …,
+      `.pyi`) when something else is left. The first is opened (not
+      `editor.action.revealDefinition`, which would offer them all).
+    - Otherwise, or when nothing is found: the workspace symbols named exactly that
+      (`vscode.executeWorkspaceSymbolProvider`), each resolved to its definition the same
+      way (at most 20), so a declaration and its definition are one place. One place is
+      opened; different symbols of that name get a QuickPick.
+    - Both retry for about 5 s, while a language server starts. Nothing found: a VS Code
+      message says so, and the file opens at the position.
+    - Focus: `code <target>` asks VS Code to raise the window. On KDE Wayland, KWin
+      refuses without an activation token and only marks the window as wanting
+      attention; that is accepted (decided 2026-11-18).
+  - **The position** RZGit sends: `find_symbol_near(lines, line, symbol)` in the
+    working-tree file: the line itself, else the nearest line within 20 that has the
+    symbol as a whole word (the file may have moved on since the diff's commit). Not
+    found, the line and no column, so the extension searches by name.
+  - **`VSCodeDefinition`** (`ui/vscode_definition.py`, made by MainWindow, with the
+    launcher's command and target) first runs `code <target>`, which raises the window
+    or opens it, then connects with `QLocalSocket`, every 250 ms for up to 10 s (a
+    window that is opening), and sends the request. Whether the extension is installed
+    is asked (`code --list-extensions`, in the background) until it is found, or
+    installed from here. Not installed, or no answer from the socket: `code <target> --goto <file>:<line>:<col>` puts the cursor on
+    the symbol instead (F12 there finds it), and the first time in a session a box
+    offers to install the extension. It runs no git.
+  - **Installing:** `VSCodeExtensionInstaller` (`ui/vscode_extension_installer.py`)
+    packs the folder with `build_vsix` (`core/vsix_builder.py`: a zip of
+    `[Content_Types].xml`, `extension.vsixmanifest` and `extension/…`, its identity and
+    version from `package.json`) into a temporary folder and runs `code
+    --install-extension <file> --force` in the background, then says whether it worked.
+    Windows already open start a first install at once, and an update after a reload
+    (the box says so). It declares `untrustedWorkspaces: supported` (it only reads files
+    of its workspace and asks VS Code's providers), so it runs in Restricted Mode too.
+    The `code` RZGit starts must use the user's VS Code profile: a different
+    `XDG_CONFIG_HOME` starts a separate VS Code instance without the extension.
 - **Discard lines:** the Diff panel calls `actions.request_discard_lines(diff, lines)`, which
   sends `discard_lines_requested`. MainWindow asks first ("Discard 3 changed lines of
   path?", can't be undone) and then calls `session.discard_lines`.
@@ -2883,7 +2954,11 @@ window while it's open (§8.1). Layouts and columns aren't in it either.
     before (§5.4). `worktree_dialogs.py`. *VS Code command* (`""`, shown as `code`): what
     Open with VS Code starts (§8), split as a shell would, e.g. `codium` or `flatpak run
     com.visualstudio.code`; empty means `code`. If its program isn't found, the entry is
-    disabled. `vscode_launcher.py` (RZG-96; RZG-75 reuses it).
+    disabled. `vscode_launcher.py` (RZG-96; RZG-75 reuses it). Below them, **VS Code
+    extension: Install…** (RZG-75) builds and installs the RZGit extension (§8).
+    It is a page button, not a `Setting`: `declare_page_button(PageButton(page, label,
+    text, run))` (`ui/settings_window.py`) adds a row whose button calls `run(window)`;
+    `vscode_extension_installer.py` declares it.
 - **The window:** `SettingsWindow` (`ui/settings_window.py`) is a top-level window, not
   modal, one for the app: **Edit → Settings…** (`AppActions.settings`, Ctrl+,, RZG-89) shows it
   and raises it if open (`AppWindows.show_settings`; a `MainWindow` without `AppWindows`

@@ -35,6 +35,7 @@ from rzgit.ui.panels.diff_rows import (
     TextPos,
     fold,
     new_line_at,
+    symbol_line_at,
     split_partners,
     split_rows,
     stretches,
@@ -146,7 +147,8 @@ class DiffPanel(Panel):
         for keys, slot in ((QKeySequence.StandardKey.Find, self.open_find),
                            (QKeySequence("F3"), lambda: self.find_step(1)),
                            (QKeySequence("Shift+F3"), lambda: self.find_step(-1)),
-                           (QKeySequence(COPY_PATCH_KEYS), self.copy_selected_patch)):
+                           (QKeySequence(COPY_PATCH_KEYS), self.copy_selected_patch),
+                           (QKeySequence("F12"), self.go_to_definition)):  # RZG-75
             shortcut = QShortcut(QKeySequence(keys), self)
             shortcut.setContext(context)
             shortcut.activated.connect(slot)
@@ -553,6 +555,9 @@ class DiffPanel(Panel):
             menu.addSeparator()
             line = new_line_at(view.rows, view.cursorForPosition(pos).blockNumber())
             menu.addAction(self.ctx.actions.open_in_vscode((self._shown.path,), menu, line))
+            symbol, line = symbol_line_at(view.rows, view.text_pos_at(pos))  # RZG-75
+            menu.addAction(self.ctx.actions.go_to_definition(
+                symbol, self._shown.path, line, menu))
         return menu
 
     def _patch(self, lines: frozenset[Line]) -> str | None:
@@ -586,6 +591,16 @@ class DiffPanel(Panel):
             view = next((v for v in views if v.selected_lines()), None)
         if view is not None:
             self.copy_patch(view.selected_lines())
+
+    def go_to_definition(self) -> bool:
+        """F12 (RZG-75): the symbol at the text cursor of the focused view (the
+        right one when none is), in VS Code; False if there's none."""
+        views = self._shown_views()
+        if self._shown is None or not views:
+            return False
+        view = next((v for v in views if v.hasFocus()), views[-1])
+        symbol, line = symbol_line_at(view.rows, view.text_cursor())
+        return self.ctx.actions.request_definition(symbol, self._shown.path, line)
 
     def _show_message(self, text: str, show_anyway: bool = False,
                       changes_only: bool = False) -> None:

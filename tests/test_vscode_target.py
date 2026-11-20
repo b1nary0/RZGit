@@ -45,6 +45,12 @@ class VSCodeTargetTests(unittest.TestCase):
                          ["code", str(self.root), "--goto", f"{self.root / 'a.txt'}:12"])
         self.assertEqual(target.argv(["code"], [], line=12), ["code", str(self.root)])
 
+    def test_with_a_column_too(self):  # RZG-75: at the symbol
+        target = VSCodeTarget(self.root)
+        self.assertEqual(target.argv(["code"], ["a.txt"], line=12, col=5),
+                         ["code", str(self.root), "--goto", f"{self.root / 'a.txt'}:12:5"])
+        self.assertEqual(target.argv(["code"]), ["code", str(self.root)])  # the window only
+
 
 if __name__ == "__main__":
     unittest.main()

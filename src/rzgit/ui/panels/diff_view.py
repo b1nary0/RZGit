@@ -250,6 +250,10 @@ class DiffView(QPlainTextEdit):
         """Where the caret is."""
         return self._text_pos(self.textCursor().position())
 
+    def text_pos_at(self, pos: QPoint) -> TextPos:
+        """The place in the text at ``pos`` (viewport coordinates)."""
+        return self._text_pos(self.cursorForPosition(pos).position())
+
     def text_range(self) -> tuple[TextPos, TextPos] | None:
         """The selected text, start before end; None when none is."""
         cursor = self.textCursor()

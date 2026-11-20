@@ -65,6 +65,25 @@ class SettingsWindowTests(unittest.TestCase):
         self.window.show_page("Tools")
         self.assertEqual(self.window.page_list.currentRow(), 3)
 
+    def test_a_page_button_runs_its_action(self):  # RZG-75
+        ran = []
+        button = settings_window.PageButton("Zebra", "Thing", "Do It…", ran.append, help="Does")
+        window = SettingsWindow(self.prefs, None, (COUNT,), buttons=(button,))
+        self.addCleanup(window.deleteLater)
+        self.assertEqual(window.page_names, ["Diff", "Zebra"])  # a page of only buttons
+        push = window.page_buttons["Zebra: Thing"]
+        self.assertEqual((push.text(), push.toolTip()), ("Do It…", "Does"))
+        push.click()
+        self.assertEqual(ran, [window])
+        self.assertIs(window.prefs, self.prefs)
+
+    def test_page_buttons_are_declared_once(self):
+        declared = settings_window.declared_page_buttons()
+        self.assertIn(("Tools", "VS Code extension"), [(b.page, b.label) for b in declared])
+        with self.assertRaises(ValueError):
+            settings_window.declare_page_button(declared[0])
+        self.assertEqual(self.window.page_buttons, {})  # only with every setting
+
     def test_without_a_theme_appearance_has_only_its_settings(self):
         window = SettingsWindow(self.prefs, None, (COUNT,))
         self.addCleanup(window.deleteLater)

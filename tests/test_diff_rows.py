@@ -12,6 +12,7 @@ from rzgit.ui.panels.diff_rows import (
     fold,
     new_line_at,
     split_partners,
+    symbol_line_at,
     split_rows,
     stretches,
     unified_partners,
@@ -55,6 +56,25 @@ class NewLineAtTests(unittest.TestCase):
         self.assertIsNone(new_line_at((DiffRow(K.REMOVED, "gone", 1, None),), 0))
         self.assertIsNone(new_line_at((), 0))
         self.assertEqual(new_line_at(unified_rows(DIFF), 0), 1)  # the hunk's first line
+
+
+class SymbolLineAtTests(unittest.TestCase):
+    """The symbol Go to Definition in VS Code looks up (RZG-75)."""
+
+    def test_a_code_rows_symbol_and_its_new_line(self):
+        rows = unified_rows(DIFF)  # @@, same, old 1, old 2, new 1, end, tail, note
+        self.assertEqual(symbol_line_at(rows, TextPos(1, 2)), ("same", 1))
+        self.assertEqual(symbol_line_at(rows, TextPos(2, 1)), ("old", 2))  # removed: the next new line
+        self.assertEqual(symbol_line_at(rows, TextPos(4, 3)), ("new", 2))
+
+    def test_none_off_a_symbol_or_a_code_row(self):
+        rows = unified_rows(DIFF)
+        self.assertEqual(symbol_line_at(rows, TextPos(2, 5)), ("", None))  # on "1"
+        self.assertEqual(symbol_line_at(rows, TextPos(0, 3)), ("", None))  # the hunk header
+        self.assertEqual(symbol_line_at(rows, TextPos(7, 3)), ("", None))  # the note
+        self.assertEqual(symbol_line_at(rows, TextPos(99, 0)), ("", None))
+        folded = (DiffRow(K.FOLD, "⋯ 9 unchanged lines"),)
+        self.assertEqual(symbol_line_at(folded, TextPos(0, 4)), ("", None))
 
 
 class UnifiedRowsTests(unittest.TestCase):

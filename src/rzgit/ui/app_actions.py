@@ -29,6 +29,8 @@ COUNT_PROPERTY = "upstreamCount"  # the ↓n or ↑n on Pull or Push (spec §8, 
 OPEN_IN_VSCODE_TEXT = "Open with &VS Code"  # a context menu entry (spec §8, RZG-96)
 NO_FILE_TO_OPEN = "Select a file to open, not a folder."
 NO_VSCODE_CHECK = "VS Code isn't set up."  # before MainWindow's VSCodeLauncher sets the check
+GO_TO_DEFINITION_TEXT = "Go to &Definition in VS Code"  # the Diff panel's (spec §8, RZG-75)
+NO_SYMBOL = "No symbol here."
 
 
 def upstream_count(action: QAction) -> str:
@@ -108,6 +110,8 @@ class AppActions(QObject):
     push_requested = Signal()
     # Open with VS Code; VSCodeLauncher starts it (spec §8, RZG-96).
     open_in_vscode_requested = Signal(object, object)  # tuple[str, ...] paths, int | None line
+    # Go to Definition in VS Code; VSCodeDefinition does it (spec §8, RZG-75).
+    definition_requested = Signal(str, object, object)  # symbol, path | None, line | None
 
     def __init__(self, session: RepoSession, selection: Selection,
                  parent: QObject | None = None):
@@ -178,6 +182,7 @@ class AppActions(QObject):
         self._confirm_amend: Callable[[LastCommit], bool] = lambda _last: True
         self._vscode_check: Callable[[tuple[str, ...]], str | None] = (
             lambda _paths: NO_VSCODE_CHECK)
+        self._definition_check: Callable[[], str | None] = lambda: NO_VSCODE_CHECK
         # Stash Changes… (spec §8): connected by StashDialogs, which asks for the message.
         self.stash_changes = self._action("document-save", "Stas&h Changes…")
         # Show Worktrees (spec §8): MainWindow shows the Worktrees panel and raises it.
@@ -287,6 +292,35 @@ class AppActions(QObject):
             action.setToolTip(why)
         action.triggered.connect(lambda: self.open_in_vscode_requested.emit(paths, line))
         return action
+
+    def set_definition_check(self, check: Callable[[], str | None]) -> None:
+        """Why Go to Definition in VS Code can't run, or None if it can:
+        VSCodeDefinition's (RZG-75)."""
+        self._definition_check = check
+
+    def definition_problem(self, symbol: str) -> str | None:
+        return self._definition_check() if symbol else NO_SYMBOL
+
+    def go_to_definition(self, symbol: str, path: str | None, line: int | None,
+                         parent: QObject) -> QAction:
+        """The Diff panel's Go to Definition in VS Code entry, for ``symbol`` seen
+        in ``path`` (relative to the root) at its new-side ``line``. Disabled with
+        no symbol, or when the check says why, in its tooltip."""
+        action = QAction(QIcon.fromTheme("vscode", QIcon.fromTheme("go-jump")),
+                         GO_TO_DEFINITION_TEXT + "\tF12", parent)  # the panel's QShortcut
+        why = self.definition_problem(symbol)
+        action.setEnabled(why is None)
+        if why is not None:
+            action.setToolTip(why)
+        action.triggered.connect(lambda: self.request_definition(symbol, path, line))
+        return action
+
+    def request_definition(self, symbol: str, path: str | None, line: int | None) -> bool:
+        """F12's: ask for ``symbol``'s definition, unless the check says no."""
+        if self.definition_problem(symbol) is not None:
+            return False
+        self.definition_requested.emit(symbol, path, line)
+        return True
 
     def request_discard_lines(self, diff: FileDiff, lines: Iterable[tuple[int, int]]) -> None:
         """Ask for the chosen lines of ``diff`` to be discarded, once confirmed."""
