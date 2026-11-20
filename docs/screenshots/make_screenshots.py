@@ -20,6 +20,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -410,6 +411,29 @@ def shot_history(app: App) -> None:
     save(p.render(), "history")
 
 
+def shot_history_filter(app: App) -> None:
+    """History alone, filtered by a query (RZG-88)."""
+    app.uncommitted()
+    history = app.panel("history")
+    history.request_activation()
+    app.settle()
+    history.open_find()
+    history.find_bar.field.setText("History")
+    history.find_bar.flush()
+    deadline = time.monotonic() + 30
+    while history.find_bar.count.text() == "Searching…" and time.monotonic() < deadline:
+        app.settle(1)
+    app.settle()
+    p = picture(app)
+    area = pane(history)
+    p.outline(area)
+    p.badge(1, history.find_bar, "above")
+    save(p.render(crop=p.rect_of(area)), "history-filter")
+    history.find_bar.close_bar()
+    app.uncommitted()
+    app.settle()
+
+
 def shot_changes(app: App) -> None:
     app.select_file("README.md", FileSource.WORKTREE)
     app.panel("diff").request_activation()
@@ -542,8 +566,9 @@ def shot_settings(app: App) -> None:
 
 
 SHOTS: list[Callable[[App], None]] = [
-    shot_overview, shot_menus, shot_controls, shot_history, shot_changes, shot_files,
-    shot_diff, shot_commit_details, shot_commit_window, shot_branches, shot_stashes, shot_worktrees,
+    shot_overview, shot_menus, shot_controls, shot_history, shot_history_filter,
+    shot_changes, shot_files, shot_diff, shot_commit_details, shot_commit_window,
+    shot_branches, shot_stashes, shot_worktrees,
     shot_settings,
 ]
 

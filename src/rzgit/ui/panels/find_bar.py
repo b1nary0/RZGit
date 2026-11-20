@@ -1,6 +1,7 @@
-"""The Diff panel's find bar (spec §5.4, RZG-74): a query field, the match
-options, ↑ and ↓, the count and ×. It knows nothing of the diff: it says what
-to find and when to step, and shows the count it's given."""
+"""The find bar of the Diff panel (spec §5.4, RZG-74) and History (RZG-88): a
+query field, the match options, ↑ and ↓, the count and ×. It knows nothing of
+what is searched: it says what to find and when to step, and shows the count
+it's given."""
 
 from __future__ import annotations
 
@@ -36,7 +37,8 @@ class FindBar(QWidget):
     previous_requested = Signal()
     closed = Signal()
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, parent: QWidget | None = None, keep: bool = True):
+        """Without ``keep``, the bar has no Keep toggle (History's)."""
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 2, 4, 2)
@@ -53,6 +55,8 @@ class FindBar(QWidget):
                                  _options.keep)
         for toggle in (self.case, self.word, self.regex, self.keep):
             layout.addWidget(toggle)
+        if not keep:
+            self.keep.hide()
         self.count = QLabel()
         set_role(self.count, Role.HINT)
         layout.addWidget(self.count)
@@ -119,10 +123,15 @@ class FindBar(QWidget):
             text = f"{total:,}{plus} match{'' if total == 1 and not more else 'es'}"
         else:
             text = f"{current + 1:,} of {total:,}{plus}"
+        self.set_message(text, invalid, total > 0)
+
+    def set_message(self, text: str, warning: bool = False, steps: bool = True) -> None:
+        """Show ``text`` as the count (``warning``: in the warning hint); ``steps``:
+        whether ↑ and ↓ can be used."""
         self.count.setText(text)
-        set_role(self.count, Role.HINT_WARNING if invalid else Role.HINT)
+        set_role(self.count, Role.HINT_WARNING if warning else Role.HINT)
         for button in (self.previous, self.next):
-            button.setEnabled(total > 0)
+            button.setEnabled(steps)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self.field and event.type() is QEvent.Type.KeyPress:

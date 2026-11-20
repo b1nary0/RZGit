@@ -64,6 +64,11 @@ class Selection(QObject):
     def __init__(self, session: RepoSession, parent: QObject | None = None):
         super().__init__(parent)
         self._commit: Commit | None = None
+        # Whether the selected commit was in the history: None until the next
+        # history_changed checks it against the last one (RZG-88: History's filter
+        # can select a commit that isn't loaded yet).
+        self._commit_loaded: bool | None = None
+        self._history: tuple[Commit, ...] = ()  # the last history_changed's
         self._file: FileSelection | None = None
         self._files: tuple[FileSelection, ...] = ()
         # Paths that Stage or Unstage is moving, and where to (see follow).
@@ -92,6 +97,7 @@ class Selection(QObject):
             return f is not None and f.commit == sha
 
         self._commit = commit
+        self._commit_loaded = None
         self.files = tuple(f for f in self._files if kept(f))
         if self._file is not None and not kept(self._file):
             self.file = None
@@ -143,11 +149,18 @@ class Selection(QObject):
         self.clear()
 
     def _on_history(self, history: tuple[Commit, ...]) -> None:
-        """A selected commit the history no longer has is gone (amend, reset,
-        rebase): back to Uncommitted changes. A stash isn't in the history."""
+        """A selected commit the history had and no longer has is gone (amend,
+        reset, rebase): back to Uncommitted changes. One that was never loaded (from
+        History's filter) stays. A stash isn't in the history."""
+        old, self._history = self._history, history
         commit = self._commit
-        if (commit is not None and not isinstance(commit, Stash)
-                and all(c.sha != commit.sha for c in history)):
+        if commit is None or isinstance(commit, Stash):
+            return
+        if self._commit_loaded is None:
+            self._commit_loaded = any(c.sha == commit.sha for c in old)
+        if any(c.sha == commit.sha for c in history):
+            self._commit_loaded = True
+        elif self._commit_loaded:
             self.commit = None
 
     def _on_stashes(self, stashes: tuple[Stash, ...]) -> None:

@@ -75,6 +75,7 @@ src/rzgit/
     diff_patch.py               build_patch, copy_patch: a patch of chosen lines of a FileDiff (plain Python)
     git_commands.py             GitCommand, run_command (the worker side of commands: stage, commit, …)
     network_worker.py           NetworkWorker, NetworkCommand: remote commands (fetch, pull's fetch, push) on a thread of their own
+    history_search.py           HistorySearch, HistoryMatches: History's filter, a search of every commit on a thread of its own
     commit_drafts.py            CommitDrafts: the unfinished commit message of each repository (a file each)
     column_prefs.py             ColumnPrefs: each panel's column choices (hidden columns, widths)
     sort_options.py             SortOption, GroupOption, SortOptions, SortOrder, Group: a panel's sort orders and groupings (plain Python)
@@ -153,7 +154,7 @@ src/rzgit/
       line_selection.py         LineSelection: which changed rows of a DiffView are selected (from the gutter)
       diff_rows.py              DiffRow, unified_rows, split_rows, *_partners, word_spans, copy_text (no Qt)
       find_query.py             FindQuery, FindMatch, find_matches: Find in a diff (no Qt)
-      find_bar.py               FindBar: the Diff panel's find bar
+      find_bar.py               FindBar: the find bar of the Diff panel and History
       commit_panel.py           CommitPanel: the message box and Commit button
     layout/
       layout_model.py           PanelNode / SplitNode / TabsNode, (de)serialisation, normalize
@@ -216,6 +217,7 @@ class RepoSession(QObject):
     network_progress = Signal(str)     # its latest progress line
     network_finished = Signal(object, bool)  # NetworkCommand, whether it ran without error
     pull_diverged    = Signal(object, object)  # GitCommand (the PULL), PullDiverged (RZG-71)
+    history_matches  = Signal(object)  # HistoryMatches: History's filter, as it's found (RZG-88)
 
     def open(self, path, *, load: Refresh = Refresh.ALL) -> bool  # path, or a Repo already read (§8.1);
                                           # load: what to read at once (none for a commit window, RZG-84)
@@ -261,6 +263,9 @@ class RepoSession(QObject):
     def push(self, remote=None) -> NetworkCommand | None   # the current branch; remote: track it there (RZG-72)
     def cancel_network(self) -> None           # kill the running one, if any
     network: NetworkCommand | None             # the one running
+
+    # History's filter: on a worker of its own (§4.1, "History search", RZG-88).
+    def search_history(self, patterns, sha_prefix=None) -> int  # a search id; None, None: stop
 
     # Latest values, so a panel created later renders at once (read-only properties):
     repo, head, head_sha, branches, history, history_order, status, stashes, commit_count, remotes,
@@ -693,6 +698,29 @@ class RepoSession(QObject):
     "could not read Username", `ssh_askpass`, "Host key verification failed",
     "Permission denied (publickey") starts with "RZGit can't ask for credentials:
     use an SSH agent, a credential helper or an askpass program."
+- **History search** (RZG-88) finds the commits History's filter shows (§5.4). It reads
+  every commit from HEAD, which takes a second or more on a big repository, so it runs on
+  a third worker, **`HistorySearch`** (`core/history_search.py`), owned by the session:
+  loads and diffs go on meanwhile. `git log` only reads, so it can't clash with either.
+  - **The call:** `search_history(patterns, sha_prefix)` takes already compiled
+    `re.Pattern`s (History's query, §5.4; core never imports ui) and a lowercase hex
+    prefix or None, and returns the search's id. A new search stops the running one: it
+    kills its git at the next commit, and nothing more of it is emitted. `(None, None)`
+    stops the running one and starts nothing. `open()`, `close()` and `shutdown()` stop it
+    too.
+  - **What matches:** `Repo.search_log(order)` streams `git log` in the session's
+    `history_order` from HEAD (`%H %P %an %ae %aI %D %B`, through `Popen`, killed when the
+    search stops) as `(Commit, email, refs, message)`. A commit matches when every one of
+    `patterns` finds something in its whole message, its author's name or email, or its
+    refs (`%D`: "HEAD -> main, origin/main, tag: v1.0"), each in any of them, or when its
+    SHA starts with `sha_prefix`. The patterns are matched in Python, so Aa, W and .\* mean the same as in the diff find.
+  - **Results:** `history_matches` sends `HistoryMatches(id, commits, done, capped)` on
+    the main thread: the matches so far, newest first, at most every 100 ms while it
+    runs, and once at the end with `done`. Each emit's `commits` starts with the very same
+    objects as the last, so History can append. It stops at `MAX_MATCHES` (10,000:
+    `capped`). The `Commit`s are whole (parents included), so History's filter doesn't
+    depend on which pages are loaded. A git error ends the search (`done`, with what was
+    found) and goes out through `error_occurred`.
 
 ### 4.3 RepoWatcher
 
@@ -822,10 +850,12 @@ Files row is `FileSelection(path, COMMIT, sha)`.
   replaced by the new list's stash with the same sha (its `stash@{n}` may have moved), or,
   if there is none (popped, dropped), `commit` is set to None.
 - **A selected commit that disappears** (amend, reset, rebase): Selection listens to
-  `history_changed` (before any panel) and sets `commit` to None when the new history
-  doesn't have it, which is back to Uncommitted changes. Loaded history always reaches
-  the selected commit (a reload keeps every commit down to the oldest loaded, §4.1), so
-  one missing from it is gone.
+  `history_changed` (before any panel) and sets `commit` to None when the history had it
+  and the new one doesn't, which is back to Uncommitted changes. A reload keeps every
+  commit down to the oldest loaded (§4.1), so a loaded commit missing from it is gone. A
+  commit selected in History's filter (RZG-88) may be older than the loaded pages: it
+  stays selected until it has been loaded once (`Selection` remembers the last history
+  it saw, and checks a new commit against it at the next `history_changed`).
 
 ### 4.4 WorktreeReader
 
@@ -1504,6 +1534,47 @@ theme when Qt asks, so a theme change is one `dataChanged`.
     pill uses `floating_button_hover`. It fades in and out over 150 ms, and appears at once
     when the desktop turns effects off (`QApplication.isEffectEnabled(UI_General)`). It
     takes no keyboard focus, since Ctrl+Home already goes to the top.
+- **Filter** (RZG-88): **Ctrl+F** opens the find bar (`FindBar(keep=False)`, §5.4 Diff,
+  without its **Keep** toggle) at the bottom of the panel and focuses its field. Its
+  shortcuts are the panel's own (`WidgetWithChildrenShortcut`), with no menu entry. While
+  the field holds a query, History shows only the commits that match it, newest first,
+  found by `session.search_history` (§4.1, "History search") over every commit, not only
+  the loaded ones.
+  - **The query:** `filter_terms(FindQuery)`: each word of the text (split at spaces)
+    is a pattern of its own, `FindQuery(word, case, word_only).pattern()` as in the diff
+    find, and a commit matches only with all of them, in any order. With **.\*** the
+    whole text is one regular expression, spaces and all. The toggles are shared with
+    the diff find. A text of one word of 4 to 40 hex digits is a SHA prefix too.
+    Searching is live, 100 ms after the last keystroke or at once for a toggle. An empty
+    field shows the whole History again, with the bar open.
+  - **The count** (`FindBar.set_message`): "Searching…" until the search is done, then
+    "12 commits", "1 commit", "10,000+ commits" (`capped`), "No results", or "Invalid
+    pattern" (`Role.HINT_WARNING`) for a regex that doesn't compile, which shows an empty
+    list.
+  - **Stepping:** Enter / Shift+Enter in the field, F3 / Shift+F3 in the panel and the
+    ↓ / ↑ buttons select the next and the previous commit in the list, wrapping at the
+    ends, as the diff find steps through matches. The arrow keys in the list move as
+    ever.
+  - **The list:** `HistoryModel.set_filter(commits)` shows the matches in place of the
+    history, and `set_filter(None)` shows the history again. While filtered, Uncommitted
+    changes isn't shown (nor pinned), the Graph column is empty (hidden commits would
+    break its lines) but each commit's ref label is still drawn there, at the first lane,
+    and Back to top and paging are off. Loaded pages and the status still reach the model
+    meanwhile; they show when the filter goes. A new batch of matches is appended.
+  - **Highlights:** where any word (`highlight_pattern`: the words as one alternation,
+    longest first) matches the text of a Subject or Author cell, the
+    match is filled in `diff_find_match` under the text, which is drawn over it in
+    `text`. A commit that matched only in its body, email, refs or SHA shows no fill.
+  - **The selection:** a commit selected when the search starts stays selected if it is
+    among the matches. Otherwise, once the search is done, the first match is selected.
+    Until then nothing is selected and `selection.commit` stays as it was. Selecting a
+    row meanwhile stops this. A new query starts it again from the commit selected then.
+  - **Closing** (Esc in the bar, ×, or another repository): the whole History comes back
+    with `selection.commit` selected and scrolled into view, Uncommitted changes for None.
+    If that commit isn't loaded, the panel asks for pages until it is (or History is
+    complete).
+  - **Updates:** a reset of History while filtered (HEAD moved, another order) searches
+    again. A new repository closes the bar.
 - **Paging:** when the view is scrolled to within a screen of the end, the panel asks the
   session for the next page (§4.1). It watches its scroll bar rather than using Qt's
   `canFetchMore` / `fetchMore`, which Qt also calls while laying rows out, before they have
@@ -2382,7 +2453,7 @@ class ThemeColors:   menubar_bg: str; toolbar_bg: str; tab_bg: str; header_bg: s
                      floating_button_border, floating_button_shadow: str   # a control floating over a list (History's Back to top, RZG-64)
                      text: str; text_muted: str; hover: str; selection: str; content_selection: str;
                      accent: str; button_*: str; scroll_*: str; diff_*: str (incl. diff_hunk_bg, diff_hunk_text, diff_line_button*, diff_*_selected_bg, diff_*_word); …
-                     diff_find_match: str   # every Find match in the diff (RZG-74): text ≥ 4.5:1 on it; ΔE ≥ 6 from the diff backgrounds, content_bg and text_selection, under every simulated vision
+                     diff_find_match: str   # every Find match in the diff (RZG-74) and History's filter (RZG-88): text ≥ 4.5:1 on it; ΔE ≥ 6 from the diff backgrounds, content_bg, text_selection, row_alt_bg, content_hover and content_selection, under every simulated vision
                      diff_find_current: str   # the current Find match's outline: ≥ 3:1 on diff_find_match, text_selection and every diff background
                      upstream_behind, upstream_ahead: str   # Pull's ↓n and Push's ↑n on the Controls panel (RZG-94)
 @dataclass(frozen=True)

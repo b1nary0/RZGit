@@ -5,11 +5,15 @@ Uncommitted changes stays pinned at the top while the table scrolls, and well
 down, a "Back to top" control floats below it (RZG-64). The first column is the
 branch graph (RZG-58), with each commit's ref label over its dot (RZG-77, RZG-86),
 as wide as the widest row in view. Double-click, Enter or the right-click menu
-opens a commit in a window of its own, through ``actions`` (RZG-84)."""
+opens a commit in a window of its own, through ``actions`` (RZG-84). Ctrl+F filters
+it down to the commits that match a query, searched in every commit by the session
+(RZG-88)."""
 
 from __future__ import annotations
 
 import math
+import re
+from collections.abc import Sequence
 
 from PySide6.QtCore import QEvent, QModelIndex, QObject, QPersistentModelIndex, QPoint, QRect, Qt
 from PySide6.QtGui import (QBrush, QColor, QFontMetrics, QKeyEvent, QKeySequence, QMouseEvent,
@@ -26,14 +30,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from rzgit.core.history_search import HistoryMatches
 from rzgit.core.ref_labels import labels_by_commit
 from rzgit.core.repo_session import HISTORY_PAGE
 from rzgit.git.git_models import Commit, Stash
 from rzgit.ui.app_actions import OPEN_COMMIT_TEXT
 from rzgit.ui.panels.back_to_top_button import BackToTopButton
+from rzgit.ui.panels.find_bar import INVALID, NO_RESULTS, FindBar
 from rzgit.ui.panels.graph_painter import GRAPH_MAX_LANES, GraphPainter
-from rzgit.ui.panels.history_model import (DATE_FORMAT, GRAPH_COLUMN, MUTED_COLUMNS,
-                                                 SUBJECT_COLUMN, HistoryModel)
+from rzgit.ui.panels.find_query import FindQuery
+from rzgit.ui.panels.history_model import (AUTHOR_COLUMN, DATE_FORMAT, GRAPH_COLUMN,
+                                           MUTED_COLUMNS, SUBJECT_COLUMN, HistoryModel)
 from rzgit.ui.panels.panel import Panel
 from rzgit.ui.panels.ref_label_painter import RefLabelPainter
 from rzgit.ui.theme.app_theme import AppTheme
@@ -42,6 +49,43 @@ from rzgit.ui.widgets.column_header import ColumnHeader
 
 # Column widths fit the first page of rows, as they did before paging.
 _MEASURED_ROWS = HISTORY_PAGE
+SEARCHING = "Searching…"
+_SHA_PREFIX = re.compile(r"[0-9a-fA-F]{4,40}")
+
+
+def sha_prefix(text: str) -> str | None:
+    """``text`` as a SHA prefix (4 to 40 hex digits, lowercased), or None."""
+    return text.lower() if _SHA_PREFIX.fullmatch(text) else None
+
+
+def filter_terms(query: FindQuery) -> tuple[re.Pattern[str], ...]:
+    """The filter's query as the patterns a commit must all match (spec §5.4): each
+    word on its own, in any order, or with .* the whole text as one. Raises
+    ``ValueError`` for a regex that doesn't compile."""
+    if query.regex:
+        pattern = query.pattern()
+        return () if pattern is None else (pattern,)
+    words = dict.fromkeys(query.text.split())  # each once, in order
+    return tuple(FindQuery(word, query.case, query.word).pattern() for word in words)
+
+
+def highlight_pattern(terms: Sequence[re.Pattern[str]]) -> re.Pattern[str] | None:
+    """Any of ``terms``, for the highlight: the longest first, so a word that holds
+    another is filled whole."""
+    if len(terms) < 2:
+        return terms[0] if terms else None
+    ordered = sorted(terms, key=lambda p: len(p.pattern), reverse=True)
+    return re.compile("|".join(f"(?:{p.pattern})" for p in ordered), terms[0].flags)
+
+
+def matches_message(matches: HistoryMatches) -> str:
+    """The find bar's count for a finished search."""
+    n = len(matches.commits)
+    if not n:
+        return NO_RESULTS
+    if matches.capped:
+        return f"{n:,}+ commits"
+    return f"{n:,} commit{'' if n == 1 else 's'}"
 
 
 class HistoryPanel(Panel):
@@ -51,10 +95,18 @@ class HistoryPanel(Panel):
     _view: _HistoryView
     _labels: ColumnHeader
     _model: HistoryModel
+    find_bar: FindBar
 
     def _setup(self) -> None:
         self._quiet = False  # True while a reset re-selects; selection isn't written
         self._new_commits = 0  # arrived above the view while scrolled down (Back to top)
+        # The filter (RZG-88): the running search's id, the commit to keep selected if it
+        # matches, whether the panel still picks the selection, and the commit to select
+        # once it's loaded, after the filter closed.
+        self._search_id: int | None = None
+        self._kept: Commit | None = None
+        self._auto_select = False
+        self._restore_sha: str | None = None
         self._model = HistoryModel(self.ctx.theme.current)
         self._model.set_date_format(self.ctx.prefs.value(DATE_FORMAT))
         self.ctx.prefs.changed.connect(self._on_pref_changed)
@@ -68,7 +120,22 @@ class HistoryPanel(Panel):
         self._view.setModel(self._model)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         layout.addWidget(self._view)
+        self.find_bar = FindBar(keep=False)
+        self.find_bar.hide()
+        self.find_bar.changed.connect(self._search)
+        self.find_bar.next_requested.connect(lambda: self.find_step(1))
+        self.find_bar.previous_requested.connect(lambda: self.find_step(-1))
+        self.find_bar.closed.connect(self._on_find_closed)
+        layout.addWidget(self.find_bar)
+        context = Qt.ShortcutContext.WidgetWithChildrenShortcut
+        for keys, slot in ((QKeySequence.StandardKey.Find, self.open_find),
+                           (QKeySequence("F3"), lambda: self.find_step(1)),
+                           (QKeySequence("Shift+F3"), lambda: self.find_step(-1))):
+            shortcut = QShortcut(QKeySequence(keys), self)
+            shortcut.setContext(context)
+            shortcut.activated.connect(slot)
 
         self._view.selectionModel().currentChanged.connect(self._sync_selection)
         # Open in New Window (RZG-84): double-click, Enter, or the right-click menu.
@@ -90,6 +157,8 @@ class HistoryPanel(Panel):
         session.history_changed.connect(self._render)
         session.status_changed.connect(self._show_uncommitted)
         session.repo_changed.connect(self._show_uncommitted)
+        session.repo_changed.connect(lambda _repo: self.find_bar.close_bar())
+        session.history_matches.connect(self._on_matches)
         for signal in (session.refs_changed, session.stashes_changed, session.head_changed,
                        session.head_sha_changed):
             signal.connect(self._update_labels)
@@ -109,8 +178,8 @@ class HistoryPanel(Panel):
         self._sync_selection()
 
     def _select_uncommitted_if_none(self) -> None:
-        if isinstance(self.ctx.selection.commit, Stash):
-            return  # none, on purpose
+        if isinstance(self.ctx.selection.commit, Stash) or self._restore_sha is not None:
+            return  # none, on purpose; or the filter's commit is on its way
         if not self._view.currentIndex().isValid() and self._model.has_uncommitted:
             self._select_row(0)
 
@@ -122,6 +191,10 @@ class HistoryPanel(Panel):
         self._view.setAutoScroll(auto)
 
     def _render(self, commits: tuple[Commit, ...]) -> None:
+        if self._model.filtered:  # kept for when the filter goes; a reset searches again
+            if not self._model.set_commits(commits):
+                self._search()
+            return
         keep, top = self._current_commit(), self._top_commit()
         newest = self._model.commits[0] if self._model.commits else None
         was_empty = not self._model.commits  # Uncommitted changes may be shown already
@@ -141,6 +214,8 @@ class HistoryPanel(Panel):
             self._fit_columns()
         self._fit_graph()
         self._sync_selection()
+        if self._restore_sha is not None:
+            self._select_restored()
 
     def _count_new_commits(self, newest: Commit) -> None:
         """After a reset while scrolled down: add the commits above the one that was
@@ -163,6 +238,8 @@ class HistoryPanel(Panel):
         overflow it; maximum() is 0 only before the view has laid them out.
         """
         bar = self._view.verticalScrollBar()
+        if self._model.filtered:
+            return  # the matches are all there
         if bar.maximum() > 0 and bar.value() >= bar.maximum() - bar.pageStep():
             self.ctx.session.load_more_history()
 
@@ -197,6 +274,8 @@ class HistoryPanel(Panel):
         on its dot: where its left half wouldn't fit, the lanes move right (the
         graph's inset). Not the rows in view, so scrolling never changes it."""
         view, model, graph, refs = self._view, self._model, self._graph, self._refs
+        if model.filtered:
+            return  # the column keeps the history's width while it's empty
         lanes, inset, shown = 1, 0.0, []
         if model.rowCount():
             view.ensurePolished()  # the stylesheet's list font
@@ -251,12 +330,15 @@ class HistoryPanel(Panel):
         self._fit_graph()
         self._view.set_pinned_line(QColor(theme.colors.border_light))
         self._view.back_to_top.set_colors(theme.colors)
+        self._view.find_match = QColor(theme.colors.diff_find_match)
+        self._view.find_text = QColor(theme.colors.text)
         self._view.fit_row_height()
 
     def _sync_selection(self, *_args: object) -> None:
         # Selection emits only on change, so a reset that keeps the same
         # commit selected is silent. With no row (a stash is selected) History says nothing.
         if not self._quiet and self._view.currentIndex().isValid():
+            self._auto_select = False  # chosen: the filter leaves the selection be
             self.ctx.selection.commit = self._current_commit()
 
     def _follow_selection(self, commit: Commit | None) -> None:
@@ -310,6 +392,159 @@ class HistoryPanel(Panel):
         menu.addAction(OPEN_COMMIT_TEXT).triggered.connect(lambda _=False: self._open(commit))
         return menu
 
+    # ---- the filter (spec §5.4, RZG-88) ----------------------------------
+
+    def open_find(self) -> None:
+        """Ctrl+F: open the find bar and focus its field; the query it still holds
+        filters again."""
+        was_open = self.find_bar.isVisible()
+        self.find_bar.open()
+        if not was_open:
+            self._search()
+
+    def _search(self) -> None:
+        """Filter by the bar's query: search every commit, or with an empty field
+        show the whole History again."""
+        bar = self.find_bar
+        if not bar.isVisible():
+            return
+        query = bar.query()
+        try:
+            terms = filter_terms(query)
+        except ValueError:
+            self._search_id = self.ctx.session.search_history(None)
+            self._enter_filter(None)
+            self._set_filter(())
+            bar.set_message(INVALID, warning=True, steps=False)
+            return
+        prefix = sha_prefix(query.text.strip())
+        if not terms and prefix is None:
+            self._search_id = self.ctx.session.search_history(None)
+            self._exit_filter()
+            bar.set_message("", steps=False)
+            return
+        self._enter_filter(highlight_pattern(terms))
+        bar.set_message(SEARCHING, steps=bool(self._model.rowCount()))
+        self._search_id = self.ctx.session.search_history(terms, prefix)
+
+    def _enter_filter(self, pattern: re.Pattern[str] | None) -> None:
+        """A new query: the commit selected now stays selected if it matches."""
+        selected = self.ctx.selection.commit
+        self._kept = None if isinstance(selected, Stash) else selected
+        self._auto_select = True
+        self._restore_sha = None
+        self._model.set_highlight(pattern)
+        self._view.back_to_top.set_new_commits(0)
+
+    def _on_matches(self, matches: HistoryMatches) -> None:
+        if matches.search_id != self._search_id or not self.find_bar.isVisible():
+            return  # an older search's
+        self._set_filter(matches.commits)
+        if self._auto_select:
+            row = self._model.row_of(self._kept.sha) if self._kept is not None else -1
+            if row < 0 and matches.done and matches.commits:
+                row = 0
+            if row >= 0:
+                self._auto_select = False
+                self._go_to(row)
+        if matches.done:
+            self._auto_select = False
+            self.find_bar.set_message(matches_message(matches), steps=bool(matches.commits))
+        else:
+            self.find_bar.set_message(SEARCHING, steps=bool(matches.commits))
+
+    def _set_filter(self, commits: tuple[Commit, ...]) -> None:
+        current = self._current_commit() if self._model.filtered else None
+        self._quiet = True
+        try:
+            self._model.set_filter(commits)
+            if current is not None and not self._view.currentIndex().isValid():
+                row = self._model.row_of(current.sha)  # a reset: the same commit, if still there
+                if row >= 0:
+                    self._select_row(row)
+        finally:
+            self._quiet = False
+        self._view.place_back_to_top()
+
+    def find_step(self, delta: int) -> None:
+        """Enter, F3 or ↓ (``delta`` 1), Shift+Enter, Shift+F3 or ↑ (-1): the next or
+        previous commit in the filtered list, wrapping."""
+        rows = self._model.rowCount()
+        if not self.find_bar.isVisible() or not self._model.filtered or not rows:
+            return
+        if self.find_bar.flush():
+            return  # a waiting keystroke: it searches first
+        current = self._view.currentIndex()
+        if current.isValid():
+            row = (current.row() + delta) % rows
+        else:
+            row = 0 if delta > 0 else rows - 1
+        self._go_to(row)
+
+    def _go_to(self, row: int) -> None:
+        """Select ``row`` (written to the selection) and scroll it into view."""
+        self._auto_select = False
+        index = self._model.index(row, SUBJECT_COLUMN)
+        self._view.setCurrentIndex(index)
+        self._view.scrollTo(index, QAbstractItemView.ScrollHint.EnsureVisible)
+
+    def _on_find_closed(self) -> None:
+        self._search_id = self.ctx.session.search_history(None)
+        # Focus first: a view focused with no current row makes its first row current,
+        # which after the reset would be Uncommitted changes.
+        self._quiet = True
+        try:
+            self._view.setFocus(Qt.FocusReason.OtherFocusReason)
+        finally:
+            self._quiet = False
+        self._exit_filter()
+
+    def _exit_filter(self) -> None:
+        """The whole History again, with ``selection.commit`` selected and in view."""
+        self._auto_select = False
+        self._model.set_highlight(None)
+        if not self._model.filtered:
+            return
+        self._quiet = True
+        try:
+            self._model.set_filter(None)
+        finally:
+            self._quiet = False
+        self._view.fit_row_height()
+        self._fit_graph()
+        commit = self.ctx.selection.commit
+        if isinstance(commit, Stash):
+            return  # no row, on purpose
+        if commit is None:
+            self._quiet = True
+            try:
+                self._select_uncommitted_if_none()
+            finally:
+                self._quiet = False
+            self._view.scrollToTop()
+            return
+        self._restore_sha = commit.sha
+        self._select_restored()
+
+    def _select_restored(self) -> None:
+        """Select the commit the filter had selected, once it's loaded: ask for
+        pages until it is."""
+        sha = self._restore_sha
+        row = self._model.row_of(sha) if sha is not None else -1
+        if row >= 0:
+            self._restore_sha = None
+            index = self._model.index(row, SUBJECT_COLUMN)
+            self._quiet = True
+            try:
+                self._view.setCurrentIndex(index)
+            finally:
+                self._quiet = False
+            self._view.scrollTo(index, QAbstractItemView.ScrollHint.PositionAtCenter)
+        elif self.ctx.session.history_complete:
+            self._restore_sha = None  # it's gone
+        else:
+            self.ctx.session.load_more_history()
+
     def _top_commit(self) -> Commit | None:
         """The commit at the top of the view (below the pinned row), or None when
         scrolled to the top."""
@@ -336,6 +571,8 @@ class _HistoryView(QTableView):
         self.hover_row = -1
         self.graph = graph  # draws the graph column; the panel keeps it themed
         self.refs = refs  # draws the ref labels over the graph (RZG-86); themed by the panel too
+        self.find_match = QColor()  # the filter's highlight fill and its text (RZG-88)
+        self.find_text = QColor()
         self.pinned = _PinnedRow(self)
         self.back_to_top = BackToTopButton(self.viewport())
         self.back_to_top.clicked.connect(self.scrollToTop)  # a jump; the selection stays
@@ -399,6 +636,8 @@ class _HistoryView(QTableView):
     def back_to_top_wanted(self) -> bool:
         """The first commit is more than a screen above the view, or new commits
         arrived above it; never at the top."""
+        if getattr(self.model(), "filtered", False):
+            return False  # off while History is filtered (RZG-88)
         bar = self.verticalScrollBar()
         return bar.value() > bar.pageStep() or (bar.value() > 0 and self.back_to_top.new_commits > 0)
 
@@ -569,6 +808,9 @@ class _RowHoverDelegate(QStyledItemDelegate):
         column = index.column()
         if column != GRAPH_COLUMN or not isinstance(model, HistoryModel):
             super().paint(painter, option, index)
+            pattern = model.highlight if isinstance(model, HistoryModel) else None
+            if pattern is not None and column in (SUBJECT_COLUMN, AUTHOR_COLUMN):
+                self._paint_matches(painter, option, index, pattern)
             return
         # A graph cell has no text: the style draws only its hover, selection
         # or focus. Asking it for a plain cell costs more than the graph.
@@ -578,6 +820,12 @@ class _RowHoverDelegate(QStyledItemDelegate):
         graph = self._view.graph
         if model.has_uncommitted and row == 0:
             graph.paint_uncommitted(painter, option.rect, model.graph_row(1))
+        elif model.filtered:  # no graph (RZG-88): the label at the first lane
+            labels = model.ref_labels(row)
+            if labels:
+                refs = self._view.refs
+                refs.set_font(option.font)
+                refs.paint(painter, option.rect, labels, 0, graph.node_x(0), model.striped(row))
         elif (commit := model.graph_row(row)) is not None:
             graph.paint(painter, option.rect, commit, joined_above=model.has_uncommitted and row == 1)
             labels = model.ref_labels(row)
@@ -586,3 +834,40 @@ class _RowHoverDelegate(QStyledItemDelegate):
                 refs.set_font(option.font)
                 refs.paint(painter, option.rect, labels, commit.color,
                            graph.node_x(commit.lane), model.striped(row))
+
+    def _paint_matches(self, painter: QPainter, option: QStyleOptionViewItem,
+                       index: QModelIndex | QPersistentModelIndex,
+                       pattern: re.Pattern[str]) -> None:
+        """Fill the filter's matches in the cell's text (RZG-88): over what the style
+        drew, then the text again over the fill, clipped to it."""
+        text = index.data(Qt.ItemDataRole.DisplayRole)
+        if not text:
+            return
+        spans = [(m.start(), m.end()) for m in pattern.finditer(text) if m.end() > m.start()]
+        if not spans:
+            return
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        view = self._view
+        style = view.style()
+        rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, opt, view)
+        margin = style.pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin, None, view) + 1
+        rect = rect.adjusted(margin, 0, -margin, 0)
+        metrics = QFontMetrics(opt.font)
+        shown = metrics.elidedText(text, opt.textElideMode, rect.width())
+        visible = len(text) if shown == text else max(len(shown) - 1, 0)  # before the "…"
+        top = rect.top() + (rect.height() - metrics.height()) // 2
+        painter.save()
+        painter.setFont(opt.font)
+        painter.setPen(view.find_text)
+        for start, end in spans:
+            end = min(end, visible)
+            if start >= end:
+                continue
+            x0 = rect.left() + metrics.horizontalAdvance(text[:start])
+            x1 = rect.left() + metrics.horizontalAdvance(text[:end])
+            fill = QRect(x0, top, x1 - x0, metrics.height()).intersected(rect)
+            painter.setClipRect(fill)
+            painter.fillRect(fill, view.find_match)
+            painter.drawText(rect, int(opt.displayAlignment), shown)
+        painter.restore()

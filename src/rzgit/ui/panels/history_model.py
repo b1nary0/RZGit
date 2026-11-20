@@ -12,10 +12,15 @@ The first column is the branch graph (RZG-58): the model keeps a
 a reset, and the delegate draws its rows (``graph_row``). Over it, each commit's
 ref label (RZG-77, RZG-86): the panel gives the model each commit's labels by sha
 (``set_labels``), and the delegate draws the first (``ref_labels``).
+
+While History is filtered (RZG-88, ``set_filter``), the model shows the matching
+commits instead: no Uncommitted changes row and no graph. The history and the
+status still arrive meanwhile, and show when the filter goes.
 """
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 from PySide6.QtCore import (QAbstractTableModel, QDate, QDateTime, QLocale, QModelIndex,
@@ -58,7 +63,10 @@ _STYLE_ROLES = [Qt.ItemDataRole.ForegroundRole, Qt.ItemDataRole.FontRole,
 class HistoryModel(QAbstractTableModel):
     def __init__(self, theme: AppTheme):
         super().__init__()
-        self._commits: tuple[Commit, ...] = ()
+        self._commits: tuple[Commit, ...] = ()  # the rows: the history, or the filter's
+        self._history: tuple[Commit, ...] = ()
+        self._filter: tuple[Commit, ...] | None = None  # the matches, while filtered
+        self._highlight: re.Pattern[str] | None = None  # filled in Subject and Author
         self._lane_colors = len(theme.graph.lanes)
         self._graph = CommitGraph(colors=self._lane_colors)
         self._uncommitted: int | None = None  # changed files; None: no Uncommitted changes row
@@ -75,16 +83,30 @@ class HistoryModel(QAbstractTableModel):
 
     @property
     def commits(self) -> tuple[Commit, ...]:
+        """The commits shown: the history, or while filtered the matches."""
         return self._commits
 
     @property
+    def history(self) -> tuple[Commit, ...]:
+        """The history, filtered or not."""
+        return self._history
+
+    @property
+    def filtered(self) -> bool:
+        return self._filter is not None
+
+    @property
     def has_uncommitted(self) -> bool:
-        return self._uncommitted is not None
+        """The Uncommitted changes row is shown: a repo is open, and it isn't filtered."""
+        return self._uncommitted is not None and self._filter is None
 
     def set_uncommitted(self, count: int | None) -> None:
         """Show the Uncommitted changes row with ``count`` changed files, or no
-        such row (``None``, no repo)."""
+        such row (``None``, no repo). While filtered it's kept for later."""
         if count == self._uncommitted:
+            return
+        if self._filter is not None:
+            self._uncommitted = count
             return
         if (count is None) != (self._uncommitted is None):
             if count is None:
@@ -105,23 +127,70 @@ class HistoryModel(QAbstractTableModel):
         When ``commits`` only adds to the end of what's shown (a page, whose
         first part is the same objects), the new rows are inserted instead.
         """
-        old, n = self._commits, len(self._commits)
-        if len(commits) >= n and all(a is b for a, b in zip(old, commits)):
+        old, n = self._history, len(self._history)
+        appended = len(commits) >= n and all(a is b for a, b in zip(old, commits))
+        if self._filter is not None:  # kept for later: the rows are the filter's
+            if appended:
+                self._graph.extend(commits[n:])
+            else:
+                self._graph = CommitGraph(commits, self._lane_colors)
+            self._history = commits
+            return appended
+        if appended:
             if len(commits) > n:
                 first = n + self._offset
                 self.beginInsertRows(QModelIndex(), first, first + len(commits) - n - 1)
-                self._commits = commits
+                self._commits = self._history = commits
                 self._graph.extend(commits[n:])  # the lanes carry on
                 self.endInsertRows()
             return True
         self.beginResetModel()
-        self._commits = commits
+        self._commits = self._history = commits
         self._graph = CommitGraph(commits, self._lane_colors)
         self.endResetModel()
         return False
 
+    def set_filter(self, commits: tuple[Commit, ...] | None) -> None:
+        """Show only ``commits`` (History's filter, RZG-88), or the history again
+        (``None``). Matches that only add to the end of the last are inserted."""
+        if commits is None:
+            if self._filter is None:
+                return
+            self.beginResetModel()
+            self._filter = None
+            self._commits = self._history
+            self.endResetModel()
+            return
+        old = self._filter
+        if old is not None and len(commits) >= len(old) and all(
+                a is b for a, b in zip(old, commits)):
+            if len(commits) > len(old):
+                self.beginInsertRows(QModelIndex(), len(old), len(commits) - 1)
+                self._filter = self._commits = commits
+                self.endInsertRows()
+            return
+        self.beginResetModel()
+        self._filter = self._commits = commits
+        self.endResetModel()
+
+    @property
+    def highlight(self) -> re.Pattern[str] | None:
+        """What is filled in the Subject and Author cells (History's filter)."""
+        return self._highlight
+
+    def set_highlight(self, pattern: re.Pattern[str] | None) -> None:
+        if pattern == self._highlight:
+            return
+        self._highlight = pattern
+        if self.rowCount():
+            self.dataChanged.emit(self.index(0, SUBJECT_COLUMN),
+                                  self.index(self.rowCount() - 1, AUTHOR_COLUMN))
+
     def graph_row(self, row: int) -> GraphRow | None:
-        """The branch graph's row for ``row``; None for Uncommitted changes and past the end."""
+        """The branch graph's row for ``row``; None for Uncommitted changes, past the
+        end and while filtered."""
+        if self._filter is not None:
+            return None
         row -= self._offset
         return self._graph.row(row) if 0 <= row < len(self._commits) else None
 
@@ -146,7 +215,7 @@ class HistoryModel(QAbstractTableModel):
     @property
     def _offset(self) -> int:
         """The row of the first commit."""
-        return 0 if self._uncommitted is None else 1
+        return 1 if self.has_uncommitted else 0
 
     def commit_at(self, row: int) -> Commit | None:
         """The commit at ``row``; None for the Uncommitted changes row and past the end."""
@@ -197,7 +266,7 @@ class HistoryModel(QAbstractTableModel):
         self._mono = theme.mono_font()
         if len(theme.graph.lanes) != self._lane_colors:  # colours are picked from their count
             self._lane_colors = len(theme.graph.lanes)
-            self._graph = CommitGraph(self._commits, self._lane_colors)
+            self._graph = CommitGraph(self._history, self._lane_colors)
         if self.rowCount():
             last = self.index(self.rowCount() - 1, len(COLUMNS) - 1)
             self.dataChanged.emit(self.index(0, 0), last, _STYLE_ROLES)

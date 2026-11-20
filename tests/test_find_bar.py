@@ -109,6 +109,21 @@ class FindBarTests(unittest.TestCase):
         self.assertTrue(other.keep.isChecked())
         self.assertFalse(other.word.isChecked())
 
+    def test_without_keep_and_with_a_message(self):
+        """History's bar (RZG-88): no Keep toggle, and a count of its own."""
+        bar = FindBar(keep=False)
+        self.addCleanup(bar.deleteLater)
+        bar.show()
+        self.assertFalse(bar.keep.isVisible())
+        self.assertTrue(bar.case.isVisible())
+        self.bar.show()
+        self.assertTrue(self.bar.keep.isVisible())
+        bar.set_message("12 commits")
+        self.assertEqual(bar.count.text(), "12 commits")
+        self.assertTrue(bar.next.isEnabled())
+        bar.set_message("Invalid pattern", warning=True, steps=False)
+        self.assertFalse(bar.previous.isEnabled())
+
 
 if __name__ == "__main__":
     unittest.main()

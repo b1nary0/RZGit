@@ -447,6 +447,15 @@ class FindMatchColourTests(unittest.TestCase):
                     self.assertGreaterEqual(min_delta_e(c.diff_find_match, getattr(c, name)), 6,
                                             name)
 
+    def test_it_stands_apart_from_historys_rows(self):
+        """History's filter fills its matches over the rows too (RZG-88)."""
+        for theme in ALL_THEMES:
+            c = theme.colors
+            with self.subTest(theme.name):
+                for name in ("row_alt_bg", "content_hover", "content_selection"):
+                    self.assertGreaterEqual(min_delta_e(c.diff_find_match, getattr(c, name)), 6,
+                                            name)
+
     def test_the_current_matchs_outline_shows_on_everything_under_it(self):
         for theme in ALL_THEMES:
             c = theme.colors

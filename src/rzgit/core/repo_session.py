@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from collections.abc import Iterable
+import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import Flag, auto
 from pathlib import Path
@@ -22,6 +23,7 @@ from rzgit.core.diff_request import GIT_CONTEXT, DiffRequest, load_diff
 from rzgit.core.git_commands import (
     CommandKind, GitCommand, PullDiverged, PullMode, run_command,
 )
+from rzgit.core.history_search import HistorySearch
 from rzgit.core.network_worker import (
     NetworkCommand,
     NetworkKind,
@@ -111,6 +113,7 @@ class RepoSession(QObject):
     network_progress = Signal(str)  # its latest progress line
     network_finished = Signal(object, bool)  # NetworkCommand, whether it ran without error
     pull_diverged = Signal(object, object)  # GitCommand (the PULL), PullDiverged
+    history_matches = Signal(object)  # HistoryMatches: History's filter, as it's found (RZG-88)
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -176,6 +179,10 @@ class RepoSession(QObject):
         self._network.started.connect(self.network_changed)
         self._network.progress.connect(lambda _command, line: self.network_progress.emit(line))
         self._network.finished.connect(self._on_network_done)
+        # History's filter (spec §4.1, "History search"): a worker of its own, too.
+        self._search = HistorySearch(self)
+        self._search.matches.connect(self.history_matches)
+        self._search.error_occurred.connect(self.error_occurred)
 
     # ---- latest values --------------------------------------------------
 
@@ -325,6 +332,7 @@ class RepoSession(QObject):
         self._repo = repo
         self._generation += 1
         self._network.cancel()  # it was for the repository that was open
+        self._search.stop()
         self._pending = Refresh(0)
         self._more_pending = False
         self._history_complete = True
@@ -344,6 +352,7 @@ class RepoSession(QObject):
         self._repo = None
         self._generation += 1
         self._network.cancel()
+        self._search.stop()
         self._pending = Refresh(0)
         self._more_pending = False
         self._forced = _RESET
@@ -364,6 +373,7 @@ class RepoSession(QObject):
         self._details_pending = False
         self._commands = []
         self._network.shutdown()  # cancelled: quitting doesn't wait minutes for a fetch
+        self._search.shutdown()
         self._pool.waitForDone()
 
     # ---- network commands (spec §4.1) --------------------------------------
@@ -487,6 +497,17 @@ class RepoSession(QObject):
             return
         self._history_order = order
         self.refresh(Refresh.HISTORY)
+
+    def search_history(self, patterns: Sequence[re.Pattern[str]] | None,
+                       sha_prefix: str | None = None) -> int:
+        """Search every commit from HEAD for History's filter, in the background
+        (spec §4.1, "History search"): the commits every one of ``patterns`` finds
+        something in; the search's id. The matches come as ``history_matches``. A new
+        search stops the last one; with neither patterns nor a prefix (or no repo),
+        none is started."""
+        if self._repo is None:
+            patterns, sha_prefix = None, None
+        return self._search.start(self._repo, self._history_order, patterns or (), sha_prefix)
 
     def request_diff(self, file: FileSelection | None, full: bool = False,
                      whole: bool = False, max_lines: int | None = None,

@@ -208,6 +208,34 @@ list. If new commits arrive while you are scrolled down, it says how many, for e
 **Dates** follow the *Date format* setting described in
 [Settings and themes](#settings-and-themes).
 
+**Finding commits.** Press Ctrl+F in History to open the find bar (1) at its bottom.
+
+![History filtered by a search](screenshots/history-filter.png)
+
+History then shows only the commits that match what you type, newest first. The search
+looks through every commit, not only the ones loaded so far. While it runs, the bar says
+"Searching…"; then it shows how many commits matched, such as "12 commits".
+
+- A commit matches when its whole message (the subject and the rest), its author's name
+  or email, or one of its branches or tags contains your text. With several words, a
+  commit matches when it contains every one of them, in any order and in any of those
+  places: "parser tabs" finds "Fix the parser" with "It crashed on tabs" in its
+  message. With **.\*** on, the whole text is one regular expression. Typing 4 or more
+  characters of a commit's hash, from its start, finds that commit too.
+- Where a word is in the Subject or Author column, it is highlighted.
+- The commit you had selected stays selected if it matches. Otherwise the first match is
+  selected once the search is done, and its details and files are shown.
+- Press Enter, F3 or the **↓** button to select the next commit in the list, and
+  Shift+Enter, Shift+F3 or **↑** for the previous one. The selection wraps around at the
+  ends.
+- The toggles **Aa** (match case), **W** (whole words only) and **.\*** (a regular
+  expression) work as in the [Diff panel's find bar](#diffs), and are shared with it.
+- While History is filtered, Uncommitted changes and the branch graph are hidden. The
+  branch and tag labels are still shown.
+- Clear the field to see every commit again. Press Esc or click **×** to close the find
+  bar. History comes back with the commit you selected still selected and scrolled into
+  view.
+
 ## Changes and commits
 
 ![Unstaged Files, Staged Files, Commit and the Diff of a file](screenshots/changes.png)
@@ -616,13 +644,13 @@ when the focus is in the panel or field named.
 | `Ctrl+Shift+W` | Shows the Worktrees panel. | The whole window |
 | `Ctrl+Shift+PgUp` | Moves the current tab one place to the left. | A tab group |
 | `Ctrl+Shift+PgDown` | Moves the current tab one place to the right. | A tab group |
-| `Enter` | Moves the selected files to the other list; opens the selected commit or stash in a window of its own; opens the selected worktree in a window of its own; moves from the commit summary to the description; goes to the next match; switches to the only branch left in the filter. | Unstaged Files and Staged Files; History and Stashes; Worktrees; the Commit panel; the Diff panel's find bar; the branch button's list |
-| `Shift+Enter` | Goes to the previous match. | The Diff panel's find bar |
-| `Ctrl+F` | Opens the find bar. | The Diff panel |
-| `F3` | Goes to the next match. | The Diff panel |
-| `Shift+F3` | Goes to the previous match. | The Diff panel |
+| `Enter` | Moves the selected files to the other list; opens the selected commit or stash in a window of its own; opens the selected worktree in a window of its own; moves from the commit summary to the description; goes to the next match; switches to the only branch left in the filter. | Unstaged Files and Staged Files; History and Stashes; Worktrees; the Commit panel; the find bar of the Diff panel and History; the branch button's list |
+| `Shift+Enter` | Goes to the previous match. | The find bar of the Diff panel and History |
+| `Ctrl+F` | Opens the find bar. | The Diff panel; History |
+| `F3` | Goes to the next match. | The Diff panel; History |
+| `Shift+F3` | Goes to the previous match. | The Diff panel; History |
 | `F12` | Goes to the definition of the name at the text cursor, in VS Code. | The Diff panel |
-| `Esc` | Closes the find bar, or clears the selection in the diff. | The Diff panel |
+| `Esc` | Closes the find bar, or clears the selection in the diff. | The Diff panel; History |
 | `Ctrl+A` | Selects all the text of the diff (of one side, side by side), or of a message. | The Diff panel; Commit Details |
 | `Ctrl+C` | Copies the selected text. In a diff, it copies only the code. | The Diff panel; Commit Details |
 | `Ctrl+Shift+C` | Copies the selected lines as a patch. | The Diff panel |

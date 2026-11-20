@@ -2,10 +2,12 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 from rzgit.core.repo_session import RepoSession
 from rzgit.core.selection import FileSelection, FileSource, Selection, file_rows
 from rzgit.git.git_models import Commit, FileStatus, Stash
+from rzgit.git.repo import Repo
 from tests.support import SignalRecorder, commit_file, git, make_repo, qt_app, wait_idle
 
 COMMIT = Commit("a" * 40, "Test User", datetime(2026, 1, 1, tzinfo=timezone.utc), "first")
@@ -74,6 +76,31 @@ class SelectionTests(unittest.TestCase):
         self.session.refresh()
         wait_idle(self.session)
         self.assertIsNone(self.selection.commit)
+
+    def test_a_commit_not_loaded_yet_stays_until_it_is_loaded_and_gone(self):
+        """RZG-88: History's filter can select a commit older than the loaded pages."""
+        repo = make_repo(self.tmp / "p")
+        for n in range(1, 5):
+            commit_file(repo, "a.txt", str(n), f"c{n}")
+        with mock.patch("rzgit.core.repo_session.HISTORY_PAGE", 2):
+            self.assertTrue(self.session.open(repo))
+            wait_idle(self.session)
+            oldest = Repo(repo).log()[-1]
+            self.assertNotIn(oldest, self.session.history)
+            self.selection.commit = oldest
+            self.session.load_more_history()  # c2, c1: now it's loaded
+            wait_idle(self.session)
+            self.assertEqual(self.selection.commit, oldest)
+            self.assertIn(oldest, self.session.history)
+            git(repo, "commit", "-q", "--amend", "-m", "amended")  # c4 goes, c1 stays
+            self.session.refresh()
+            wait_idle(self.session)
+            self.assertEqual(self.selection.commit, oldest)
+            git(repo, "reset", "-q", "--hard", oldest.sha)
+            git(repo, "commit", "-q", "--amend", "-m", "c1 again")  # c1 goes
+            self.session.refresh()
+            wait_idle(self.session)
+        self.assertIsNone(self.selection.commit)  # loaded once, then gone
 
     def test_a_selected_stash_follows_the_stashes(self):
         """RZG-36: kept through history reloads, moved to its new stash@{n}, and back

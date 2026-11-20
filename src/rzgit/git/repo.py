@@ -6,10 +6,11 @@ credential helpers, SSH keys and hooks all behave exactly as in a terminal.
 
 from __future__ import annotations
 
+import codecs
 import os
 import re
 import subprocess
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -121,6 +122,17 @@ def _run(cwd: str | Path, args: tuple[str, ...], ok_codes: Collection[int], *, t
             proc.returncode,
         )
     return proc.stdout
+
+
+
+def _search_record(record: str) -> tuple[Commit, str, str, str]:
+    """One ``Repo.search_log`` record: ``%H %P %an %ae %aI %D %B``."""
+    sha, parents, author, email, date, refs, message = record.lstrip("\n").split("\x1f", 6)
+    message = message.strip("\n")
+    subject = " ".join(message.split("\n\n", 1)[0].split("\n"))  # as %s: the first paragraph
+    commit = Commit(sha, author, datetime.fromisoformat(date), subject,
+                    parents=tuple(parents.split()))
+    return commit, email, refs, message
 
 
 class Repo:
@@ -258,6 +270,41 @@ class Repo:
             commits.append(Commit(sha, author, datetime.fromisoformat(date), subject,
                                   parents=tuple(parents.split())))
         return commits
+
+    def search_log(self, order: HistoryOrder = HistoryOrder.DATE,
+                   ) -> Iterator[tuple[Commit, str, str, str]]:
+        """Every commit reachable from HEAD, in ``order``, as ``(commit, author
+        email, refs, message)``: git's ``%D`` and ``%B`` (History's filter, spec
+        §4.1). Streamed as git writes it; closing the iterator early kills git."""
+        if not self.has_commits():
+            return
+        fmt = "%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%D%x1f%B%x1e"
+        args = ["git", "log", str(order), f"--format={fmt}"]
+        try:
+            proc = subprocess.Popen(args, cwd=self.root, env=_git_env(), stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except OSError as exc:
+            raise GitError(f"Can't run git in {self.root}: {exc.strerror or exc}") from exc
+        assert proc.stdout is not None and proc.stderr is not None
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        rest = ""
+        try:
+            while chunk := proc.stdout.read1(1 << 16):
+                *records, rest = (rest + decoder.decode(chunk)).split("\x1e")
+                for record in records:
+                    yield _search_record(record)
+            rest += decoder.decode(b"", final=True)
+            if rest.strip("\n"):
+                yield _search_record(rest)
+            err = proc.stderr.read().decode("utf-8", "replace")
+            if proc.wait() != 0:
+                raise GitError(err.strip() or "git log failed", proc.returncode)
+        finally:
+            if proc.poll() is None:  # stopped early
+                proc.kill()
+                proc.wait()
+            proc.stdout.close()
+            proc.stderr.close()
 
     def status(self) -> list[FileStatus]:
         out = self.git("status", "--porcelain=v1", "-z", "--untracked-files=all")
