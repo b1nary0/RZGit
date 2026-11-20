@@ -4,17 +4,20 @@ selected while a stash is (the Stash panel's). Commits are striped, and
 Uncommitted changes stays pinned at the top while the table scrolls, and well
 down, a "Back to top" control floats below it (RZG-64). The first column is the
 branch graph (RZG-58), with each commit's ref label over its dot (RZG-77, RZG-86),
-as wide as the widest row in view."""
+as wide as the widest row in view. Double-click, Enter or the right-click menu
+opens a commit in a window of its own, through ``actions`` (RZG-84)."""
 
 from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QEvent, QModelIndex, QObject, QPersistentModelIndex, QRect, Qt
-from PySide6.QtGui import QBrush, QColor, QFontMetrics, QKeyEvent, QMouseEvent, QPainter, QPaintEvent, QPalette
+from PySide6.QtCore import QEvent, QModelIndex, QObject, QPersistentModelIndex, QPoint, QRect, Qt
+from PySide6.QtGui import (QBrush, QColor, QFontMetrics, QKeyEvent, QKeySequence, QMouseEvent,
+                           QPainter, QPaintEvent, QPalette, QShortcut)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
+    QMenu,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -26,6 +29,7 @@ from PySide6.QtWidgets import (
 from rzgit.core.ref_labels import labels_by_commit
 from rzgit.core.repo_session import HISTORY_PAGE
 from rzgit.git.git_models import Commit, Stash
+from rzgit.ui.app_actions import OPEN_COMMIT_TEXT
 from rzgit.ui.panels.back_to_top_button import BackToTopButton
 from rzgit.ui.panels.graph_painter import GRAPH_MAX_LANES, GraphPainter
 from rzgit.ui.panels.history_model import (DATE_FORMAT, GRAPH_COLUMN, MUTED_COLUMNS,
@@ -67,6 +71,14 @@ class HistoryPanel(Panel):
         layout.addWidget(self._view)
 
         self._view.selectionModel().currentChanged.connect(self._sync_selection)
+        # Open in New Window (RZG-84): double-click, Enter, or the right-click menu.
+        self._view.doubleClicked.connect(lambda index: self._open(self._model.commit_at(index.row())))
+        for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            shortcut = QShortcut(QKeySequence(key), self._view)
+            shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+            shortcut.activated.connect(lambda: self._open(self._current_commit()))
+        self._view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._view.customContextMenuRequested.connect(self._show_menu)
         bar = self._view.verticalScrollBar()
         bar.valueChanged.connect(self._load_more_near_the_end)
         bar.rangeChanged.connect(self._load_more_near_the_end)
@@ -277,6 +289,26 @@ class HistoryPanel(Panel):
 
     def _current_commit(self) -> Commit | None:
         return self._model.commit_at(self._view.currentIndex().row())
+
+    # ---- Open in New Window (spec §5.4, RZG-84) -------------------------------
+
+    def _open(self, commit: Commit | None) -> None:
+        """Ask for ``commit`` in a window of its own; Uncommitted changes opens nothing."""
+        if commit is not None:
+            self.ctx.actions.request_open_commit(commit)
+
+    def _show_menu(self, pos: QPoint) -> None:
+        if self._view.pinned_active() and pos.y() < self._view.pinned.height():
+            return  # Uncommitted changes, drawn over the row below it
+        commit = self._model.commit_at(self._view.indexAt(pos).row())
+        if commit is not None:
+            self.menu_for(commit).exec(self._view.viewport().mapToGlobal(pos))
+
+    def menu_for(self, commit: Commit) -> QMenu:
+        """The right-click menu of ``commit``'s row."""
+        menu = QMenu(self)
+        menu.addAction(OPEN_COMMIT_TEXT).triggered.connect(lambda _=False: self._open(commit))
+        return menu
 
     def _top_commit(self) -> Commit | None:
         """The commit at the top of the view (below the pinned row), or None when

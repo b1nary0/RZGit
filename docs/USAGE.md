@@ -190,7 +190,9 @@ HEAD, newest first. Its columns are **Graph**, **Subject**, **Author**, **Date**
   commits, so its labels don't sort.
 
 Select a commit to see its details and its files, as described in
-[Commit Details and Commit Files](#commit-details-and-commit-files).
+[Commit Details and Commit Files](#commit-details-and-commit-files). Double-click a
+commit, press Enter on it, or right-click it and choose **Open in New Window** to see it in
+[a window of its own](#a-commit-in-its-own-window).
 
 **Order.** History lists commits by date. **View → Topological Order**, which is also in
 History's tab menu, never shows a commit before all of its children and keeps each line
@@ -416,6 +418,27 @@ the commit.
 
 Select **Uncommitted changes** at the top of History to go back to your own work.
 
+### A commit in its own window
+
+![A commit in a window of its own](screenshots/commit-window.png)
+
+To keep a commit in view while you go on working, double-click it in History, press
+Enter on it, or right-click it and choose **Open in New Window**. A stash opens the same
+way from the Stashes panel. The new window shows the commit's files above its details,
+and the changes of the selected file beside them.
+
+- The window has its own selection: choosing a file there doesn't change the main
+  window, and the main window can move on to other commits.
+- It starts with the main window's diff view, such as side by side or whole file, and
+  the buttons above its diff change it for that window only.
+- Opening a commit that already has a window brings that window to the front.
+- The title is the commit's short hash and subject, or the stash's name and message,
+  then the repository's name. If the commit leaves the history, for example after an
+  amend or a rebase, or the stash is dropped, the window keeps showing it and its title
+  ends with "(no longer in history)".
+- It closes when its main window closes or opens another repository. It opens at the
+  size the last one had.
+
 ## Branches
 
 ![The Branches panel and a branch's menu](screenshots/branches.png)
@@ -467,6 +490,8 @@ the branch they were made on, and their age. **Sort By** offers **Age**, **Messa
 - Select a stash to see its files in Commit Files, its details in Commit Details, and its
   changes in the Diff panel. Its label also appears in History on the commit it was made
   from.
+- Double-click a stash, press Enter on it, or choose **Open in New Window** in its menu to
+  see it in [a window of its own](#a-commit-in-its-own-window).
 - Right-click a stash for **Apply**, which brings its changes back and keeps the stash,
   **Pop**, which brings them back and removes the stash, and **Drop…**, which deletes the
   stash after asking. Apply and Pop need a working folder without changes, and they are
@@ -591,7 +616,7 @@ when the focus is in the panel or field named.
 | `Ctrl+Shift+W` | Shows the Worktrees panel. | The whole window |
 | `Ctrl+Shift+PgUp` | Moves the current tab one place to the left. | A tab group |
 | `Ctrl+Shift+PgDown` | Moves the current tab one place to the right. | A tab group |
-| `Enter` | Moves the selected files to the other list; opens the selected worktree in a window of its own; moves from the commit summary to the description; goes to the next match; switches to the only branch left in the filter. | Unstaged Files and Staged Files; Worktrees; the Commit panel; the Diff panel's find bar; the branch button's list |
+| `Enter` | Moves the selected files to the other list; opens the selected commit or stash in a window of its own; opens the selected worktree in a window of its own; moves from the commit summary to the description; goes to the next match; switches to the only branch left in the filter. | Unstaged Files and Staged Files; History and Stashes; Worktrees; the Commit panel; the Diff panel's find bar; the branch button's list |
 | `Shift+Enter` | Goes to the previous match. | The Diff panel's find bar |
 | `Ctrl+F` | Opens the find bar. | The Diff panel |
 | `F3` | Goes to the next match. | The Diff panel |

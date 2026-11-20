@@ -15,7 +15,7 @@ from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 from rzgit.core.network_worker import NetworkKind, pushes_to_upstream
 from rzgit.core.repo_session import RepoSession
 from rzgit.core.selection import FileSource, Selection
-from rzgit.git.git_models import FileDiff, HistoryOrder, LastCommit, Stash
+from rzgit.git.git_models import Commit, FileDiff, HistoryOrder, LastCommit, Stash
 from rzgit.ui.theme.theme_manager import ThemeMode
 
 
@@ -27,6 +27,7 @@ PUSH_TEXT = "Pus&h"  # P, u and s are taken in the Repository menu; Stas&h share
 PUSHING_TEXT = "Pushing…"
 COUNT_PROPERTY = "upstreamCount"  # the ↓n or ↑n on Pull or Push (spec §8, RZG-94)
 OPEN_IN_VSCODE_TEXT = "Open with &VS Code"  # a context menu entry (spec §8, RZG-96)
+OPEN_COMMIT_TEXT = "Open in &New Window"  # History's and Stashes' menus (spec §5.4, RZG-84)
 NO_FILE_TO_OPEN = "Select a file to open, not a folder."
 NO_VSCODE_CHECK = "VS Code isn't set up."  # before MainWindow's VSCodeLauncher sets the check
 GO_TO_DEFINITION_TEXT = "Go to &Definition in VS Code"  # the Diff panel's (spec §8, RZG-75)
@@ -102,6 +103,9 @@ class AppActions(QObject):
     # a window of its own or this one.
     open_worktree_requested = Signal(str)  # the worktree's path
     open_worktree_here_requested = Signal(str)
+    # History or Stashes asks to show a commit in a window of its own; MainWindow shows it
+    # in a commit window (spec §8.1, RZG-84).
+    open_commit_requested = Signal(object)  # Commit or Stash
     # A worktree operation; WorktreeDialogs asks if need be, then runs it (spec §8).
     worktree_requested = Signal(object, str)  # WorktreeOp, path or branch ("" for none)
     # Pull, when not cancelling one; PullDialogs asks about changes, then pulls (spec §8).
@@ -339,6 +343,10 @@ class AppActions(QObject):
     def request_open_worktree(self, path: str) -> None:
         """Show the worktree at ``path`` in a main window of its own (spec §8)."""
         self.open_worktree_requested.emit(path)
+
+    def request_open_commit(self, commit: Commit) -> None:
+        """Show ``commit`` (or a stash) in a commit window of its own (spec §8.1)."""
+        self.open_commit_requested.emit(commit)
 
     def request_open_worktree_here(self, path: str) -> None:
         """Show the worktree at ``path`` in this window (spec §8)."""

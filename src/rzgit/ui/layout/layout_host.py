@@ -85,9 +85,13 @@ class LayoutHost(QWidget):
 
     layout_changed = Signal()  # after every apply
 
-    def __init__(self, ctx: PanelContext, parent: QWidget | None = None):
+    def __init__(self, ctx: PanelContext, parent: QWidget | None = None, *,
+                 fixed: bool = False):
+        """``fixed``: show each state as given, with no panel added and none
+        dragged (a commit window, spec §6.2, RZG-84)."""
         super().__init__(parent)
         self._ctx = ctx
+        self._fixed = fixed
         self._panels: dict[str, Panel] = {}
         self._state = LayoutState()  # as applied; state() reads the sizes back
         # Each area's splitters and tabs, in pre-order of its tree.
@@ -152,7 +156,7 @@ class LayoutHost(QWidget):
         ``state`` lacks it (§6.6).
         """
         state = state.normalized(_KNOWN_IDS)
-        for panel_id in _ALWAYS_SHOWN:
+        for panel_id in () if self._fixed else _ALWAYS_SHOWN:
             state = state.insert(panel_id, None, default_anchor(panel_id, state.panel_ids()))
         wanted = set(state.panel_ids())
 
@@ -204,7 +208,7 @@ class LayoutHost(QWidget):
         part of the window the panel would take. None if ``pos`` isn't a target or
         nothing changes."""
         dragged = self._panels.get(panel_id)
-        if dragged is None or not dragged.movable:
+        if dragged is None or not dragged.movable or self._fixed:
             return None
         pane = self._pane_at(pos, panel_id)
         if pane is None:
@@ -534,7 +538,7 @@ class LayoutHost(QWidget):
         match node:
             case PanelNode():
                 frame = PanelFrame(self._panel(node.panel_id, area), AREA_SURFACES[area])
-                if frame.panel.movable:
+                if frame.panel.movable and not self._fixed:
                     frame.header.installEventFilter(self)
                 return frame
             case SplitNode():
@@ -552,7 +556,8 @@ class LayoutHost(QWidget):
                 return splitter
             case TabsNode():
                 tabs = _PanelTabs()
-                tabs.tabBar().installEventFilter(self)
+                if not self._fixed:
+                    tabs.tabBar().installEventFilter(self)
                 tabs.tabBar().tabMoved.connect(self._on_tab_moved)
                 self._containers[area].append(tabs)
                 for child in node.children:

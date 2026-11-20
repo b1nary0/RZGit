@@ -25,6 +25,7 @@ _LAST_REPO = "last_repo"
 _LAYOUT = "layout"
 _LAYOUT_PRESET = "layout_preset"
 _WINDOW_GEOMETRY = "window/geometry"
+_COMMIT_WINDOW_GEOMETRY = "commit_window/geometry"  # RZG-84
 _SIDE_BY_SIDE_DIFF = "diff/side_by_side"
 _WHOLE_FILE_DIFF = "diff/whole_file"
 _HUNK_HEADERS = "diff/hunk_headers"
@@ -93,6 +94,16 @@ class AppSettings:
     @window_geometry.setter
     def window_geometry(self, geometry: QByteArray | None) -> None:
         self._set(_WINDOW_GEOMETRY, geometry)
+
+    @property
+    def commit_window_geometry(self) -> QByteArray | None:
+        """Where the last commit window closed (spec §8.1, RZG-84)."""
+        value = self._settings.value(_COMMIT_WINDOW_GEOMETRY)
+        return value if isinstance(value, QByteArray) and not value.isEmpty() else None
+
+    @commit_window_geometry.setter
+    def commit_window_geometry(self, geometry: QByteArray | None) -> None:
+        self._set(_COMMIT_WINDOW_GEOMETRY, geometry)
 
     @property
     def side_by_side_diff(self) -> bool:

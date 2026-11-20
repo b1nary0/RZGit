@@ -98,6 +98,7 @@ src/rzgit/
   ui/
     main_window.py              MainWindow: thin shell (menus, status bar, LayoutHost)
     app_windows.py              AppWindows: the open main windows; open a window on a path, or raise it
+    commit_window.py            CommitWindow: one commit or stash in a window of its own (§8.1, RZG-84)
     settings_window.py          SettingsWindow: the app's one Settings window (§8.2)
     recent_repos_menu.py        RecentReposMenu: File → Recent Repositories (§8)
     app_actions.py              AppActions: every QAction, defined once; BranchOp, StashOp, WorktreeOp
@@ -216,7 +217,9 @@ class RepoSession(QObject):
     network_finished = Signal(object, bool)  # NetworkCommand, whether it ran without error
     pull_diverged    = Signal(object, object)  # GitCommand (the PULL), PullDiverged (RZG-71)
 
-    def open(self, path) -> bool          # path, or a Repo already read (§8.1)
+    def open(self, path, *, load: Refresh = Refresh.ALL) -> bool  # path, or a Repo already read (§8.1);
+                                          # load: what to read at once (none for a commit window, RZG-84)
+                                          # (the parts not read keep their values: empty in a new session)
     def close(self) -> None
     def refresh(self, parts: Refresh = Refresh.ALL) -> None   # Flag: HEAD|BRANCHES|REFS|HISTORY|STATUS|STASHES|COUNT|REMOTES|WORKSPACE_FILES
     def load_more_history(self) -> None   # the next page of history, in the background
@@ -1305,6 +1308,9 @@ says "No stashes". Like Branches, it never runs git or shows a dialog.
   `actions.request_stash(op, stash)` (§8). Apply and Pop need a clean working tree
   (§4.1): while `session.status` isn't empty they are disabled and say why: "(commit or
   stash your changes first)".
+- **Open in New Window** (RZG-84): double-clicking a stash, pressing Enter on it, or
+  **Open in New Window**, first in its right-click menu, calls
+  `actions.request_open_commit(stash)` (§8, §8.1).
 - **Stash Changes…** (`actions.stash_changes`, §8) is a button above the list.
 - **Sort By** (RZG-43), the header menu: **Age** (git's order, newest first, the
   default), **Message** and **Branch** (ignoring case, then by age), each from its column
@@ -1473,6 +1479,10 @@ theme when Qt asks, so a theme change is one `dataChanged`.
 - **Follows the selection:** when `selection.commit` is changed elsewhere (a parent link
   in Commit Details), History selects that commit's row, or Uncommitted changes for None,
   and scrolls to it if it's off screen. A commit that isn't loaded leaves History as it is.
+- **Open in New Window** (RZG-84): double-clicking a commit row, pressing Enter on it, or
+  **Open in New Window** in its right-click menu calls `actions.request_open_commit(commit)`
+  (§8). The Uncommitted changes row opens nothing and has no menu. The panel never opens
+  the window itself.
 - **Back to top** (RZG-64): `BackToTopButton` (`back_to_top_button.py`), a child of the
   view's viewport like `_PinnedRow`, floats over the commits: centred, 6 px below the
   pinned row. The rows pass under it, and it never covers the pinned row, the column labels
@@ -2036,6 +2046,9 @@ before areas.
   the areas back. `area_of(panel_id)` is the area a shown panel is in.
 - It also holds the **hidden panels** and their anchors (§6.6): `hide_panel(id)`,
   `show_panel(id)`, and `layout_changed` after every change, which the menus follow.
+- **A fixed host** (`LayoutHost(ctx, fixed=True)`, RZG-84) shows its state as given: no
+  panel is added (not even an `always_shown` one, §6.6) and none can be dragged. The
+  splitters still resize. A commit window (§8.1) uses one.
 - In a split, each panel is wrapped in a `PanelFrame` (`layout/panel_frame.py`): a section
   header plus the panel. The host sets the area's `surface` as a style property on the
   frame and on the panel, in splits and in tabs (`set_surface` repolishes the panel when it
@@ -2108,7 +2121,7 @@ before areas.
 ### 6.3 Persistence
 
 `AppSettings` (`core/app_settings.py`) is the only code that touches `QSettings`. It has
-typed accessors (`last_repo`, `layout`, `layout_preset`, `window_geometry`,
+typed accessors (`last_repo`, `layout`, `layout_preset`, `window_geometry`, `commit_window_geometry`,
 `side_by_side_diff`, `saved_layouts`, `column_prefs`, …) and takes a file path for tests.
 `app.py` creates it and `AppWindows` passes it to each `MainWindow`; panels don't get it.
 One `AppSettings` is shared by every window. What panels save goes through a small object
@@ -2712,6 +2725,9 @@ Per-widget sheets are slow to apply and scatter the rules.
   `actions.request_open_worktree_here(path)` (**Open in This Window**) sends
   `open_worktree_here_requested`, and MainWindow opens it with `open_repo`: here, unless
   another window shows it, which is raised instead.
+- **Opening a commit in its own window** (RZG-84): History and Stashes call
+  `actions.request_open_commit(commit)` (a `Commit` or a `Stash`), which sends
+  `open_commit_requested`. MainWindow shows it in a commit window (§8.1).
 - **Worktree operations** (RZG-49): the Worktrees panel and the Branches panel call
   `actions.request_worktree(op, target)`, with a `WorktreeOp` (`NEW`, `REMOVE`, `PRUNE`,
   `OPEN_FOLDER`, `OPEN_TERMINAL`), which sends `worktree_requested`. `target` is a
@@ -2893,6 +2909,28 @@ The app can have several main windows open, each on its own repository or worktr
 - **Recently used** (RZG-50): a window touches `ctx.recent` (`RecentRepos`, §6.3) when its
   repository changes and whenever it becomes active, so the Worktrees panel's Recently
   Used (§5.4) and File → Recent Repositories put the one you were last in first.
+- **Commit windows** (RZG-84): `CommitWindow` (`ui/commit_window.py`) shows one commit
+  or stash on its own: Commit Files above Commit Details on the left, Diff on the right,
+  in a fixed `LayoutHost` (§6.2). Splitters resize, but the layout isn't saved.
+  - **Its own objects:** a `RepoSession` opened on the main window's `Repo` with
+    `load=Refresh(0)`, so it reads nothing but what its panels ask for (the commit's
+    files, details and diffs) and has no watcher. Its own `Selection`, set to the commit
+    once, and `AppActions`, whose view toggles (Side by Side Diff, Show Whole File, Hunk
+    Headers, Show Files as Tree) start from the main window's and then stay its own. The
+    shared objects (theme, settings, columns, sorts, prefs) are the main window's. With no
+    history loaded, Commit Details shows parents as plain SHAs, so the commit never
+    changes. Choosing a file there never reaches the main window.
+  - **Owned by its main window:** `MainWindow.open_commit_window(commit)` makes one, or
+    raises the one already showing that sha (one per commit, per main window). It is a
+    top-level window, not kept on top of the main window, and closes when the main window
+    closes or its repository changes. Closing it shuts its session down (waiting for a
+    running git command), and it is deleted (`WA_DeleteOnClose`).
+  - **Title:** `<short sha> <subject> — <worktree>`, or `stash@{n} <message> — <worktree>`.
+    When the main window's history no longer has the commit, or its stashes
+    no longer have the stash, the window keeps showing it (git still has the objects) and
+    the title ends with "(no longer in history)".
+  - **Size:** each opens at `commit_window_geometry` (AppSettings), else 900×600, and
+    saves its geometry there as it closes.
 - Not yet: a Window menu, and a fuller rule for which main window owns child windows
   (RZG-51).
 

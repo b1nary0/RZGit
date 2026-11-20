@@ -305,13 +305,16 @@ class RepoSession(QObject):
 
     # ---- opening and closing ------------------------------------------------
 
-    def open(self, path: str | Path | Repo, *, report: bool = True) -> bool:
+    def open(self, path: str | Path | Repo, *, report: bool = True,
+             load: Refresh = Refresh.ALL) -> bool:
         """Open the repository containing ``path`` (or ``path`` itself, a ``Repo``
         already read: the window manager reads it first to find its window, §8.1).
 
         Checks the folder now; the data loads in the background. On failure,
         reports through ``error_occurred`` (unless not ``report``), keeps the
-        current repository open and returns False.
+        current repository open and returns False. ``load``: the parts read at
+        once; a commit window reads none (spec §8.1, RZG-84). The others aren't
+        emitted for the new repository: they keep their values (empty in a new session).
         """
         try:
             repo = path if isinstance(path, Repo) else Repo(path)
@@ -325,13 +328,14 @@ class RepoSession(QObject):
         self._pending = Refresh(0)
         self._more_pending = False
         self._history_complete = True
-        self._forced = _RESET
+        self._forced = _RESET if load == Refresh.ALL else load
         self._commands = []
         self._drop_diff()
         self._drop_commit_files()
         self._drop_commit_details()
         self.repo_changed.emit(repo)
-        self.refresh()
+        if load:
+            self.refresh(load)
         return True
 
     def close(self) -> None:

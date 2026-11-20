@@ -136,7 +136,8 @@ class App:
         for _ in range(rounds):
             for _ in range(2000):
                 self.qt.processEvents()
-                if not self.window.session.busy:
+                if not self.window.session.busy and not any(
+                        w.session.busy for w in self.window.commit_windows):
                     break
                 QThread.msleep(2)
             for _ in range(30):
@@ -486,6 +487,21 @@ def shot_commit_details(app: App) -> None:
     app.uncommitted()
 
 
+def shot_commit_window(app: App) -> None:
+    """A commit in a window of its own (RZG-84), its first file's diff shown."""
+    window = app.window.open_commit_window(app.window.session.history[0])
+    window.resize(WINDOW_SIZE)
+    app.settle()
+    files = window.session.commit_files or ()
+    if files:
+        file = FileSelection(files[0].path, FileSource.COMMIT, window.commit.sha)
+        window.selection.select((file,), file)
+        app.settle()
+    save(window.grab(), "commit-window")
+    window.close()
+    app.settle()
+
+
 def shot_branches(app: App) -> None:
     branches = app.panel("branches")
     lst = branches._list
@@ -527,7 +543,7 @@ def shot_settings(app: App) -> None:
 
 SHOTS: list[Callable[[App], None]] = [
     shot_overview, shot_menus, shot_controls, shot_history, shot_changes, shot_files,
-    shot_diff, shot_commit_details, shot_branches, shot_stashes, shot_worktrees,
+    shot_diff, shot_commit_details, shot_commit_window, shot_branches, shot_stashes, shot_worktrees,
     shot_settings,
 ]
 

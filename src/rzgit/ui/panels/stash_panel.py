@@ -2,7 +2,8 @@
 
 Selecting a stash sets ``selection.commit`` to it, so Commit Details, Commit
 Files and Diff show it as they show a commit. The panel never runs git or shows
-a dialog: it asks ``actions.request_stash``. Sort By (RZG-43): age (git's
+a dialog: it asks ``actions.request_stash``, and ``actions.request_open_commit``
+to show a stash in a window of its own (double-click, Enter; RZG-84). Sort By (RZG-43): age (git's
 order), message or branch. Group By (RZG-53): branch, under headings that
 can't be selected (``GroupedTree``).
 """
@@ -12,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
 
 from rzgit.core.sort_options import GroupOption, SortOption, SortOptions
 from rzgit.git.git_models import Commit, Stash
-from rzgit.ui.app_actions import StashOp
+from rzgit.ui.app_actions import OPEN_COMMIT_TEXT, StashOp
 from rzgit.ui.panels.panel import Panel
 from rzgit.ui.theme.app_theme import AppTheme
 from rzgit.ui.theme.style_roles import Role, set_role
@@ -108,6 +109,12 @@ class StashPanel(Panel):
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._show_menu)
         self._tree.itemSelectionChanged.connect(self._on_selected)
+        # Open in New Window (RZG-84): double-click or Enter, and the right-click menu.
+        self._tree.itemDoubleClicked.connect(lambda item, _column: self._open(self.stash_at(item)))
+        for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            shortcut = QShortcut(QKeySequence(key), self._tree)
+            shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+            shortcut.activated.connect(lambda: self._open(self.stash_at(self._tree.currentItem())))
 
         self._placeholder = QLabel(NO_STASHES)
         self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -224,6 +231,10 @@ class StashPanel(Panel):
 
     # ---- operations (spec §5.4): asked of AppActions, never run here --------
 
+    def _open(self, stash: Stash | None) -> None:
+        if stash is not None:  # not a group heading
+            self.ctx.actions.request_open_commit(stash)
+
     def _show_menu(self, pos: QPoint) -> None:
         stash = self.stash_at(self._tree.itemAt(pos))
         if stash is not None:
@@ -241,6 +252,8 @@ class StashPanel(Panel):
             action.setEnabled(not blocked)
             action.triggered.connect(lambda _=False: request(op, stash))
 
+        menu.addAction(OPEN_COMMIT_TEXT).triggered.connect(lambda _=False: self._open(stash))
+        menu.addSeparator()
         add("Apply", StashOp.APPLY, needs_clean=True)
         add("Pop", StashOp.POP, needs_clean=True)
         menu.addSeparator()

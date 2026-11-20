@@ -7,13 +7,14 @@ from pathlib import Path
 from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QPointF, Qt
-from PySide6.QtGui import QColor, QEnterEvent, QFontMetrics, QHoverEvent
+from PySide6.QtGui import QColor, QEnterEvent, QFontMetrics, QHoverEvent, QKeySequence, QShortcut
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
 
 from rzgit.core.commit_graph import CommitGraph
 from rzgit.ui.panels.history_model import (AUTHOR_COLUMN, DATE_COLUMN, GRAPH_COLUMN,
                                                  HASH_COLUMN, MUTED_COLUMNS, SUBJECT_COLUMN)
+from rzgit.ui.app_actions import OPEN_COMMIT_TEXT
 from rzgit.ui.panels.history_panel import HistoryPanel
 from rzgit.ui.theme.app_theme import LIGHT_THEME
 from rzgit.ui.widgets.column_header import ColumnHeader
@@ -234,6 +235,38 @@ class HistoryPanelTests(unittest.TestCase):
         self.assertEqual([hovered(0, c) for c in range(5)], [False] * 5)
         self.view.viewportEvent(QHoverEvent(QEvent.Type.HoverLeave, QPointF(-1, -1), QPointF(-1, -1), QPointF(5, y)))
         self.assertFalse(hovered(1, 0))
+
+    def test_double_click_enter_and_the_menu_open_a_commit_in_a_window(self):
+        """RZG-84, spec §5.4: through actions.request_open_commit; Uncommitted
+        changes opens nothing."""
+        self.open()
+        opened = []
+        self.ctx.actions.open_commit_requested.connect(opened.append)
+        second, first = self.ctx.session.history
+        self.panel.resize(600, 300)
+        self.panel.show()
+        self.addCleanup(self.panel.close)
+        self.app.processEvents()
+        row = self.view.visualRect(self.model.index(2, SUBJECT_COLUMN)).center()
+        # A real double-click: a click, then the double-click (QTest sends only the latter).
+        QTest.mouseClick(self.view.viewport(), Qt.MouseButton.LeftButton, pos=row)
+        QTest.mouseDClick(self.view.viewport(), Qt.MouseButton.LeftButton, pos=row)
+        self.assertEqual(opened, [first])
+        self.view.doubleClicked.emit(self.model.index(0, SUBJECT_COLUMN))  # Uncommitted changes
+        self.assertEqual(opened, [first])
+        enter = [s for s in self.view.findChildren(QShortcut)
+                 if s.key() in (QKeySequence(Qt.Key.Key_Return), QKeySequence(Qt.Key.Key_Enter))]
+        self.assertEqual(len(enter), 2)
+        self.select(1)
+        enter[1].activated.emit()
+        self.assertEqual(opened, [first, second])
+        self.select(0)
+        enter[0].activated.emit()
+        self.assertEqual(opened, [first, second])
+        menu = self.panel.menu_for(first)
+        self.assertEqual([a.text() for a in menu.actions()], [OPEN_COMMIT_TEXT])
+        menu.actions()[0].trigger()
+        self.assertEqual(opened, [first, second, first])
 
     def test_apply_theme_recolours_rows(self):
         self.open()

@@ -6,10 +6,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtTest import QTest
 
 from rzgit.git.git_models import Stash
-from rzgit.ui.app_actions import StashOp
+from rzgit.ui.app_actions import OPEN_COMMIT_TEXT, StashOp
 from rzgit.ui.panels import stash_panel
 from rzgit.ui.panels.stash_panel import StashPanel, age
 from rzgit.ui.widgets.column_header import ColumnHeader
@@ -133,14 +134,30 @@ class StashPanelTests(unittest.TestCase):
     def test_the_menu_asks_for_the_operations(self):
         asked = []
         self.ctx.actions.stash_requested.connect(lambda op, stash: asked.append((op, stash)))
+        opened = []
+        self.ctx.actions.open_commit_requested.connect(opened.append)
         menu = self.panel.menu_for(self.older)
         texts = [a.text() for a in menu.actions() if not a.isSeparator()]
-        self.assertEqual(texts, ["Apply", "Pop", "Drop…"])
+        self.assertEqual(texts, [OPEN_COMMIT_TEXT, "Apply", "Pop", "Drop…"])
         for action in menu.actions():
             if not action.isSeparator():
                 action.trigger()
         self.assertEqual(asked, [(StashOp.APPLY, self.older), (StashOp.POP, self.older),
                                  (StashOp.DROP, self.older)])
+        self.assertEqual(opened, [self.older])  # RZG-84
+
+    def test_double_click_and_enter_open_the_stash_in_a_window(self):
+        """RZG-84, spec §5.4: through actions.request_open_commit, never here."""
+        opened = []
+        self.ctx.actions.open_commit_requested.connect(opened.append)
+        self.tree.itemDoubleClicked.emit(self.tree.topLevelItem(1), 0)
+        self.assertEqual(opened, [self.older])
+        self.tree.setCurrentItem(self.tree.topLevelItem(0))
+        enter = [s for s in self.tree.findChildren(QShortcut)
+                 if s.key() in (QKeySequence(Qt.Key.Key_Return), QKeySequence(Qt.Key.Key_Enter))]
+        self.assertEqual(len(enter), 2)
+        enter[0].activated.emit()
+        self.assertEqual(opened, [self.older, self.newer])
 
     def test_apply_and_pop_need_a_clean_working_tree(self):
         (self.repo / "dirty.txt").write_text("x")
@@ -148,7 +165,7 @@ class StashPanelTests(unittest.TestCase):
         wait_idle(self.session)
         menu = self.panel.menu_for(self.older)
         state = {a.text(): a.isEnabled() for a in menu.actions() if not a.isSeparator()}
-        self.assertEqual(state, {"Apply" + stash_panel.NOT_CLEAN: False,
+        self.assertEqual(state, {OPEN_COMMIT_TEXT: True, "Apply" + stash_panel.NOT_CLEAN: False,
                                  "Pop" + stash_panel.NOT_CLEAN: False, "Drop…": True})
 
     def test_the_stash_changes_button_is_the_action(self):

@@ -17,10 +17,11 @@ from PySide6.QtWidgets import (
 from rzgit.core.app_settings import AppSettings
 from rzgit.core.network_worker import NetworkKind
 from rzgit.core.selection import FileSource
-from rzgit.git.git_models import FileDiff, LastCommit
+from rzgit.git.git_models import Commit, FileDiff, LastCommit
 from rzgit.git.repo import GitError, Repo
 from rzgit.ui.app_actions import HunkHeaders
 from rzgit.ui.branch_dialogs import BranchDialogs
+from rzgit.ui.commit_window import CommitWindow
 from rzgit.ui.layout.layout_host import LayoutHost
 from rzgit.ui.layout.layout_menu import LayoutMenu
 from rzgit.ui.layout.layout_model import Area, to_dict
@@ -63,6 +64,7 @@ class MainWindow(QMainWindow):
         self.settings = settings
         self.windows = windows
         self._settings_window: SettingsWindow | None = None  # without ``windows`` only
+        self._commit_windows: dict[str, CommitWindow] = {}  # by sha (spec §8.1, RZG-84)
 
         self.setWindowTitle("RZGit")
         self.resize(1100, 700)
@@ -130,6 +132,7 @@ class MainWindow(QMainWindow):
         actions.worktrees.triggered.connect(self.show_worktrees)
         actions.open_worktree_requested.connect(self.open_in_window)
         actions.open_worktree_here_requested.connect(self.open_repo)
+        actions.open_commit_requested.connect(self.open_commit_window)
         self.stash_dialogs = StashDialogs(self, self.session, actions)
         self.worktree_dialogs = WorktreeDialogs(
             self, self.session, actions, self.ctx.worktrees,
@@ -208,6 +211,7 @@ class MainWindow(QMainWindow):
         self.settings.colour_blind = self.ctx.theme.colour_blind
         super().closeEvent(event)
         if event.isAccepted():
+            self.close_commit_windows()
             self.closed.emit()
 
     def changeEvent(self, event: QEvent) -> None:
@@ -357,7 +361,31 @@ class MainWindow(QMainWindow):
         if panel is not None:
             panel.request_activation()
 
+    @property
+    def commit_windows(self) -> tuple[CommitWindow, ...]:
+        """This window's open commit windows, in the order opened."""
+        return tuple(self._commit_windows.values())
+
+    def open_commit_window(self, commit: Commit) -> CommitWindow | None:
+        """Show ``commit`` (or a stash) in a commit window: the one already showing
+        it, raised, or a new one (spec §8.1, RZG-84). None with no repository."""
+        if (window := self._commit_windows.get(commit.sha)) is None:
+            if self.session.repo is None:
+                return None
+            window = CommitWindow(commit, self.ctx, self.settings)
+            self._commit_windows[commit.sha] = window
+            window.closed.connect(lambda sha=commit.sha: self._commit_windows.pop(sha, None))
+        show_window(window)
+        return window
+
+    def close_commit_windows(self) -> None:
+        """Close this window's commit windows: it closes, or its repository changes."""
+        for window in list(self._commit_windows.values()):
+            window.close()
+        self._commit_windows.clear()
+
     def _on_repo_changed(self, repo: Repo | None) -> None:
+        self.close_commit_windows()  # they showed the repository that was open
         if repo is None:
             self.setWindowTitle("RZGit")
         else:
